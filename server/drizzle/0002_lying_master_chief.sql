@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "customer_contacts_customer_primary_uidx" ON "customer_contacts" USING btree ("customer_id") WHERE "customer_contacts"."is_primary" = true and "customer_contacts"."status" = 'active';

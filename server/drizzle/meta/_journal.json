@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1791484915523,
+      "tag": "0000_goofy_dragon_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791631078157,
+      "tag": "0001_foamy_santa_claus",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791632542624,
+      "tag": "0002_lying_master_chief",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791637948869,
+      "tag": "0003_hesitant_captain_stacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791638525376,
+      "tag": "0004_reconcile_crm_role_permissions",
+      "breakpoints": true
+    }
+  ]
+}

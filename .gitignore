@@ -1,0 +1,30 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+
+# Local runtime data
+server/uploads/*
+!server/uploads/.gitkeep
+server/.local/
+logs/
+*.log
+
+# Tooling and OS files
+.vite/
+.tmp/
+.test-dist/
+client/test-results/
+client/playwright-report/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json

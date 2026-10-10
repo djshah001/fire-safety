@@ -1,0 +1,35 @@
+{
+  "name": "fire-safety",
+  "author": "Darshan",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Internal fire-safety CRM, engineering, and procurement platform",
+  "packageManager": "npm@11.19.0",
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
+  },
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --names API,WORKER,CLIENT --prefix-colors blue,magenta,green \"npm run dev --workspace @fire-safety/server\" \"npm run dev:worker --workspace @fire-safety/server\" \"npm run dev --workspace @fire-safety/client\"",
+    "dev:client": "npm run dev --workspace @fire-safety/client",
+    "dev:server": "npm run dev --workspace @fire-safety/server",
+    "dev:worker": "npm run dev:worker --workspace @fire-safety/server",
+    "build": "npm run build --workspace @fire-safety/server && npm run build --workspace @fire-safety/client",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:integration": "npm run test:integration --workspace @fire-safety/server",
+    "test:e2e": "npm run test:e2e --workspace @fire-safety/client",
+    "db:local:start": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/local-postgres.ps1 start",
+    "db:local:stop": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/local-postgres.ps1 stop",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "10.0.6",
+    "oxlint": "1.87.0"
+  }
+}
