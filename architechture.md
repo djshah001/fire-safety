@@ -155,7 +155,7 @@ REST `/api/v1` remains the default; no new query protocol is necessary. Represen
 | GET /crm/reminders; POST /crm/reminders/:id/complete | Current-assignee queue and versioned completion |
 | GET/POST /crm/leads/:leadId/attachments | Scoped private attachment metadata/upload |
 | GET /crm/leads/:leadId/attachments/:attachmentId/download | Reauthorize lead scope before private streaming |
-| POST /leads/:id/authorize-design | Free-design authorization, not award |
+| GET /crm/design-assignees; POST /crm/leads/:id/authorize-design | Eligible design assignments and replay-safe free-design handoff, not award |
 | POST /design-package-revisions/:id/submit | Freeze/review exact package |
 | POST /design-package-revisions/:id/customer-decisions | Sales records evidence and customer decision |
 | POST /design-package-revisions/:id/start-project | Project creation from approved design; commercial award optional |
@@ -169,11 +169,15 @@ REST `/api/v1` remains the default; no new query protocol is necessary. Represen
 | GET /crm/imports/:type/template; POST /crm/imports/:type/stage | Controlled customer/open-lead workbook and server-side staging |
 | GET /crm/imports/:id; POST /crm/imports/:id/commit | Creator-scoped preview and restart-safe row-result commit |
 | POST /crm/leads/bulk/assign; POST /crm/leads/bulk/reminders | Versioned, scope-checked permitted bulk actions (maximum 100 selected leads) |
+| GET/POST/PUT /masters/vendors, /items, /item-categories, /units | Permissioned operational masters with allowlisted lists and versioned updates |
+| POST /masters/:resource/:id/deactivate | Audited deactivation; no destructive master deletion |
 | GET /documents/:id/download | Authorization followed by expiring file access |
 
 Collections use bounded page/limit, filter and sort allowlists, stable tie-breaking ID and matching scoped total queries. Default page size 20, limit cap 100. Query keys include identity/scope/filter/pagination. Service derives actor/company from authenticated context, not user-supplied ownership.
 
-Implemented CRM reminder recurrence is occurrence-driven: a transaction creates the rule, first occurrence and due outbox job; after a due job is handled, the worker transactionally inserts the next daily/weekly/monthly occurrence plus a unique deduplicated job. The in-app occurrence is the durable baseline; disabled external providers are never reported delivered. Implemented lead attachments use Multer disk storage with generated names, PDF/JPEG/PNG allowlisting, a 20 MiB cap and SHA-256 metadata. Storage names remain server-private and every metadata/download request first proves access to the parent lead.
+The P2 `design_jobs` record is intentionally a minimal authorization handoff: exact lead/opportunity, distinct eligible designer and design head, optional-survey flag, notes, actor and time. P3 extends engineering behavior with immutable drawing/package revisions and review actions; P2 does not claim those workflows.
+
+Implemented CRM reminder recurrence is occurrence-driven: a transaction creates the rule, first occurrence and due outbox job; when a due job is claimed, the worker transactionally inserts the next daily/weekly/monthly occurrence plus its unique deduplicated job before attempting external delivery. The in-app occurrence is the durable baseline, so a disabled or failing provider cannot break recurrence. The worker emails only the active assigned employee, retries transient/rejected sends with a stable outbox-derived Message-ID and marks completion only after SMTP accepts the intended recipient; acceptance is not mailbox delivery and uncertain outcomes can duplicate mail. Implemented lead attachments use Multer disk storage with generated names, PDF/JPEG/PNG allowlisting, a 20 MiB cap and SHA-256 metadata. Storage names remain server-private and every metadata/download request first proves access to the parent lead.
 
 Proposed envelope: success `{ data, meta?, requestId }`; error `{ error: { code, message, fieldErrors?, missingRequirements? }, requestId }`. Use 400 malformed, 401 unauthenticated, 403 forbidden, 404 undisclosed/unavailable, 409 version/transition/idempotency conflict, 422 validation. Do not leak SQL/stack traces. `allowedActions` improves UI but server rechecks on execution.
 
@@ -210,13 +214,13 @@ The P2 importer stages up to 500 customer or open-lead rows, validates headers/c
 
 Outbox/job fields: type/versioned payload, dedup key, due time, attempts, status, lease owner/expiry, safe last error and result timestamps. Worker claims with database locks/leases, recovers expired leases, retries with backoff and presents final failures for authorized retry. Recurring reminders materialize timezone-aware deduplicated occurrences; no process-only timers.
 
-Record in-app notification separately from each channel delivery. Persist queued/sent/delivered/failed/unknown according to provider evidence. SMTP acceptance is not mailbox delivery. Provider callbacks authenticate and deduplicate events. Retry policies account for uncertain external sends; no exactly-once promise. Internal notifications go to authorized assignees/approvers. Customer/vendor sends require an explicit user action and resolved recipient, even though those parties have no login.
+Record in-app notification separately from each channel delivery. Persist queued/sent/delivered/failed/unknown according to provider evidence. The implemented SMTP boundary supports password resets and internal due reminders; its completed job state records SMTP recipient acceptance only, not mailbox delivery. Provider callbacks and a richer per-channel delivery ledger remain future work. Retry policies account for uncertain external sends; no exactly-once promise. Internal notifications go to authorized assignees/approvers. Customer/vendor sends require an explicit user action and resolved recipient, even though those parties have no login.
 
 ## 10. Deployment and operations
 
 Hosting/provider selections remain open. Provisional topology: same-origin HTTPS reverse proxy, static Vite build, supervised API and worker, PostgreSQL with connection pooling/backups, private S3-compatible storage and SMTP. Local Docker Compose can provide PostgreSQL and test mail. Keep separate local/staging/production secrets/data. Stateless/serverless hosting must have a separately supported worker/scheduler; an unattended in-process interval is insufficient.
 
-Environment contracts: `NODE_ENV`, `PORT`, `DATABASE_URL`, `APP_ORIGIN`, JWT/session secrets, `BUSINESS_TIMEZONE`, `STORAGE_DRIVER`, storage bucket/endpoint/region/credentials, SMTP transport/from, optional enabled channel/provider settings. Validate required values at startup and conditional values when channel is enabled. `.env.example` has placeholders only; never put secrets in Vite variables.
+Current implemented environment contracts include `NODE_ENV`, `PORT`, `DATABASE_URL`, `APP_ORIGIN`, `BUSINESS_TIMEZONE`, upload/log/session settings, and mail delivery mode. SMTP mode conditionally requires host and sender, validates port/secure mode and requires username/password as a pair; local-file delivery is forbidden in production. Future storage drivers and additional channel/provider settings follow the same conditional validation rule. `.env.example` has placeholders only; never put secrets in Vite variables.
 
 CI installs lockfiles, typechecks, lints, builds, runs relevant isolated domain/API tests, and checks migrations. One controlled migration job deploys reviewed SQL; no automatic production schema push. Health distinguishes live process from ready database/provider dependencies. Monitor API errors, permission failures, worker lag, failed jobs, storage operations and later stock reconciliation.
 

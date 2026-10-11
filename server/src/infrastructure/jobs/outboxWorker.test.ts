@@ -58,4 +58,29 @@ describe('outbox handlers', () => {
       appOrigin: 'http://localhost:5173',
     })).resolves.toBeUndefined();
   });
+
+  it('uses a stable message ID and requires SMTP acceptance for the intended recipient', async () => {
+    const sent: Array<{ to: string; from: string; messageId: string; text: string }> = [];
+    await handleOutboxJob(job, {
+      mailDeliveryMode: 'smtp',
+      smtpFrom: 'notifications@example.test',
+      appOrigin: 'https://erp.example.test',
+      smtpSend: async (message) => {
+        sent.push(message);
+        return { accepted: [message.to], rejected: [] };
+      },
+    });
+    expect(sent).toEqual([expect.objectContaining({
+      to: 'employee@example.test',
+      from: 'notifications@example.test',
+      messageId: `<outbox-${job.id}@example.test>`,
+      text: expect.stringContaining('https://erp.example.test/reset-password?token='),
+    })]);
+
+    await expect(handleOutboxJob(job, {
+      mailDeliveryMode: 'smtp',
+      smtpFrom: 'notifications@example.test',
+      smtpSend: async (message) => ({ accepted: [], rejected: [message.to] }),
+    })).rejects.toThrow('did not accept');
+  });
 });

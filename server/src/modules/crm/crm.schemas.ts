@@ -123,6 +123,22 @@ export const qualifyLeadInputSchema = z.object({
   qualificationNotes: z.string().trim().min(3).max(1000),
 });
 
+export const authorizeDesignInputSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  title: z.string().trim().min(2).max(200),
+  designerUserId: z.uuid(),
+  designHeadUserId: z.uuid(),
+  surveyRequested: z.boolean().default(false),
+  authorizationNotes: z.string().trim().min(3).max(1_000),
+}).refine((value) => value.designerUserId !== value.designHeadUserId, {
+  message: 'The designer and design head must be different employees.',
+  path: ['designHeadUserId'],
+});
+
+export const designAssigneeQuerySchema = z.object({
+  role: z.enum(['designer', 'design_head']),
+});
+
 export const opportunityListQuerySchema = z.object({
   state: z.enum(['unawarded', 'quoted', 'awarded', 'lost', 'on_hold']).optional(),
   search: optionalText(120),

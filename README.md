@@ -35,6 +35,31 @@ npm run dev
 
 Bootstrap refuses to run if a company already exists. The initial administrator receives only employee-access, configuration, and job-observation permissions—not commercial approval or finance access—and must change the temporary password at first login.
 
+### Local demo data
+
+After migrations and the initial company bootstrap, populate the configured local database with synthetic P2 test data:
+
+```powershell
+npm run seed:demo
+```
+
+The command refuses production and non-loopback database hosts. It is repeatable: records use `DEMO-*` identifiers, existing demo accounts receive a fresh password and active status, their sessions are revoked, and business records are reused instead of duplicated. Override the default password for a run with `DEMO_SEED_PASSWORD` (minimum 12 characters).
+
+Default local credentials use password `FireSafetyDemo123!`:
+
+| Account | Email | Role/access |
+| --- | --- | --- |
+| Demo administrator | `demo.admin@example.test` | Admin, sales manager, design head and purchase manager |
+| Sales manager | `demo.sales.manager@example.test` | CRM management and assignment |
+| Sales executive | `demo.sales.executive@example.test` | Assigned CRM records |
+| Design engineer | `demo.designer@example.test` | Assigned design work |
+| Design head | `demo.design.head@example.test` | Design work and review permission |
+| Purchase manager | `demo.purchase.manager@example.test` | Vendor and item masters |
+| Purchase executive | `demo.purchase.executive@example.test` | Vendor and item masters |
+| Receiver | `demo.receiver@example.test` | Read-only vendor and item access |
+
+The dataset includes three customers, contacts/sites, five leads across multiple stages, CRM activities, two opportunities, one authorized design handoff, two follow-ups, three vendors, three units, three item categories and five items. Attachments and import workbooks are intentionally not faked: upload a real PDF/image or download an import template through the UI to test those paths.
+
 Run `db:migrate` again whenever committed migrations are added. A PostgreSQL `relation ... does not exist` error from an otherwise valid endpoint usually means the database named by `server/.env` is behind the application schema.
 
 The client runs at `http://localhost:5173` and proxies `/api` to the Express API at `http://localhost:5000`. Liveness is available at `/api/v1/health/live`; readiness verifies PostgreSQL at `/api/v1/health/ready`.
@@ -57,6 +82,7 @@ The client runs at `http://localhost:5173` and proxies `/api` to the Express API
 | `npm run db:migrate --workspace @fire-safety/server` | Apply committed migrations |
 | `npm run db:check --workspace @fire-safety/server` | Validate committed migration metadata |
 | `npm run bootstrap:admin --workspace @fire-safety/server` | Create the first company, branch, roles, and administrator |
+| `npm run seed:demo` | Add or refresh synthetic P2 records in a loopback development database |
 | `npm run db:local:start` / `db:local:stop` | Start or stop the isolated Windows development database |
 
 There is intentionally no schema-push or destructive reset script.
@@ -67,7 +93,9 @@ Sessions use revocable, `HttpOnly`, same-site cookies; authenticated mutations a
 
 Administrators can use **Employees** to assign multiple active roles and **Roles & permissions** to create/update/deactivate custom roles or configure permission mappings. Permission codes are application-defined; the UI does not create arbitrary codes without backend enforcement. System roles cannot be renamed or deactivated, core administrator permissions are protected, and every effective-access change is audited and revokes affected sessions.
 
-Password-reset requests are persisted as outbox jobs. `MAIL_DELIVERY_MODE=local-file` captures reset instructions under the ignored private `LOCAL_MAILBOX_ROOT` for development testing. This mode is rejected in production. With delivery disabled, the worker records a provider-not-configured failure; a queued job is never reported as externally delivered.
+Password-reset requests and assigned CRM due reminders are persisted as outbox jobs. `MAIL_DELIVERY_MODE=local-file` captures messages under the ignored private `LOCAL_MAILBOX_ROOT` for development testing; this mode is rejected in production. `MAIL_DELIVERY_MODE=smtp` requires `SMTP_HOST` and `SMTP_FROM`, accepts optional paired `SMTP_USER`/`SMTP_PASSWORD`, and uses `SMTP_PORT`/`SMTP_SECURE` for transport security. `SMTP_SECURE=false` requires STARTTLS; `true` uses implicit TLS. With delivery disabled, the worker records a provider-not-configured failure while the in-app reminder remains available. A completed email job means the SMTP server accepted the intended recipient, not that the mailbox received or read it.
+
+Recurring reminder creation is committed before the external send. Provider failures retry with the same outbox-derived Message-ID and cannot break the reminder series; uncertain SMTP outcomes can still produce duplicate mail, so exactly-once external delivery is not claimed.
 
 ## Upload storage
 
@@ -77,9 +105,11 @@ Local disk is the confirmed initial storage choice. Production deployment must m
 
 ## CRM checkpoint
 
-Sales roles now expose assignment-scoped Customers, Leads, and Opportunities navigation. A sales manager can configure service categories and assign a lead only to an active employee with current lead-write capability. Create actual company service categories through the application; none are invented or seeded by default.
+Sales roles now expose assignment-scoped Customers, Leads, and Opportunities navigation. A sales manager can configure service categories and assign a lead only to an active employee with current lead-write capability. Bootstrap does not invent company service categories; the optional local demo seed creates clearly marked `DEMO-*` examples only.
 
-Lead qualification requires an in-scope customer and contact, accepts an optional site, and creates an `unawarded` opportunity. Leads support immutable call/meeting/note activity, recurring assigned follow-ups, private PDF/JPEG/PNG attachments up to 20 MiB, versioned bulk assignment/reminder scheduling, and staged customer/open-lead `.xlsx` imports. Imports retain the original file privately, reject formulas, preview row errors/warnings, and commit valid rows with restart-safe results. Downloads and mutations recheck assignment scope; storage names never enter API DTOs. CRM directories use server-side search/filter/sort/pagination through shared shadcn controls. This still does not authorize design, record a quotation/customer PO, or mark a commercial win. P2 free-design authorization and vendor/item/unit masters remain pending.
+Lead qualification requires an in-scope customer and contact, accepts an optional site, and creates an `unawarded` opportunity. An assigned salesperson can then authorize free design by selecting different active design-engineer and design-head assignees; this creates one auditable design-job handoff without changing commercial award. Drawing revisions and reviews remain P3 work.
+
+Leads support immutable call/meeting/note activity, recurring assigned follow-ups, private PDF/JPEG/PNG attachments up to 20 MiB, versioned bulk assignment/reminder scheduling, and staged customer/open-lead `.xlsx` imports. Imports retain the original file privately, reject formulas, preview row errors/warnings, and commit valid rows with restart-safe results. Downloads and mutations recheck assignment scope; storage names never enter API DTOs. CRM and purchasing-master directories use server-side search/filter/sort/pagination through shared shadcn controls. Permission-aware Vendors, Items, Item categories, and Units pages support audited create/update/deactivate workflows; no inventory balance, purchasing transaction, or financial policy is implied.
 
 ## Project documentation
 

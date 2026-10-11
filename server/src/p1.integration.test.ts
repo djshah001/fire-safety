@@ -26,6 +26,7 @@ function csrfFrom(response: request.Response) {
 async function resetIntegrationFixtures() {
   const passwordHash = await hashPassword(initialAdminPassword);
   // Later-phase fixtures may reference users; keep this foundation test rerunnable as the schema grows.
+  await pool.query('delete from design_jobs');
   await pool.query('delete from opportunity_members');
   await pool.query('delete from opportunities');
   await pool.query('delete from lead_members');
@@ -36,6 +37,11 @@ async function resetIntegrationFixtures() {
   await pool.query('delete from sites');
   await pool.query('delete from customers');
   await pool.query('delete from service_categories');
+  await pool.query('delete from vendor_contacts');
+  await pool.query('delete from vendors');
+  await pool.query('delete from items');
+  await pool.query('delete from item_categories');
+  await pool.query('delete from units');
   await pool.query("delete from document_counters where document_type = 'LEAD'");
   await pool.query('delete from idempotency_records');
   await pool.query('delete from password_reset_tokens');

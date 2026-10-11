@@ -7,6 +7,7 @@ import { getPrincipal } from '../auth/auth.types.js';
 import { createPrivateUpload, resolvePrivateFile } from '../../infrastructure/storage/localFileStorage.js';
 import {
   activityInputSchema,
+  authorizeDesignInputSchema,
   bulkLeadAssignmentSchema,
   bulkReminderInputSchema,
   completeReminderSchema,
@@ -15,6 +16,7 @@ import {
   customerChildParamsSchema,
   customerInputSchema,
   customerListQuerySchema,
+  designAssigneeQuerySchema,
   crmImportTypeParamsSchema,
   idParamsSchema,
   leadInputSchema,
@@ -175,6 +177,27 @@ function attachmentDto(attachment: {
   };
 }
 
+function designJobDto(job: {
+  id: string; leadId: string; opportunityId: string; title: string; status: string;
+  designerUserId: string; designHeadUserId: string; surveyRequested: boolean;
+  authorizationNotes: string; authorizedByUserId: string; authorizedAt: Date; rowVersion: number;
+}) {
+  return {
+    id: job.id,
+    leadId: job.leadId,
+    opportunityId: job.opportunityId,
+    title: job.title,
+    status: job.status,
+    designerUserId: job.designerUserId,
+    designHeadUserId: job.designHeadUserId,
+    surveyRequested: job.surveyRequested,
+    authorizationNotes: job.authorizationNotes,
+    authorizedByUserId: job.authorizedByUserId,
+    authorizedAt: job.authorizedAt,
+    rowVersion: job.rowVersion,
+  };
+}
+
 export function createCrmRouter() {
   const router = Router();
   const attachmentUpload = createPrivateUpload({
@@ -251,6 +274,10 @@ export function createCrmRouter() {
 
   router.get('/assignees', requirePermission('crm.lead.assign'), async (request, response) => {
     sendData(request, response, { items: await crmService.listAssignees(getPrincipal(request)) });
+  });
+  router.get('/design-assignees', requirePermission('crm.lead.authorize_design'), async (request, response) => {
+    const { role } = designAssigneeQuerySchema.parse(request.query);
+    sendData(request, response, { items: await crmService.listDesignAssignees(getPrincipal(request), role) });
   });
   router.get('/imports/:type/template', async (request, response) => {
     const { type } = crmImportTypeParamsSchema.parse(request.params);
@@ -402,6 +429,13 @@ export function createCrmRouter() {
       getPrincipal(request), id, qualifyLeadInputSchema.parse(request.body), getRequestId(request),
     );
     sendData(request, response, { opportunity: opportunityDto(result.opportunity), replayed: result.replayed }, result.replayed ? 200 : 201);
+  });
+  router.post('/leads/:id/authorize-design', requireCsrf, requirePermission('crm.lead.authorize_design'), async (request, response) => {
+    const { id } = idParamsSchema.parse(request.params);
+    const result = await crmService.authorizeDesign(
+      getPrincipal(request), id, authorizeDesignInputSchema.parse(request.body), getRequestId(request),
+    );
+    sendData(request, response, { designJob: designJobDto(result.designJob), replayed: result.replayed }, result.replayed ? 200 : 201);
   });
   router.get('/opportunities', requirePermission('crm.opportunity.read'), async (request, response) => {
     const result = await crmService.listOpportunities(

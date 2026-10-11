@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activityInputSchema, bulkLeadAssignmentSchema, bulkReminderInputSchema, customerListQuerySchema, leadListQuerySchema, reminderInputSchema } from './crm.schemas.js';
+import { activityInputSchema, authorizeDesignInputSchema, bulkLeadAssignmentSchema, bulkReminderInputSchema, customerListQuerySchema, leadListQuerySchema, reminderInputSchema } from './crm.schemas.js';
 
 describe('CRM request validation', () => {
   it('accepts only allowlisted server-side sort fields and bounded page sizes', () => {
@@ -44,6 +44,18 @@ describe('CRM request validation', () => {
       timezone: 'Asia/Kolkata',
       dueAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       recurrence: 'none',
+    })).toThrow();
+  });
+
+  it('requires different design and review assignees', () => {
+    const sameUserId = '00000000-0000-4000-8000-000000000001';
+    expect(() => authorizeDesignInputSchema.parse({
+      expectedVersion: 1,
+      title: 'Warehouse design',
+      designerUserId: sameUserId,
+      designHeadUserId: sameUserId,
+      surveyRequested: false,
+      authorizationNotes: 'Prepare a preliminary layout.',
     })).toThrow();
   });
 });

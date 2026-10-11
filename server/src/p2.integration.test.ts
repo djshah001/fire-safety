@@ -35,6 +35,7 @@ async function resetP2Fixtures() {
   await pool.query('delete from reminder_rules');
   await pool.query('delete from lead_attachments');
   await pool.query('delete from crm_activities');
+  await pool.query('delete from design_jobs');
   await pool.query('delete from opportunity_members');
   await pool.query('delete from opportunities');
   await pool.query('delete from lead_members');
@@ -87,6 +88,7 @@ async function cleanP2Fixtures() {
   await pool.query('delete from reminder_rules');
   await pool.query('delete from lead_attachments');
   await pool.query('delete from crm_activities');
+  await pool.query('delete from design_jobs');
   await pool.query('delete from opportunity_members');
   await pool.query('delete from opportunities');
   await pool.query('delete from lead_members');
@@ -289,7 +291,41 @@ describe('P2 scoped CRM lifecycle', () => {
     expect(executiveReminders.body.data.total).toBe(1);
     expect((await manager.agent.get('/api/v1/crm/reminders?status=pending')).body.data.total).toBe(0);
     await pool.query("update outbox_jobs set due_at = now() where type = 'crm.reminder_due'");
-    expect(await processOneOutboxJob(pool, 'p2-reminder-worker')).toBe(true);
+    expect(await processOneOutboxJob(pool, 'p2-reminder-worker-failure', {
+      mailDeliveryMode: 'smtp',
+      smtpFrom: 'notifications@example.test',
+      smtpSend: async (message) => ({ accepted: [], rejected: [message.to] }),
+    })).toBe(true);
+    const recurringAfterRejectedEmail = await pool.query<{ count: string }>(
+      'select count(*) from reminder_occurrences where rule_id = $1',
+      [reminder.body.data.reminder.ruleId],
+    );
+    expect(Number(recurringAfterRejectedEmail.rows[0]!.count)).toBe(2);
+    const retryingReminderJob = await pool.query<{ status: string; attempts: number }>(`
+      select status, attempts from outbox_jobs
+      where type = 'crm.reminder_due' and payload->>'occurrenceId' = $1
+    `, [reminder.body.data.reminder.id]);
+    expect(retryingReminderJob.rows[0]).toMatchObject({ status: 'pending', attempts: 1 });
+    await pool.query(`
+      update outbox_jobs set due_at = now()
+      where type = 'crm.reminder_due' and payload->>'occurrenceId' = $1
+    `, [reminder.body.data.reminder.id]);
+    const reminderEmails: Array<{ to: string; subject: string; messageId: string; text: string }> = [];
+    expect(await processOneOutboxJob(pool, 'p2-reminder-worker', {
+      mailDeliveryMode: 'smtp',
+      smtpFrom: 'notifications@example.test',
+      appOrigin: origin,
+      smtpSend: async (message) => {
+        reminderEmails.push(message);
+        return { accepted: [message.to], rejected: [] };
+      },
+    })).toBe(true);
+    expect(reminderEmails).toEqual([expect.objectContaining({
+      to: executiveEmail,
+      subject: 'Follow-up due: Call about extinguisher quantities',
+      messageId: expect.stringMatching(/^<outbox-.+@example\.test>$/),
+      text: expect.stringContaining(`${origin}/crm/follow-ups`),
+    })]);
     const recurringOccurrences = await pool.query<{ count: string }>(
       'select count(*) from reminder_occurrences where rule_id = $1',
       [reminder.body.data.reminder.ruleId],

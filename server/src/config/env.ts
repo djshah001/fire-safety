@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 config();
 
-const envSchema = z.object({
+export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65_535).default(5_000),
   APP_ORIGIN: z.url().default('http://localhost:5173'),
@@ -16,8 +16,14 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).max(24 * 30).default(12),
   PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(24 * 60).default(60),
-  MAIL_DELIVERY_MODE: z.enum(['disabled', 'local-file']).default('disabled'),
+  MAIL_DELIVERY_MODE: z.enum(['disabled', 'local-file', 'smtp']).default('disabled'),
   LOCAL_MAILBOX_ROOT: z.string().min(1).default('./.local/mailbox'),
+  SMTP_HOST: z.string().trim().min(1).optional(),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65_535).default(587),
+  SMTP_SECURE: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+  SMTP_USER: z.string().trim().min(1).optional(),
+  SMTP_PASSWORD: z.string().min(1).optional(),
+  SMTP_FROM: z.email().max(254).optional(),
   BOOTSTRAP_COMPANY_NAME: z.string().min(1).max(160).optional(),
   BOOTSTRAP_BRANCH_NAME: z.string().min(1).max(120).optional(),
   BOOTSTRAP_ADMIN_NAME: z.string().min(2).max(120).optional(),
@@ -30,6 +36,21 @@ const envSchema = z.object({
       path: ['MAIL_DELIVERY_MODE'],
       message: 'local-file mail delivery is not allowed in production.',
     });
+  }
+  if (value.MAIL_DELIVERY_MODE === 'smtp') {
+    if (!value.SMTP_HOST) {
+      context.addIssue({ code: 'custom', path: ['SMTP_HOST'], message: 'SMTP_HOST is required in smtp mail mode.' });
+    }
+    if (!value.SMTP_FROM) {
+      context.addIssue({ code: 'custom', path: ['SMTP_FROM'], message: 'SMTP_FROM is required in smtp mail mode.' });
+    }
+    if (Boolean(value.SMTP_USER) !== Boolean(value.SMTP_PASSWORD)) {
+      context.addIssue({
+        code: 'custom',
+        path: [value.SMTP_USER ? 'SMTP_PASSWORD' : 'SMTP_USER'],
+        message: 'SMTP_USER and SMTP_PASSWORD must be configured together.',
+      });
+    }
   }
 });
 

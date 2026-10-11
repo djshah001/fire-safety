@@ -2,6 +2,11 @@ import { count, eq } from 'drizzle-orm';
 import { env } from '../config/env.js';
 import {
   permissionCatalog,
+  designEngineerPermissionCodes,
+  designHeadPermissionCodes,
+  purchaseExecutivePermissionCodes,
+  purchaseManagerPermissionCodes,
+  receiverPermissionCodes,
   salesExecutivePermissionCodes,
   salesManagerPermissionCodes,
   systemAdminPermissionCodes,
@@ -79,10 +84,20 @@ async function bootstrap() {
     const adminRole = createdRoles.find((role) => role.code === 'system_admin')!;
     const salesExecutiveRole = createdRoles.find((role) => role.code === 'sales_executive')!;
     const salesManagerRole = createdRoles.find((role) => role.code === 'sales_manager')!;
+    const designEngineerRole = createdRoles.find((role) => role.code === 'design_engineer')!;
+    const designHeadRole = createdRoles.find((role) => role.code === 'design_head')!;
+    const purchaseExecutiveRole = createdRoles.find((role) => role.code === 'purchase_executive')!;
+    const purchaseManagerRole = createdRoles.find((role) => role.code === 'purchase_manager')!;
+    const receiverRole = createdRoles.find((role) => role.code === 'receiver')!;
     await transaction.insert(rolePermissions).values([
       ...systemAdminPermissionCodes.map((permissionCode) => ({ roleId: adminRole.id, permissionCode })),
       ...salesExecutivePermissionCodes.map((permissionCode) => ({ roleId: salesExecutiveRole.id, permissionCode })),
       ...salesManagerPermissionCodes.map((permissionCode) => ({ roleId: salesManagerRole.id, permissionCode })),
+      ...designEngineerPermissionCodes.map((permissionCode) => ({ roleId: designEngineerRole.id, permissionCode })),
+      ...designHeadPermissionCodes.map((permissionCode) => ({ roleId: designHeadRole.id, permissionCode })),
+      ...purchaseExecutivePermissionCodes.map((permissionCode) => ({ roleId: purchaseExecutiveRole.id, permissionCode })),
+      ...purchaseManagerPermissionCodes.map((permissionCode) => ({ roleId: purchaseManagerRole.id, permissionCode })),
+      ...receiverPermissionCodes.map((permissionCode) => ({ roleId: receiverRole.id, permissionCode })),
     ]);
     const [admin] = await transaction.insert(users).values({
       companyId: company!.id,

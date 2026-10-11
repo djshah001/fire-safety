@@ -64,6 +64,7 @@ const OpportunitiesPage = lazy(() =>
   })),
 );
 const FollowUpsPage = lazy(() => import('@/features/crm/FollowUpsPage').then((module) => ({ default: module.FollowUpsPage })));
+const MasterDataPage = lazy(() => import('@/features/masters/MasterDataPage').then((module) => ({ default: module.MasterDataPage })));
 
 function NotFoundPage() {
   return (
@@ -97,6 +98,10 @@ const router = createBrowserRouter([
       { path: "/crm/leads", element: <LeadsPage /> },
       { path: "/crm/follow-ups", element: <FollowUpsPage /> },
       { path: "/crm/opportunities", element: <OpportunitiesPage /> },
+      { path: "/masters/vendors", element: <MasterDataPage /> },
+      { path: "/masters/items", element: <MasterDataPage /> },
+      { path: "/masters/item-categories", element: <MasterDataPage /> },
+      { path: "/masters/units", element: <MasterDataPage /> },
       { path: "/account", element: <AccountPage /> },
     ],
   },

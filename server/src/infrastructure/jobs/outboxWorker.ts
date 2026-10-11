@@ -1,10 +1,13 @@
 import { hostname } from 'node:os';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { logger } from '../../core/logger/logger.js';
+import {
+  deliverMail,
+  type MailDeliveryMode,
+  type MailDeliveryOptions,
+} from '../mail/mailDelivery.js';
 
 export type ClaimedJob = {
   id: string;
@@ -25,9 +28,8 @@ const passwordResetPayloadSchema = z.object({
 });
 const reminderDuePayloadSchema = z.object({ occurrenceId: z.uuid() });
 
-export type OutboxHandlerOptions = {
-  mailDeliveryMode?: 'disabled' | 'local-file';
-  localMailboxRoot?: string;
+export type OutboxHandlerOptions = Omit<MailDeliveryOptions, 'mode'> & {
+  mailDeliveryMode?: MailDeliveryMode;
   appOrigin?: string;
 };
 
@@ -77,27 +79,19 @@ export async function handleOutboxJob(job: ClaimedJob, options: OutboxHandlerOpt
       throw new PermanentJobError('Email provider is not configured; reset instructions were not delivered.');
     }
     const payload = passwordResetPayloadSchema.parse(job.payload);
-    const mailboxRoot = resolve(options.localMailboxRoot ?? env.LOCAL_MAILBOX_ROOT);
-    await mkdir(mailboxRoot, { recursive: true });
     const resetUrl = new URL('/reset-password', options.appOrigin ?? env.APP_ORIGIN);
     resetUrl.searchParams.set('token', payload.token);
-    try {
-      await writeFile(resolve(mailboxRoot, `${job.id}.json`), JSON.stringify({
-        localOnly: true,
-        to: payload.email,
-        subject: 'Fire Safety password reset',
-        text: `Open this local reset link: ${resetUrl.toString()}`,
-        createdAt: new Date().toISOString(),
-      }, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    }
+    await deliverMail(job.id, {
+      to: payload.email,
+      subject: 'Fire Safety password reset',
+      text: `Open this reset link: ${resetUrl.toString()}`,
+    }, { ...options, mode });
     return;
   }
   throw new PermanentJobError(`No handler is registered for job type ${job.type}.`);
 }
 
-async function materializeNextReminder(pool: Pool, job: ClaimedJob) {
+export async function materializeNextReminder(pool: Pool, job: ClaimedJob) {
   if (job.type !== 'crm.reminder_due') return;
   const { occurrenceId } = reminderDuePayloadSchema.parse(job.payload);
   const client = await pool.connect();
@@ -145,6 +139,68 @@ async function materializeNextReminder(pool: Pool, job: ClaimedJob) {
   }
 }
 
+type ReminderMailRow = {
+  occurrenceStatus: 'pending' | 'completed' | 'cancelled';
+  ruleStatus: 'active' | 'completed' | 'cancelled';
+  assigneeStatus: 'active' | 'disabled';
+  assigneeName: string;
+  assigneeEmail: string;
+  title: string;
+  timezone: string;
+  dueAt: Date;
+  leadNumber: string;
+  inquiryName: string;
+};
+
+export async function deliverReminderEmail(
+  pool: Pool,
+  job: ClaimedJob,
+  options: OutboxHandlerOptions = {},
+) {
+  const { occurrenceId } = reminderDuePayloadSchema.parse(job.payload);
+  const result = await pool.query<ReminderMailRow>(`
+    select occurrence.status as "occurrenceStatus", rule.status as "ruleStatus",
+      assignee.status as "assigneeStatus", assignee.name as "assigneeName",
+      assignee.email as "assigneeEmail", rule.title, rule.timezone,
+      occurrence.due_at as "dueAt", lead.lead_number as "leadNumber",
+      lead.inquiry_name as "inquiryName"
+    from reminder_occurrences occurrence
+    join reminder_rules rule on rule.id = occurrence.rule_id
+    join leads lead on lead.id = occurrence.lead_id
+    join users assignee on assignee.id = occurrence.assignee_user_id
+    where occurrence.id = $1 and occurrence.company_id = $2
+  `, [occurrenceId, job.companyId]);
+  const reminder = result.rows[0];
+  if (!reminder) throw new PermanentJobError('Reminder occurrence no longer exists for this company.');
+  if (reminder.occurrenceStatus !== 'pending' || reminder.ruleStatus !== 'active') return;
+  if (reminder.assigneeStatus !== 'active') {
+    throw new PermanentJobError('Reminder assignee is disabled; reassign or cancel the reminder rule.');
+  }
+
+  const mode = options.mailDeliveryMode ?? env.MAIL_DELIVERY_MODE;
+  if (mode === 'disabled') {
+    throw new PermanentJobError('Email provider is not configured; the in-app reminder remains available.');
+  }
+  const dueAt = new Intl.DateTimeFormat('en-IN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: reminder.timezone,
+  }).format(reminder.dueAt);
+  const followUpsUrl = new URL('/crm/follow-ups', options.appOrigin ?? env.APP_ORIGIN);
+  const subjectTitle = reminder.title.replace(/[\r\n]+/g, ' ');
+  await deliverMail(job.id, {
+    to: reminder.assigneeEmail,
+    subject: `Follow-up due: ${subjectTitle}`,
+    text: [
+      `Hello ${reminder.assigneeName},`,
+      '',
+      `Your follow-up “${reminder.title}” is due ${dueAt} (${reminder.timezone}).`,
+      `Lead: ${reminder.leadNumber} — ${reminder.inquiryName}`,
+      `Open follow-ups: ${followUpsUrl.toString()}`,
+    ].join('\n'),
+  }, { ...options, mode });
+}
+
 async function markCompleted(pool: Pool, jobId: string, workerId: string) {
   await pool.query(`
     update outbox_jobs
@@ -167,12 +223,20 @@ async function markFailed(pool: Pool, job: ClaimedJob, workerId: string, error: 
   `, [job.id, workerId, permanent ? 'failed' : 'pending', retryDelaySeconds, message]);
 }
 
-export async function processOneOutboxJob(pool: Pool, workerId: string) {
+export async function processOneOutboxJob(
+  pool: Pool,
+  workerId: string,
+  options: OutboxHandlerOptions = {},
+) {
   const job = await claimNextJob(pool, workerId);
   if (!job) return false;
   try {
-    await handleOutboxJob(job);
-    await materializeNextReminder(pool, job);
+    await handleOutboxJob(job, options);
+    if (job.type === 'crm.reminder_due') {
+      // Recurrence is durable before any external call, so a provider outage cannot break the series.
+      await materializeNextReminder(pool, job);
+      await deliverReminderEmail(pool, job, options);
+    }
     await markCompleted(pool, job.id, workerId);
     logger.info({ jobId: job.id, jobType: job.type }, 'Outbox job completed');
   } catch (error) {

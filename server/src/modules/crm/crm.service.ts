@@ -18,6 +18,7 @@ import type {
   reminderInputSchema,
   bulkLeadAssignmentSchema,
   bulkReminderInputSchema,
+  authorizeDesignInputSchema,
   qualifyLeadInputSchema,
   siteInputSchema,
 } from './crm.schemas.js';
@@ -33,6 +34,7 @@ type ActivityInput = z.infer<typeof activityInputSchema>;
 type ReminderInput = z.infer<typeof reminderInputSchema>;
 type BulkLeadAssignmentInput = z.infer<typeof bulkLeadAssignmentSchema>;
 type BulkReminderInput = z.infer<typeof bulkReminderInputSchema>;
+type AuthorizeDesignInput = z.infer<typeof authorizeDesignInputSchema>;
 
 type ImportIssue = { field?: string; message: string };
 
@@ -932,6 +934,85 @@ export class CrmService {
         metadata: { leadId, customerId: input.customerId, siteId: input.siteId ?? null },
       });
       return { opportunity: opportunity!, replayed: false };
+    });
+  }
+
+  listDesignAssignees(principal: AuthenticatedPrincipal, role: 'designer' | 'design_head') {
+    const permission = role === 'designer' ? 'engineering.design.write' : 'engineering.design.review';
+    return createCrmRepository(this.database).listEligibleUsers(principal.companyId, permission);
+  }
+
+  async authorizeDesign(
+    principal: AuthenticatedPrincipal,
+    leadId: string,
+    input: AuthorizeDesignInput,
+    requestId: string,
+  ) {
+    const access = crmAccess(principal);
+    const repository = createCrmRepository(this.database);
+    const lead = await repository.findLead(access, leadId);
+    if (!lead) throw new NotFoundError('Lead not found.');
+
+    const existing = await repository.findDesignJobByLead(principal.companyId, leadId);
+    if (existing) {
+      if (
+        lead.stage === 'design_authorized' && existing.title === input.title &&
+        existing.designerUserId === input.designerUserId && existing.designHeadUserId === input.designHeadUserId &&
+        existing.surveyRequested === input.surveyRequested && existing.authorizationNotes === input.authorizationNotes
+      ) return { designJob: existing, replayed: true };
+      throw new ConflictError('This lead already has a different free-design authorization.');
+    }
+    if (lead.stage !== 'qualified') {
+      throw new ConflictError('Only a qualified lead can authorize free design.');
+    }
+    const opportunity = await repository.findOpportunityByLead(principal.companyId, leadId);
+    if (!opportunity) throw new ConflictError('The qualified lead is missing its opportunity.');
+
+    const [designer, designHead] = await Promise.all([
+      repository.findEligibleUser(principal.companyId, input.designerUserId, 'engineering.design.write'),
+      repository.findEligibleUser(principal.companyId, input.designHeadUserId, 'engineering.design.review'),
+    ]);
+    if (!designer) throw validationError('Choose an active employee eligible for design work.', { field: 'designerUserId' });
+    if (!designHead) throw validationError('Choose an active employee eligible for design review.', { field: 'designHeadUserId' });
+
+    return this.database.transaction(async (transaction) => {
+      const transactionalRepository = createCrmRepository(transaction);
+      const now = new Date();
+      const updatedLead = await transactionalRepository.authorizeLeadForDesign(
+        principal.companyId, leadId, input.expectedVersion, now,
+      );
+      if (!updatedLead) throw new ConflictError('The lead changed or is no longer eligible for design authorization.');
+      const designJob = await transactionalRepository.createDesignJob({
+        companyId: principal.companyId,
+        leadId,
+        opportunityId: opportunity.id,
+        title: input.title,
+        designerUserId: input.designerUserId,
+        designHeadUserId: input.designHeadUserId,
+        surveyRequested: input.surveyRequested,
+        authorizationNotes: input.authorizationNotes,
+        authorizedByUserId: principal.userId,
+        authorizedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'crm.lead_design_authorized',
+        targetType: 'design_job',
+        targetId: designJob!.id,
+        requestId,
+        metadata: {
+          leadId,
+          opportunityId: opportunity.id,
+          designerUserId: input.designerUserId,
+          designHeadUserId: input.designHeadUserId,
+          surveyRequested: input.surveyRequested,
+          commercialState: opportunity.commercialState,
+        },
+      });
+      return { designJob: designJob!, replayed: false };
     });
   }
 

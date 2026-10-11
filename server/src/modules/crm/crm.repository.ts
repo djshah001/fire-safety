@@ -23,6 +23,7 @@ import {
   crmImportBatches,
   crmImportRows,
   documentCounters,
+  designJobs,
   leadAttachments,
   leadMembers,
   leads,
@@ -373,6 +374,48 @@ export function createCrmRepository(executor: DatabaseExecutor) {
             ))),
         ))
         .orderBy(asc(users.name));
+    },
+
+    async listEligibleUsers(companyId: string, permissionCode: string, now = new Date()) {
+      return executor.select({ id: users.id, name: users.name, email: users.email })
+        .from(users).where(and(
+          eq(users.companyId, companyId),
+          eq(users.status, 'active'),
+          exists(executor.select({ value: sql`1` }).from(userRoleAssignments)
+            .innerJoin(roles, eq(roles.id, userRoleAssignments.roleId))
+            .innerJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+            .where(and(
+              eq(userRoleAssignments.companyId, companyId),
+              eq(userRoleAssignments.userId, users.id),
+              eq(roles.companyId, companyId),
+              eq(roles.isActive, true),
+              eq(rolePermissions.permissionCode, permissionCode),
+              lte(userRoleAssignments.validFrom, now),
+              or(isNull(userRoleAssignments.validUntil), gt(userRoleAssignments.validUntil, now)),
+            ))),
+        )).orderBy(asc(users.name));
+    },
+
+    async findEligibleUser(companyId: string, userId: string, permissionCode: string, now = new Date()) {
+      const [user] = await executor.select({ id: users.id, name: users.name, email: users.email })
+        .from(users).where(and(
+          eq(users.companyId, companyId),
+          eq(users.id, userId),
+          eq(users.status, 'active'),
+          exists(executor.select({ value: sql`1` }).from(userRoleAssignments)
+            .innerJoin(roles, eq(roles.id, userRoleAssignments.roleId))
+            .innerJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+            .where(and(
+              eq(userRoleAssignments.companyId, companyId),
+              eq(userRoleAssignments.userId, users.id),
+              eq(roles.companyId, companyId),
+              eq(roles.isActive, true),
+              eq(rolePermissions.permissionCode, permissionCode),
+              lte(userRoleAssignments.validFrom, now),
+              or(isNull(userRoleAssignments.validUntil), gt(userRoleAssignments.validUntil, now)),
+            ))),
+        )).limit(1);
+      return user;
     },
 
     async createLead(input: typeof leads.$inferInsert) {
@@ -853,6 +896,32 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         eq(opportunities.companyId, companyId), eq(opportunities.leadId, leadId),
       )).limit(1);
       return opportunity;
+    },
+
+    async findDesignJobByLead(companyId: string, leadId: string) {
+      const [job] = await executor.select().from(designJobs).where(and(
+        eq(designJobs.companyId, companyId), eq(designJobs.leadId, leadId),
+      )).limit(1);
+      return job;
+    },
+
+    async authorizeLeadForDesign(companyId: string, leadId: string, expectedVersion: number, now: Date) {
+      const [lead] = await executor.update(leads).set({
+        stage: 'design_authorized',
+        rowVersion: sql`${leads.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(leads.companyId, companyId),
+        eq(leads.id, leadId),
+        eq(leads.rowVersion, expectedVersion),
+        eq(leads.stage, 'qualified'),
+      )).returning();
+      return lead;
+    },
+
+    async createDesignJob(input: typeof designJobs.$inferInsert) {
+      const [job] = await executor.insert(designJobs).values(input).returning();
+      return job;
     },
 
     async listOpportunities(access: CrmAccess, input: {

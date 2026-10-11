@@ -45,6 +45,11 @@ export type Opportunity = {
   rowVersion: number; updatedAt: string;
 };
 export type Assignee = { id: string; name: string; email: string };
+export type DesignJob = {
+  id: string; leadId: string; opportunityId: string; title: string; status: string;
+  designerUserId: string; designHeadUserId: string; surveyRequested: boolean;
+  authorizationNotes: string; authorizedByUserId: string; authorizedAt: string; rowVersion: number;
+};
 export type CrmActivity = {
   id: string; type: 'call' | 'meeting' | 'note'; summary: string; occurredAt: string;
   createdAt: string; createdByUserId: string; createdByName: string;
@@ -183,6 +188,16 @@ export const assigneesQuery = queryOptions({
   },
 });
 
+export const designAssigneesQuery = (role: 'designer' | 'design_head') => queryOptions({
+  queryKey: ['crm', 'design-assignees', role] as const,
+  queryFn: async ({ signal }) => {
+    const response = await apiClient.get<ApiEnvelope<{ items: Assignee[] }>>('/crm/design-assignees', {
+      params: { role }, signal,
+    });
+    return response.data.data.items;
+  },
+});
+
 export const opportunitiesQuery = (filters: { search?: string; state?: CommercialState; page?: number; pageSize?: number; sort?: 'title' | 'customerName' | 'state' | 'updatedAt'; direction?: 'asc' | 'desc' } = {}) => queryOptions({
   queryKey: ['crm', 'opportunities', filters] as const,
   queryFn: async ({ signal }) => {
@@ -297,6 +312,16 @@ export async function qualifyLead(input: {
 }) {
   const response = await apiClient.post<ApiEnvelope<{ opportunity: Opportunity; replayed: boolean }>>(
     `/crm/leads/${input.leadId}/qualify`, input,
+  );
+  return response.data.data;
+}
+
+export async function authorizeLeadDesign(input: {
+  leadId: string; expectedVersion: number; title: string; designerUserId: string;
+  designHeadUserId: string; surveyRequested: boolean; authorizationNotes: string;
+}) {
+  const response = await apiClient.post<ApiEnvelope<{ designJob: DesignJob; replayed: boolean }>>(
+    `/crm/leads/${input.leadId}/authorize-design`, input,
   );
   return response.data.data;
 }

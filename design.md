@@ -111,6 +111,8 @@ Mobile: header with labelled menu/search/notifications, focus-managed drawer, re
 
 Later groups: inventory, execution, quality/handover and finance when implemented. Role-visible navigation improves usability; backend policies still govern access.
 
+Implemented P2 master directories reuse the shared shadcn `ServerDataTable` and `ListToolbar`, with URL search/status/sort/page state, a Sheet filter, Dialog create/edit/deactivate forms, semantic status badges and Sonner feedback. Vendor operational contacts are shown without bank fields; item rows show category and unit context. Deactivation preserves referenced history.
+
 ## 4. Screens and workflows
 
 | Screen | Main content | Primary actions / safeguards |

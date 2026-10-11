@@ -8,7 +8,11 @@ import {
   ListTodo,
   LogOut,
   ShieldCheck,
+  Boxes,
+  Ruler,
+  Tags,
   Target,
+  Truck,
   UserRound,
   Users,
 } from "lucide-react";
@@ -71,6 +75,10 @@ const pageTitles: Record<string, string> = {
   "/crm/follow-ups": "My follow-ups",
   "/crm/leads": "Leads",
   "/crm/opportunities": "Opportunities",
+  "/masters/vendors": "Vendors",
+  "/masters/items": "Items",
+  "/masters/item-categories": "Item categories",
+  "/masters/units": "Units",
 };
 
 function initials(name: string) {
@@ -303,6 +311,13 @@ export function AppShell({ user }: { user: CurrentUser }) {
     },
   ];
 
+  const masters: NavItem[] = [
+    { to: "/masters/vendors", label: "Vendors", icon: Truck, visible: user.permissions.includes("procurement.vendor.read") },
+    { to: "/masters/items", label: "Items", icon: Boxes, visible: user.permissions.includes("procurement.item.read") },
+    { to: "/masters/item-categories", label: "Item categories", icon: Tags, visible: user.permissions.includes("procurement.item.read") },
+    { to: "/masters/units", label: "Units", icon: Ruler, visible: user.permissions.includes("procurement.item.read") },
+  ];
+
   const overview: NavItem = {
     to: "/",
     label: "Overview",
@@ -366,6 +381,11 @@ export function AppShell({ user }: { user: CurrentUser }) {
                   icon={BriefcaseBusiness}
                   items={crm}
                   openByDefault
+                />
+                <NavigationGroup
+                  label="Masters"
+                  icon={Boxes}
+                  items={masters}
                 />
                 <NavigationGroup
                   label="Administration"
