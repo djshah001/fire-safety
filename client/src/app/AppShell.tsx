@@ -15,6 +15,9 @@ import {
   Truck,
   UserRound,
   Users,
+  DraftingCompass,
+  ClipboardPenLine,
+  ClipboardList,
 } from "lucide-react";
 import type { CSSProperties } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -75,6 +78,8 @@ const pageTitles: Record<string, string> = {
   "/crm/follow-ups": "My follow-ups",
   "/crm/leads": "Leads",
   "/crm/opportunities": "Opportunities",
+  "/engineering/design-jobs": "Design jobs",
+  "/engineering/boqs": "BOQ & estimates",
   "/masters/vendors": "Vendors",
   "/masters/items": "Items",
   "/masters/item-categories": "Item categories",
@@ -91,12 +96,19 @@ function initials(name: string) {
 }
 
 function isPathActive(pathname: string, to: string) {
+  const isBoqWorkspace = /^\/engineering\/design-jobs\/[^/]+\/boq$/.test(pathname);
+  if (to === "/engineering/boqs") return pathname === to || isBoqWorkspace;
+  if (to === "/engineering/design-jobs" && isBoqWorkspace) return false;
   return to === "/"
     ? pathname === "/"
     : pathname === to || pathname.startsWith(`${to}/`);
 }
 
 function currentPageTitle(pathname: string) {
+  if (/^\/engineering\/design-jobs\/[^/]+\/boq$/.test(pathname)) {
+    return "BOQ & estimate";
+  }
+
   const match = Object.entries(pageTitles)
     .filter(([path]) => isPathActive(pathname, path))
     .sort(([left], [right]) => right.length - left.length)[0];
@@ -311,6 +323,23 @@ export function AppShell({ user }: { user: CurrentUser }) {
     },
   ];
 
+  const engineering: NavItem[] = [
+    {
+      to: "/engineering/design-jobs",
+      label: "Design jobs",
+      icon: ClipboardPenLine,
+      visible: ["engineering.design.write", "engineering.design.review", "engineering.design.customer_decision", "engineering.estimate.read"]
+        .some((permission) => user.permissions.includes(permission)),
+    },
+    {
+      to: "/engineering/boqs",
+      label: "BOQ & estimates",
+      icon: ClipboardList,
+      visible: ["engineering.design.write", "engineering.design.review", "engineering.design.customer_decision", "engineering.estimate.read"]
+        .some((permission) => user.permissions.includes(permission)),
+    },
+  ];
+
   const masters: NavItem[] = [
     { to: "/masters/vendors", label: "Vendors", icon: Truck, visible: user.permissions.includes("procurement.vendor.read") },
     { to: "/masters/items", label: "Items", icon: Boxes, visible: user.permissions.includes("procurement.item.read") },
@@ -386,6 +415,12 @@ export function AppShell({ user }: { user: CurrentUser }) {
                   label="Masters"
                   icon={Boxes}
                   items={masters}
+                />
+                <NavigationGroup
+                  label="Engineering"
+                  icon={DraftingCompass}
+                  items={engineering}
+                  openByDefault
                 />
                 <NavigationGroup
                   label="Administration"

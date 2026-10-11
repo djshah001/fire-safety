@@ -27,6 +27,8 @@ async function resetP2Fixtures() {
     select storage_name as "storageName" from lead_attachments
     union all
     select storage_name as "storageName" from crm_import_batches
+    union all
+    select storage_name as "storageName" from design_revision_files
   `);
   await Promise.all(files.rows.map((file) => removePrivateFile(file.storageName)));
   await pool.query('delete from crm_import_batches');
@@ -35,6 +37,14 @@ async function resetP2Fixtures() {
   await pool.query('delete from reminder_rules');
   await pool.query('delete from lead_attachments');
   await pool.query('delete from crm_activities');
+  await pool.query('delete from design_customer_decisions');
+  await pool.query('delete from design_review_actions');
+  await pool.query('delete from design_revision_files');
+  await pool.query('delete from boq_review_actions');
+  await pool.query('delete from estimate_cost_lines');
+  await pool.query('delete from boq_lines');
+  await pool.query('delete from boq_revisions');
+  await pool.query('delete from design_package_revisions');
   await pool.query('delete from design_jobs');
   await pool.query('delete from opportunity_members');
   await pool.query('delete from opportunities');
@@ -80,6 +90,8 @@ async function cleanP2Fixtures() {
     select storage_name as "storageName" from lead_attachments
     union all
     select storage_name as "storageName" from crm_import_batches
+    union all
+    select storage_name as "storageName" from design_revision_files
   `);
   await Promise.all(files.rows.map((file) => removePrivateFile(file.storageName)));
   await pool.query('delete from crm_import_batches');
@@ -88,6 +100,14 @@ async function cleanP2Fixtures() {
   await pool.query('delete from reminder_rules');
   await pool.query('delete from lead_attachments');
   await pool.query('delete from crm_activities');
+  await pool.query('delete from design_customer_decisions');
+  await pool.query('delete from design_review_actions');
+  await pool.query('delete from design_revision_files');
+  await pool.query('delete from boq_review_actions');
+  await pool.query('delete from estimate_cost_lines');
+  await pool.query('delete from boq_lines');
+  await pool.query('delete from boq_revisions');
+  await pool.query('delete from design_package_revisions');
   await pool.query('delete from design_jobs');
   await pool.query('delete from opportunity_members');
   await pool.query('delete from opportunities');

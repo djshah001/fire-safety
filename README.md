@@ -107,9 +107,17 @@ Local disk is the confirmed initial storage choice. Production deployment must m
 
 Sales roles now expose assignment-scoped Customers, Leads, and Opportunities navigation. A sales manager can configure service categories and assign a lead only to an active employee with current lead-write capability. Bootstrap does not invent company service categories; the optional local demo seed creates clearly marked `DEMO-*` examples only.
 
-Lead qualification requires an in-scope customer and contact, accepts an optional site, and creates an `unawarded` opportunity. An assigned salesperson can then authorize free design by selecting different active design-engineer and design-head assignees; this creates one auditable design-job handoff without changing commercial award. Drawing revisions and reviews remain P3 work.
+Lead qualification requires an in-scope customer and contact, accepts an optional site, and creates an `unawarded` opportunity. An assigned salesperson can then authorize free design by selecting different active design-engineer and design-head assignees; this creates one auditable design-job handoff without changing commercial award.
 
 Leads support immutable call/meeting/note activity, recurring assigned follow-ups, private PDF/JPEG/PNG attachments up to 20 MiB, versioned bulk assignment/reminder scheduling, and staged customer/open-lead `.xlsx` imports. Imports retain the original file privately, reject formulas, preview row errors/warnings, and commit valid rows with restart-safe results. Downloads and mutations recheck assignment scope; storage names never enter API DTOs. CRM and purchasing-master directories use server-side search/filter/sort/pagination through shared shadcn controls. Permission-aware Vendors, Items, Item categories, and Units pages support audited create/update/deactivate workflows; no inventory balance, purchasing transaction, or financial policy is implied.
+
+## Engineering checkpoint
+
+Employees with a relevant engineering or customer-decision permission see **Engineering → Design jobs**. Visibility remains assignment based: the named designer and design head can access their job, while sales access requires membership inherited from the linked lead/opportunity. A company-wide role alone does not expose every job.
+
+The assigned designer creates numbered revisions and uploads at least one original `.dwg`/`.dxf` file (100 MiB maximum) plus a separate PDF preview (20 MiB maximum). Submission freezes the revision. The different assigned design head can approve or return it; corrections always use a new revision. Linked sales users mark an internally approved revision as sent and record the customer's decision with a traceable evidence reference bound to that exact revision. CAD remains download-only, PDF opens through an authorized sandboxed preview route, and generated storage names never enter API responses.
+
+After customer approval, **BOQ & estimate** binds a numbered BOQ to that exact design revision. Technical lines snapshot item/unit/specification fields and always preserve the complete physical quantity, independent of future payment methods. Material, labour, transport, subcontracting, overhead, wastage and margin lines form a separate INR estimate calculated with backend decimal arithmetic. Estimate data is omitted—not visually masked—for roles without `engineering.estimate.read`. Submitted BOQs and estimates are immutable; returns or a newer approved design create a new copied revision. Quotations and project start are the next P3 checkpoints and are not yet implemented.
 
 ## Project documentation
 

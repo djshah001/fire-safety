@@ -16,6 +16,9 @@ export const permissionCatalog = {
   'crm.opportunity.read': 'View explicitly assigned opportunities.',
   'engineering.design.write': 'Work on explicitly assigned design jobs.',
   'engineering.design.review': 'Review explicitly assigned design jobs; authors cannot review their own revisions.',
+  'engineering.design.customer_decision': 'Record customer decisions and evidence for design jobs linked to assigned CRM work.',
+  'engineering.estimate.read': 'View internal cost estimates for assigned engineering work.',
+  'engineering.estimate.write': 'Prepare internal cost estimates for assigned engineering work.',
   'procurement.vendor.read': 'View operational vendor identity and contact fields.',
   'procurement.vendor.manage': 'Create, update, and deactivate vendor master records.',
   'procurement.item.read': 'View item, category, and unit master records.',
@@ -41,21 +44,27 @@ export const salesExecutivePermissionCodes: PermissionCode[] = [
   'crm.lead.qualify',
   'crm.lead.authorize_design',
   'crm.opportunity.read',
+  'engineering.design.customer_decision',
 ];
 
 export const salesManagerPermissionCodes: PermissionCode[] = [
   ...salesExecutivePermissionCodes,
   'crm.service_category.manage',
   'crm.lead.assign',
+  'engineering.estimate.read',
 ];
 
 export const designEngineerPermissionCodes: PermissionCode[] = [
   'engineering.design.write',
+  'engineering.estimate.read',
+  'engineering.estimate.write',
 ];
 
 export const designHeadPermissionCodes: PermissionCode[] = [
   'engineering.design.write',
   'engineering.design.review',
+  'engineering.estimate.read',
+  'engineering.estimate.write',
 ];
 
 export const purchaseExecutivePermissionCodes: PermissionCode[] = [

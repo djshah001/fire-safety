@@ -65,6 +65,10 @@ const OpportunitiesPage = lazy(() =>
 );
 const FollowUpsPage = lazy(() => import('@/features/crm/FollowUpsPage').then((module) => ({ default: module.FollowUpsPage })));
 const MasterDataPage = lazy(() => import('@/features/masters/MasterDataPage').then((module) => ({ default: module.MasterDataPage })));
+const DesignJobsPage = lazy(() => import('@/features/engineering/DesignJobsPage').then((module) => ({ default: module.DesignJobsPage })));
+const DesignJobPage = lazy(() => import('@/features/engineering/DesignJobPage').then((module) => ({ default: module.DesignJobPage })));
+const BoqWorkspacePage = lazy(() => import('@/features/engineering/BoqWorkspacePage').then((module) => ({ default: module.BoqWorkspacePage })));
+const BoqQueuePage = lazy(() => import('@/features/engineering/BoqQueuePage').then((module) => ({ default: module.BoqQueuePage })));
 
 function NotFoundPage() {
   return (
@@ -98,6 +102,10 @@ const router = createBrowserRouter([
       { path: "/crm/leads", element: <LeadsPage /> },
       { path: "/crm/follow-ups", element: <FollowUpsPage /> },
       { path: "/crm/opportunities", element: <OpportunitiesPage /> },
+      { path: "/engineering/design-jobs", element: <DesignJobsPage /> },
+      { path: "/engineering/design-jobs/:jobId", element: <DesignJobPage /> },
+      { path: "/engineering/design-jobs/:jobId/boq", element: <BoqWorkspacePage /> },
+      { path: "/engineering/boqs", element: <BoqQueuePage /> },
       { path: "/masters/vendors", element: <MasterDataPage /> },
       { path: "/masters/items", element: <MasterDataPage /> },
       { path: "/masters/item-categories", element: <MasterDataPage /> },

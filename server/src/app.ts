@@ -13,6 +13,8 @@ import { createAuthRouter } from './modules/auth/auth.routes.js';
 import { createAdminRouter } from './modules/admin/admin.routes.js';
 import { createCrmRouter } from './modules/crm/crm.routes.js';
 import { createMastersRouter } from './modules/masters/masters.routes.js';
+import { createEngineeringRouter } from './modules/engineering/engineering.routes.js';
+import { createBoqRouter } from './modules/engineering/boq.routes.js';
 
 export type AppDependencies = {
   checkReadiness?: ReadinessCheck;
@@ -47,6 +49,8 @@ export function createApp(dependencies: AppDependencies = {}) {
   app.use('/api/v1/admin', createAdminRouter());
   app.use('/api/v1/crm', createCrmRouter());
   app.use('/api/v1/masters', createMastersRouter());
+  app.use('/api/v1/engineering', createEngineeringRouter());
+  app.use('/api/v1/engineering', createBoqRouter());
 
   app.use(notFoundHandler);
   app.use(errorHandler);
