@@ -24,6 +24,14 @@ afterEach(async () => {
 });
 
 describe('outbox handlers', () => {
+  it('accepts a valid in-app CRM reminder occurrence without claiming external delivery', async () => {
+    await expect(handleOutboxJob({
+      ...job,
+      type: 'crm.reminder_due',
+      payload: { occurrenceId: '00000000-0000-4000-8000-000000000099' },
+    })).resolves.toBeUndefined();
+  });
+
   it('does not claim password reset delivery when email is unconfigured', async () => {
     await expect(handleOutboxJob(job)).rejects.toEqual(expect.objectContaining({
       message: expect.stringContaining('not configured'),

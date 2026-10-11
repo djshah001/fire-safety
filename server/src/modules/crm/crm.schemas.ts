@@ -3,6 +3,15 @@ import { z } from 'zod';
 const optionalText = (maximum: number) => z.string().trim().max(maximum).optional()
   .transform((value) => value || undefined);
 
+const timezoneSchema = z.string().trim().min(1).max(80).refine((value) => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}, 'Choose a valid IANA timezone.');
+
 const contactMethodFields = {
   phone: optionalText(30),
   email: z.union([z.email().max(254), z.literal('')]).optional().transform((value) => value || undefined),
@@ -45,6 +54,8 @@ export const customerListQuerySchema = z.object({
   search: optionalText(120),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  sort: z.enum(['name', 'status', 'updatedAt']).default('name'),
+  direction: z.enum(['asc', 'desc']).default('asc'),
 });
 
 export const serviceCategoryInputSchema = z.object({
@@ -53,6 +64,9 @@ export const serviceCategoryInputSchema = z.object({
 });
 
 export const idParamsSchema = z.object({ id: z.uuid() });
+export const crmImportTypeSchema = z.enum(['customers', 'open_leads']);
+export const crmImportTypeParamsSchema = z.object({ type: crmImportTypeSchema });
+export const commitImportSchema = z.object({ expectedVersion: z.number().int().positive() });
 export const customerChildParamsSchema = z.object({ customerId: z.uuid() });
 export const versionedReasonSchema = z.object({
   expectedVersion: z.number().int().positive(),
@@ -87,6 +101,8 @@ export const leadListQuerySchema = z.object({
   search: optionalText(120),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  sort: z.enum(['leadNumber', 'inquiryName', 'stage', 'updatedAt']).default('updatedAt'),
+  direction: z.enum(['asc', 'desc']).default('desc'),
 });
 
 export const leadStageInputSchema = z.object({
@@ -112,4 +128,70 @@ export const opportunityListQuerySchema = z.object({
   search: optionalText(120),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  sort: z.enum(['title', 'customerName', 'state', 'updatedAt']).default('updatedAt'),
+  direction: z.enum(['asc', 'desc']).default('desc'),
 });
+
+export const leadChildParamsSchema = z.object({ leadId: z.uuid() });
+export const leadAttachmentParamsSchema = z.object({ leadId: z.uuid(), attachmentId: z.uuid() });
+
+export const activityInputSchema = z.object({
+  type: z.enum(['call', 'meeting', 'note']),
+  summary: z.string().trim().min(3).max(2_000),
+  occurredAt: z.iso.datetime({ offset: true }).transform((value) => new Date(value)),
+}).refine((value) => value.occurredAt.getTime() <= Date.now() + 5 * 60_000, {
+  message: 'Activity time cannot be more than five minutes in the future.',
+  path: ['occurredAt'],
+});
+
+export const reminderInputSchema = z.object({
+  title: z.string().trim().min(3).max(200),
+  assigneeUserId: z.uuid().optional(),
+  timezone: timezoneSchema,
+  dueAt: z.iso.datetime({ offset: true }).transform((value) => new Date(value)),
+  recurrence: z.enum(['none', 'daily', 'weekly', 'monthly']).default('none'),
+}).refine((value) => value.dueAt.getTime() >= Date.now() + 60_000, {
+  message: 'Reminder must be due at least one minute in the future.',
+  path: ['dueAt'],
+});
+
+const bulkLeadTargetsSchema = z.array(z.object({
+  id: z.uuid(),
+  expectedVersion: z.number().int().positive(),
+})).min(1).max(100).superRefine((targets, context) => {
+  const seen = new Set<string>();
+  targets.forEach((target, index) => {
+    if (seen.has(target.id)) {
+      context.addIssue({ code: 'custom', message: 'A lead can only appear once.', path: [index, 'id'] });
+    }
+    seen.add(target.id);
+  });
+});
+
+export const bulkLeadAssignmentSchema = z.object({
+  targets: bulkLeadTargetsSchema,
+  assigneeUserId: z.uuid(),
+});
+
+export const bulkReminderInputSchema = z.object({
+  targets: bulkLeadTargetsSchema,
+  title: z.string().trim().min(3).max(200),
+  assigneeUserId: z.uuid().optional(),
+  timezone: timezoneSchema,
+  dueAt: z.iso.datetime({ offset: true }).transform((value) => new Date(value)),
+  recurrence: z.enum(['none', 'daily', 'weekly', 'monthly']).default('none'),
+}).refine((value) => value.dueAt.getTime() >= Date.now() + 60_000, {
+  message: 'Reminder must be due at least one minute in the future.',
+  path: ['dueAt'],
+});
+
+export const reminderListQuerySchema = z.object({
+  status: z.enum(['pending', 'completed', 'cancelled']).optional(),
+  search: optionalText(120),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  sort: z.enum(['dueAt', 'title', 'status']).default('dueAt'),
+  direction: z.enum(['asc', 'desc']).default('asc'),
+});
+
+export const completeReminderSchema = z.object({ expectedVersion: z.number().int().positive() });

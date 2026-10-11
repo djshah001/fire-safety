@@ -12,7 +12,6 @@ Internal web application for the Fire Safety CRM, engineering, project baseline,
 ```powershell
 npm install
 Copy-Item server/.env.example server/.env
-npm run dev
 ```
 
 Set a real local `DATABASE_URL` in `server/.env` before using database-backed endpoints. Do not commit `.env`.
@@ -31,9 +30,12 @@ Create the empty database, then apply and bootstrap it with explicit local compa
 ```powershell
 npm run db:migrate --workspace @fire-safety/server
 npm run bootstrap:admin --workspace @fire-safety/server
+npm run dev
 ```
 
 Bootstrap refuses to run if a company already exists. The initial administrator receives only employee-access, configuration, and job-observation permissions—not commercial approval or finance access—and must change the temporary password at first login.
+
+Run `db:migrate` again whenever committed migrations are added. A PostgreSQL `relation ... does not exist` error from an otherwise valid endpoint usually means the database named by `server/.env` is behind the application schema.
 
 The client runs at `http://localhost:5173` and proxies `/api` to the Express API at `http://localhost:5000`. Liveness is available at `/api/v1/health/live`; readiness verifies PostgreSQL at `/api/v1/health/ready`.
 
@@ -77,7 +79,7 @@ Local disk is the confirmed initial storage choice. Production deployment must m
 
 Sales roles now expose assignment-scoped Customers, Leads, and Opportunities navigation. A sales manager can configure service categories and assign a lead only to an active employee with current lead-write capability. Create actual company service categories through the application; none are invented or seeded by default.
 
-Lead qualification requires an in-scope customer and contact, accepts an optional site, and creates an `unawarded` opportunity. It does not authorize design, record a quotation/customer PO, or mark a commercial win. P2 attachments, activities/reminders, imports/bulk operations, and vendor/item/unit masters remain pending.
+Lead qualification requires an in-scope customer and contact, accepts an optional site, and creates an `unawarded` opportunity. Leads support immutable call/meeting/note activity, recurring assigned follow-ups, private PDF/JPEG/PNG attachments up to 20 MiB, versioned bulk assignment/reminder scheduling, and staged customer/open-lead `.xlsx` imports. Imports retain the original file privately, reject formulas, preview row errors/warnings, and commit valid rows with restart-safe results. Downloads and mutations recheck assignment scope; storage names never enter API DTOs. CRM directories use server-side search/filter/sort/pagination through shared shadcn controls. This still does not authorize design, record a quotation/customer PO, or mark a commercial win. P2 free-design authorization and vendor/item/unit masters remain pending.
 
 ## Project documentation
 

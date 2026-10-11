@@ -2,33 +2,257 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   BriefcaseBusiness,
   Building2,
+  ChevronRight,
   Flame,
   LayoutDashboard,
+  ListTodo,
   LogOut,
-  Menu,
   ShieldCheck,
   Target,
   UserRound,
   Users,
 } from "lucide-react";
-import { useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import type { CSSProperties } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+
 import type { CurrentUser } from "@/api/auth";
 import { logout } from "@/api/auth";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
-import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarSeparator,
+  SidebarTrigger,
+  useSidebar,
+} from "@/components/ui/sidebar";
+
+type NavItem = {
+  to: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+  visible: boolean;
+};
+
+const pageTitles: Record<string, string> = {
+  "/": "Overview",
+  "/account": "My account",
+  "/admin/employees": "Employees",
+  "/admin/roles": "Roles & permissions",
+  "/crm/customers": "Customers",
+  "/crm/follow-ups": "My follow-ups",
+  "/crm/leads": "Leads",
+  "/crm/opportunities": "Opportunities",
+};
+
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
+}
+
+function isPathActive(pathname: string, to: string) {
+  return to === "/"
+    ? pathname === "/"
+    : pathname === to || pathname.startsWith(`${to}/`);
+}
+
+function currentPageTitle(pathname: string) {
+  const match = Object.entries(pageTitles)
+    .filter(([path]) => isPathActive(pathname, path))
+    .sort(([left], [right]) => right.length - left.length)[0];
+
+  return match?.[1] ?? "Fire Safety";
+}
+
+function NavigationLink({
+  item,
+  nested = false,
+}: {
+  item: NavItem;
+  nested?: boolean;
+}) {
+  const location = useLocation();
+  const { isMobile, setOpenMobile } = useSidebar();
+  const active = isPathActive(location.pathname, item.to);
+  const Icon = item.icon;
+
+  const closeMobileSidebar = () => {
+    if (isMobile) setOpenMobile(false);
+  };
+
+  if (nested) {
+    return (
+      <SidebarMenuSubItem>
+        <SidebarMenuSubButton asChild isActive={active}>
+          <NavLink
+            to={item.to}
+            onClick={closeMobileSidebar}
+            className="flex items-center gap-2.5"
+          >
+            <Icon className="size-4 shrink-0" />
+            <span className="truncate">{item.label}</span>
+          </NavLink>
+        </SidebarMenuSubButton>
+      </SidebarMenuSubItem>
+    );
+  }
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
+        <NavLink
+          to={item.to}
+          onClick={closeMobileSidebar}
+          className="flex w-full items-center gap-3 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0"
+        >
+          <Icon className="size-4.5 shrink-0" />
+          <span className="truncate font-medium group-data-[collapsible=icon]:hidden">
+            {item.label}
+          </span>
+        </NavLink>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
+function NavigationGroup({
+  label,
+  icon: Icon,
+  items,
+  openByDefault = false,
+}: {
+  label: string;
+  icon: typeof LayoutDashboard;
+  items: NavItem[];
+  openByDefault?: boolean;
+}) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { state, isMobile } = useSidebar();
+  const visibleItems = items.filter((item) => item.visible);
+  const active = visibleItems.some((item) =>
+    isPathActive(location.pathname, item.to),
+  );
+
+  if (visibleItems.length === 0) return null;
+
+  // When sidebar is collapsed on desktop, render as a sleek flyout DropdownMenu
+  if (state === "collapsed" && !isMobile) {
+    return (
+      <SidebarMenuItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <SidebarMenuButton
+              isActive={active}
+              tooltip={label}
+              className="justify-center"
+            >
+              <Icon className="size-4.5 shrink-0" />
+              <span className="sr-only">{label}</span>
+            </SidebarMenuButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="right"
+            align="start"
+            sideOffset={12}
+            className="min-w-48 shadow-lg"
+          >
+            <DropdownMenuLabel className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              {label}
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              {visibleItems.map((item) => {
+                const ItemIcon = item.icon;
+                const isItemActive = isPathActive(location.pathname, item.to);
+                return (
+                  <DropdownMenuItem
+                    key={item.to}
+                    onClick={() => navigate(item.to)}
+                    className={
+                      isItemActive
+                        ? "bg-primary/10 font-medium text-primary"
+                        : ""
+                    }
+                  >
+                    <ItemIcon className="mr-2 size-4" />
+                    <span>{item.label}</span>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarMenuItem>
+    );
+  }
+
+  // Expanded View with Smooth Collapsible
+  return (
+    <Collapsible
+      asChild
+      defaultOpen={openByDefault || active}
+      className="group/collapsible"
+    >
+      <SidebarMenuItem>
+        <CollapsibleTrigger asChild>
+          <SidebarMenuButton isActive={active} tooltip={label}>
+            <Icon className="size-4.5 shrink-0" />
+            <span className="font-medium group-data-[collapsible=icon]:hidden">
+              {label}
+            </span>
+            <ChevronRight className="ml-auto size-4 shrink-0 transition-transform duration-200 group-data-[collapsible=icon]:hidden group-data-[state=open]/collapsible:rotate-90" />
+          </SidebarMenuButton>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <SidebarMenuSub className="my-1">
+            {visibleItems.map((item) => (
+              <NavigationLink key={item.to} item={item} nested />
+            ))}
+          </SidebarMenuSub>
+        </CollapsibleContent>
+      </SidebarMenuItem>
+    </Collapsible>
+  );
+}
 
 export function AppShell({ user }: { user: CurrentUser }) {
-  const [open, setOpen] = useState(false);
+  const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
   const logoutMutation = useMutation({
     mutationFn: logout,
     onSettled() {
@@ -36,12 +260,18 @@ export function AppShell({ user }: { user: CurrentUser }) {
       navigate("/login", { replace: true });
     },
   });
-  const links = [
-    { to: "/", label: "Overview", icon: LayoutDashboard, visible: true },
+
+  const crm: NavItem[] = [
     {
       to: "/crm/leads",
       label: "Leads",
       icon: Target,
+      visible: user.permissions.includes("crm.lead.read"),
+    },
+    {
+      to: "/crm/follow-ups",
+      label: "My follow-ups",
+      icon: ListTodo,
       visible: user.permissions.includes("crm.lead.read"),
     },
     {
@@ -56,6 +286,9 @@ export function AppShell({ user }: { user: CurrentUser }) {
       icon: BriefcaseBusiness,
       visible: user.permissions.includes("crm.opportunity.read"),
     },
+  ];
+
+  const admin: NavItem[] = [
     {
       to: "/admin/employees",
       label: "Employees",
@@ -68,92 +301,180 @@ export function AppShell({ user }: { user: CurrentUser }) {
       icon: ShieldCheck,
       visible: user.permissions.includes("identity.roles.manage"),
     },
-    { to: "/account", label: "My account", icon: UserRound, visible: true },
-  ].filter((link) => link.visible);
+  ];
 
-  const navigation = (
-    <>
-      <nav aria-label="Primary navigation" className="flex-1 space-y-1 p-3">
-        {links.map(({ to, label, icon: Icon }) => (
-          <NavLink
-            className={({ isActive }) =>
-              `flex min-h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors ${isActive ? "bg-sidebar-primary text-sidebar-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"}`
-            }
-            end={to === "/"}
-            key={to}
-            onClick={() => setOpen(false)}
-            to={to}
-          >
-            <Icon aria-hidden="true" size={18} />
-            {label}
-          </NavLink>
-        ))}
-      </nav>
-      <div className="p-4">
-        <Separator className="mb-4 bg-sidebar-border" />
-        <p className="truncate text-sm font-medium">{user.name}</p>
-        <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-        <Button
-          className="mt-3 min-h-11 w-full justify-start"
-          disabled={logoutMutation.isPending}
-          onClick={() => logoutMutation.mutate()}
-          type="button"
-          variant="ghost"
-        >
-          <LogOut aria-hidden="true" /> Sign out
-        </Button>
-      </div>
-    </>
-  );
+  const overview: NavItem = {
+    to: "/",
+    label: "Overview",
+    icon: LayoutDashboard,
+    visible: true,
+  };
+
+  const pageTitle = currentPageTitle(location.pathname);
 
   return (
-    <div className="min-h-screen bg-background text-foreground lg:grid lg:grid-cols-[17rem_1fr]">
-      <Sheet onOpenChange={setOpen} open={open}>
-        <SheetContent
-          className="w-68 gap-0 bg-sidebar p-0 text-sidebar-foreground sm:max-w-68 lg:hidden"
-          side="left"
-        >
-          <SheetHeader className="min-h-18 justify-center border-b border-sidebar-border px-5 text-left">
-            <SheetTitle className="flex items-center gap-3 text-sidebar-foreground">
-              <span className="grid size-10 place-items-center rounded-xl bg-sidebar-primary text-sidebar-primary-foreground">
-                <Flame size={20} />
+    <SidebarProvider
+      style={
+        {
+          "--sidebar-width": "17rem",
+          "--sidebar-width-icon": "4rem",
+        } as CSSProperties
+      }
+    >
+      <Sidebar collapsible="icon" variant="inset">
+        {/* Header / Brand */}
+        <SidebarHeader className="p-3">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                size="lg"
+                asChild
+                tooltip="Fire Safety"
+                className="h-11 rounded-xl transition-colors hover:bg-sidebar-accent/80 group-data-[collapsible=icon]:p-0"
+              >
+                <NavLink to="/" className="flex items-center gap-3">
+                  <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground shadow-xs">
+                    <Flame className="size-4.5" />
+                  </div>
+                  <div className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden">
+                    <span className="truncate text-sm font-semibold tracking-tight text-sidebar-foreground">
+                      Fire Safety
+                    </span>
+                    <span className="truncate text-[11px] font-medium text-muted-foreground">
+                      Operations ERP
+                    </span>
+                  </div>
+                </NavLink>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarHeader>
+
+        <SidebarSeparator className="mx-3" />
+
+        {/* Navigation Content */}
+        <SidebarContent>
+          <SidebarGroup className="px-2 pt-2">
+            <SidebarGroupLabel className="px-2 text-[10px] font-semibold tracking-wider uppercase text-sidebar-foreground/50">
+              Navigation
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <NavigationLink item={overview} />
+                <NavigationGroup
+                  label="CRM"
+                  icon={BriefcaseBusiness}
+                  items={crm}
+                  openByDefault
+                />
+                <NavigationGroup
+                  label="Administration"
+                  icon={ShieldCheck}
+                  items={admin}
+                />
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+
+        <SidebarSeparator className="mx-3" />
+
+        {/* User Footer Profile */}
+        <SidebarFooter className="p-2">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <SidebarMenuButton
+                    size="lg"
+                    tooltip={user.name}
+                    className="h-12 rounded-xl transition-colors hover:bg-sidebar-accent/80 data-[state=open]:bg-sidebar-accent group-data-[collapsible=icon]:p-0"
+                  >
+                    <Avatar className="size-8 rounded-lg">
+                      <AvatarFallback className="rounded-lg bg-primary/10 text-xs font-semibold text-primary">
+                        {initials(user.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden">
+                      <span className="truncate text-xs font-semibold text-sidebar-foreground">
+                        {user.name}
+                      </span>
+                      <span className="truncate text-[11px] text-muted-foreground">
+                        {user.email}
+                      </span>
+                    </div>
+                    <ChevronRight className="ml-auto size-4 shrink-0 text-muted-foreground/70 group-data-[collapsible=icon]:hidden" />
+                  </SidebarMenuButton>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  side="right"
+                  align="end"
+                  sideOffset={12}
+                  className="w-60 rounded-xl p-1.5 shadow-xl"
+                >
+                  <DropdownMenuLabel className="p-2 font-normal">
+                    <div className="flex flex-col space-y-1">
+                      <p className="text-xs font-semibold leading-none">
+                        {user.name}
+                      </p>
+                      <p className="text-[11px] leading-none text-muted-foreground">
+                        {user.email}
+                      </p>
+                    </div>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => navigate("/account")}
+                    className="cursor-pointer gap-2 rounded-lg text-xs"
+                  >
+                    <UserRound className="size-4" />
+                    <span>My account</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    disabled={logoutMutation.isPending}
+                    variant="destructive"
+                    onClick={() => logoutMutation.mutate()}
+                    className="cursor-pointer gap-2 rounded-lg text-xs"
+                  >
+                    <LogOut className="size-4" />
+                    <span>
+                      {logoutMutation.isPending ? "Signing out…" : "Sign out"}
+                    </span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
+        <SidebarRail />
+      </Sidebar>
+
+      {/* Main Content Area */}
+      <SidebarInset className="min-w-0 overflow-x-hidden">
+        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center justify-between border-b border-border/60 bg-background/80 px-4 backdrop-blur-md md:px-6">
+          <div className="flex min-w-0 items-center gap-3">
+            <SidebarTrigger className="-ml-1" />
+            <div className="h-4 w-px bg-border/70" />
+            <nav
+              aria-label="Breadcrumb"
+              className="flex items-center gap-1.5 text-xs"
+            >
+              <span className="hidden font-medium text-muted-foreground sm:inline">
+                Fire Safety
               </span>
-              Fire Safety
-            </SheetTitle>
-          </SheetHeader>
-          {navigation}
-        </SheetContent>
-      </Sheet>
-
-      <aside className="sticky top-0 hidden h-screen flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:flex">
-        <div className="flex min-h-18 items-center border-b border-sidebar-border px-5 font-semibold">
-          <span className="mr-3 grid size-10 place-items-center rounded-xl bg-sidebar-primary text-sidebar-primary-foreground">
-            <Flame size={20} />
-          </span>
-          Fire Safety
-        </div>
-        {navigation}
-      </aside>
-
-      <div className="min-w-0">
-        <header className="sticky top-0 z-20 flex min-h-18 items-center justify-between border-b border-border bg-background/90 px-4 backdrop-blur sm:px-6">
-          <Button
-            aria-label="Open navigation"
-            className="size-11 lg:hidden"
-            onClick={() => setOpen(true)}
-            size="icon-lg"
-            type="button"
-            variant="outline"
-          >
-            <Menu size={20} />
-          </Button>
-          <p className="hidden text-sm text-muted-foreground lg:block">
-            Internal operations platform
-          </p>
+              <span className="hidden text-muted-foreground/50 sm:inline">
+                /
+              </span>
+              <span className="font-semibold text-foreground">{pageTitle}</span>
+            </nav>
+          </div>
           <ThemeToggle />
         </header>
-        <Outlet context={{ user }} />
-      </div>
-    </div>
+        <main className="flex-1 p-4 md:p-6">
+          <Outlet context={{ user }} />
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }

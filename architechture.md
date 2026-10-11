@@ -150,6 +150,11 @@ REST `/api/v1` remains the default; no new query protocol is necessary. Represen
 | GET /auth/me | Current user, effective permissions/scopes |
 | POST /auth/login, /auth/logout, /auth/refresh | Revocable sessions and rotation |
 | POST /auth/password-reset/request, /confirm | Rate-limited token reset |
+| GET/POST /crm/leads/:leadId/activities | Scoped immutable call/meeting/note timeline |
+| GET/POST /crm/leads/:leadId/reminders | Scoped reminder rule and first occurrence |
+| GET /crm/reminders; POST /crm/reminders/:id/complete | Current-assignee queue and versioned completion |
+| GET/POST /crm/leads/:leadId/attachments | Scoped private attachment metadata/upload |
+| GET /crm/leads/:leadId/attachments/:attachmentId/download | Reauthorize lead scope before private streaming |
 | POST /leads/:id/authorize-design | Free-design authorization, not award |
 | POST /design-package-revisions/:id/submit | Freeze/review exact package |
 | POST /design-package-revisions/:id/customer-decisions | Sales records evidence and customer decision |
@@ -161,10 +166,14 @@ REST `/api/v1` remains the default; no new query protocol is necessary. Represen
 | POST /purchase-orders/:id/goods-receipts | Partial delivery with PO-line references |
 | POST /goods-receipts/:id/inspect | Acceptance/rejection by assigned reviewer |
 | GET /search | Scope and field-filtered metadata search |
-| POST /imports, /imports/:id/validate, /imports/:id/commit | Staged imports |
+| GET /crm/imports/:type/template; POST /crm/imports/:type/stage | Controlled customer/open-lead workbook and server-side staging |
+| GET /crm/imports/:id; POST /crm/imports/:id/commit | Creator-scoped preview and restart-safe row-result commit |
+| POST /crm/leads/bulk/assign; POST /crm/leads/bulk/reminders | Versioned, scope-checked permitted bulk actions (maximum 100 selected leads) |
 | GET /documents/:id/download | Authorization followed by expiring file access |
 
 Collections use bounded page/limit, filter and sort allowlists, stable tie-breaking ID and matching scoped total queries. Default page size 20, limit cap 100. Query keys include identity/scope/filter/pagination. Service derives actor/company from authenticated context, not user-supplied ownership.
+
+Implemented CRM reminder recurrence is occurrence-driven: a transaction creates the rule, first occurrence and due outbox job; after a due job is handled, the worker transactionally inserts the next daily/weekly/monthly occurrence plus a unique deduplicated job. The in-app occurrence is the durable baseline; disabled external providers are never reported delivered. Implemented lead attachments use Multer disk storage with generated names, PDF/JPEG/PNG allowlisting, a 20 MiB cap and SHA-256 metadata. Storage names remain server-private and every metadata/download request first proves access to the parent lead.
 
 Proposed envelope: success `{ data, meta?, requestId }`; error `{ error: { code, message, fieldErrors?, missingRequirements? }, requestId }`. Use 400 malformed, 401 unauthenticated, 403 forbidden, 404 undisclosed/unavailable, 409 version/transition/idempotency conflict, 422 validation. Do not leak SQL/stack traces. `allowedActions` improves UI but server rechecks on execution.
 
@@ -193,9 +202,9 @@ export const projectQueries = {
 
 Secure HttpOnly cookies, HTTPS, intentional SameSite/CSRF/origin policy and bounded refresh retries. Every request checks session revocation and effective permissions, so leaving employees lose access immediately even if their JWT has not expired. Password reset uses hashed short-lived single-use tokens; reset/block revokes affected sessions. Redact credentials, sensitive financial data and private URLs in logs.
 
-Files use private keys per immutable version, metadata/checksum/type/size, uploader, readiness state and explicit record links. Default limits: PDF/image 20 MiB each, CAD 100 MiB each, import 10 MiB. Validate content and extensions; original name is display-only. CAD is download-only; PDFs are rendered in a constrained preview. No arbitrary active HTML/SVG/archive/executable previews. Signed links are short-lived; immediate revocation stops new links, existing links have bounded expiry. Objects become attached only after authorized finalize; abandoned cleanup checks state before deletion.
+Files use private keys per immutable version, metadata/checksum/type/size, uploader, readiness state and explicit record links. Default limits: PDF/image 20 MiB each, CAD 100 MiB each; the implemented P2 customer/open-lead Excel import is capped at 5 MiB and 500 non-empty rows. Validate content and extensions; original name is display-only. CAD is download-only; PDFs are rendered in a constrained preview. No arbitrary active HTML/SVG/archive/executable previews. Signed links are short-lived; immediate revocation stops new links, existing links have bounded expiry. Objects become attached only after authorized finalize; abandoned cleanup checks state before deletion.
 
-Imports stage up to 5,000 rows by default, validate file/content/resource limits and each row's scope, preview mapping/duplicates/errors, then commit a documented subset. Row results include created/updated/skipped/failed. Transactional small chunks plus unique import-row keys permit restart; do not describe the entire workbook as atomic unless implemented. Reject formulas in import values and protect spreadsheet exports against formula injection.
+The P2 importer stages up to 500 customer or open-lead rows, validates headers/content/references/permissions/duplicates on the server, rejects formulas, previews errors/warnings and commits only valid rows. The original `.xlsx` is retained privately with checksum metadata. Each record creation and its row result commit in the same transaction; a versioned batch claim prevents concurrent commit, completed rows are skipped on recovery, and failed/invalid rows remain visible. The whole workbook is not described as atomic. Future larger imports require measured chunk limits and worker execution. Protect spreadsheet exports against formula injection.
 
 ## 9. Jobs and provider boundaries
 

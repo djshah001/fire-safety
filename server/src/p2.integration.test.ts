@@ -1,8 +1,11 @@
 import request from 'supertest';
+import ExcelJS from 'exceljs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import { hashPassword } from './core/security/password.js';
 import { closeDatabase, pool } from './infrastructure/database/db.js';
+import { ensureUploadRoot, removePrivateFile } from './infrastructure/storage/localFileStorage.js';
+import { processOneOutboxJob } from './infrastructure/jobs/outboxWorker.js';
 
 const origin = 'http://localhost:5173';
 const managerEmail = 'p2-manager@example.test';
@@ -20,6 +23,18 @@ function csrfFrom(response: request.Response) {
 
 async function resetP2Fixtures() {
   const passwordHash = await hashPassword(password);
+  const files = await pool.query<{ storageName: string }>(`
+    select storage_name as "storageName" from lead_attachments
+    union all
+    select storage_name as "storageName" from crm_import_batches
+  `);
+  await Promise.all(files.rows.map((file) => removePrivateFile(file.storageName)));
+  await pool.query('delete from crm_import_batches');
+  await pool.query("delete from outbox_jobs where type = 'crm.reminder_due'");
+  await pool.query('delete from reminder_occurrences');
+  await pool.query('delete from reminder_rules');
+  await pool.query('delete from lead_attachments');
+  await pool.query('delete from crm_activities');
   await pool.query('delete from opportunity_members');
   await pool.query('delete from opportunities');
   await pool.query('delete from lead_members');
@@ -60,6 +75,18 @@ async function resetP2Fixtures() {
 }
 
 async function cleanP2Fixtures() {
+  const files = await pool.query<{ storageName: string }>(`
+    select storage_name as "storageName" from lead_attachments
+    union all
+    select storage_name as "storageName" from crm_import_batches
+  `);
+  await Promise.all(files.rows.map((file) => removePrivateFile(file.storageName)));
+  await pool.query('delete from crm_import_batches');
+  await pool.query("delete from outbox_jobs where type = 'crm.reminder_due'");
+  await pool.query('delete from reminder_occurrences');
+  await pool.query('delete from reminder_rules');
+  await pool.query('delete from lead_attachments');
+  await pool.query('delete from crm_activities');
   await pool.query('delete from opportunity_members');
   await pool.query('delete from opportunities');
   await pool.query('delete from lead_members');
@@ -85,8 +112,25 @@ async function login(app: ReturnType<typeof createApp>, email: string) {
   return { agent, csrf: csrfFrom(response) };
 }
 
+async function workbookBuffer(headers: string[], values: string[]) {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Import');
+  sheet.addRow(headers);
+  sheet.addRow(values);
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
+async function formulaWorkbookBuffer() {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Import');
+  sheet.addRow(['display_name', 'contact_name', 'phone']);
+  const row = sheet.addRow(['', 'Formula Contact', '9876509999']);
+  row.getCell(1).value = { formula: 'CONCAT("Formula", " Customer")', result: 'Formula Customer' };
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
 describe('P2 scoped CRM lifecycle', () => {
-  beforeAll(resetP2Fixtures);
+  beforeAll(async () => { await ensureUploadRoot(); await resetP2Fixtures(); });
   afterAll(async () => {
     await cleanP2Fixtures();
     await closeDatabase();
@@ -164,6 +208,42 @@ describe('P2 scoped CRM lifecycle', () => {
       (item: { email: string }) => item.email === managerEmail,
     ).id as string;
 
+    const bulkCandidate = await manager.agent.post('/api/v1/crm/leads')
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .set('X-Request-Id', 'p2-bulk-candidate').send({
+        inquiryName: 'Bulk assignment candidate',
+        contactName: 'Bhavna Desai',
+        phone: '9825019999',
+        source: 'Campaign',
+        serviceCategoryId: categoryId,
+      });
+    expect(bulkCandidate.status).toBe(201);
+    const bulkCandidateId = bulkCandidate.body.data.lead.id as string;
+
+    const unauthorizedBulkAssignment = await executive.agent.post('/api/v1/crm/leads/bulk/assign')
+      .set('Origin', origin).set('X-CSRF-Token', executive.csrf)
+      .set('X-Request-Id', 'p2-unauthorized-bulk-assignment').send({
+        targets: [{ id: bulkCandidateId, expectedVersion: 1 }],
+        assigneeUserId: managerId,
+      });
+    expect(unauthorizedBulkAssignment.status).toBe(403);
+
+    const bulkAssignment = await manager.agent.post('/api/v1/crm/leads/bulk/assign')
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .set('X-Request-Id', 'p2-bulk-assignment').send({
+        targets: [{ id: bulkCandidateId, expectedVersion: 1 }],
+        assigneeUserId: executiveId,
+      });
+    expect(bulkAssignment.status, JSON.stringify(bulkAssignment.body)).toBe(200);
+    expect(bulkAssignment.body.data).toMatchObject({ selected: 1, updated: 1, unchanged: 0 });
+    const staleBulkAssignment = await manager.agent.post('/api/v1/crm/leads/bulk/assign')
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .set('X-Request-Id', 'p2-stale-bulk-assignment').send({
+        targets: [{ id: bulkCandidateId, expectedVersion: 1 }],
+        assigneeUserId: managerId,
+      });
+    expect(staleBulkAssignment.status).toBe(404);
+
     const delegatedLead = await manager.agent.post('/api/v1/crm/leads')
       .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
       .set('X-Request-Id', 'p2-delegated-lead').send({
@@ -178,8 +258,76 @@ describe('P2 scoped CRM lifecycle', () => {
     const delegatedLeadId = delegatedLead.body.data.lead.id as string;
 
     const executiveAfterAssignment = await executive.agent.get('/api/v1/crm/leads');
-    expect(executiveAfterAssignment.body.data.total).toBe(1);
-    expect(executiveAfterAssignment.body.data.items[0].id).toBe(delegatedLeadId);
+    expect(executiveAfterAssignment.body.data.total).toBe(2);
+    expect(executiveAfterAssignment.body.data.items.map((item: { id: string }) => item.id))
+      .toEqual(expect.arrayContaining([bulkCandidateId, delegatedLeadId]));
+
+    const sortedPage = await manager.agent.get('/api/v1/crm/leads?sort=inquiryName&direction=asc&pageSize=1');
+    expect(sortedPage.body.data).toMatchObject({ total: 2, page: 1, pageSize: 1 });
+    expect(sortedPage.body.data.items[0].inquiryName).toBe('Acme alarm enquiry');
+
+    const activity = await manager.agent.post(`/api/v1/crm/leads/${delegatedLeadId}/activities`)
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .set('X-Request-Id', 'p2-activity').send({
+        type: 'call', summary: 'Confirmed the initial extinguisher requirement.', occurredAt: new Date().toISOString(),
+      });
+    expect(activity.status).toBe(201);
+    expect((await executive.agent.get(`/api/v1/crm/leads/${delegatedLeadId}/activities`)).body.data.items)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ type: 'call' })]));
+
+    const reminder = await manager.agent.post(`/api/v1/crm/leads/${delegatedLeadId}/reminders`)
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .set('X-Request-Id', 'p2-reminder').send({
+        title: 'Call about extinguisher quantities',
+        assigneeUserId: executiveId,
+        timezone: 'Asia/Kolkata',
+        dueAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        recurrence: 'weekly',
+      });
+    expect(reminder.status, JSON.stringify(reminder.body)).toBe(201);
+    const executiveReminders = await executive.agent.get('/api/v1/crm/reminders?status=pending');
+    expect(executiveReminders.body.data.total).toBe(1);
+    expect((await manager.agent.get('/api/v1/crm/reminders?status=pending')).body.data.total).toBe(0);
+    await pool.query("update outbox_jobs set due_at = now() where type = 'crm.reminder_due'");
+    expect(await processOneOutboxJob(pool, 'p2-reminder-worker')).toBe(true);
+    const recurringOccurrences = await pool.query<{ count: string }>(
+      'select count(*) from reminder_occurrences where rule_id = $1',
+      [reminder.body.data.reminder.ruleId],
+    );
+    expect(Number(recurringOccurrences.rows[0]!.count)).toBe(2);
+    expect(await processOneOutboxJob(pool, 'p2-reminder-worker')).toBe(false);
+    const completed = await executive.agent.post(`/api/v1/crm/reminders/${reminder.body.data.reminder.id}/complete`)
+      .set('Origin', origin).set('X-CSRF-Token', executive.csrf)
+      .set('X-Request-Id', 'p2-reminder-complete').send({ expectedVersion: 1 });
+    expect(completed.status).toBe(200);
+    expect(completed.body.data.reminder.status).toBe('completed');
+
+    const bulkReminders = await manager.agent.post('/api/v1/crm/leads/bulk/reminders')
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .set('X-Request-Id', 'p2-bulk-reminders').send({
+        targets: [
+          { id: managerLeadId, expectedVersion: 1 },
+          { id: delegatedLeadId, expectedVersion: 1 },
+        ],
+        title: 'Review next CRM action',
+        assigneeUserId: executiveId,
+        timezone: 'Asia/Kolkata',
+        dueAt: new Date(Date.now() + 20 * 60_000).toISOString(),
+        recurrence: 'none',
+      });
+    expect(bulkReminders.status, JSON.stringify(bulkReminders.body)).toBe(201);
+    expect(bulkReminders.body.data.created).toBe(2);
+
+    const attachment = await manager.agent.post(`/api/v1/crm/leads/${managerLeadId}/attachments`)
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .set('X-Request-Id', 'p2-attachment')
+      .attach('file', Buffer.from('%PDF-1.4 scoped test'), { filename: 'survey-note.pdf', contentType: 'application/pdf' });
+    expect(attachment.status, JSON.stringify(attachment.body)).toBe(201);
+    expect(attachment.body.data.attachment).not.toHaveProperty('storageName');
+    expect(attachment.body.data.attachment.checksumSha256).toMatch(/^[a-f0-9]{64}$/);
+    const attachmentId = attachment.body.data.attachment.id as string;
+    expect((await manager.agent.get(`/api/v1/crm/leads/${managerLeadId}/attachments/${attachmentId}/download`)).status).toBe(200);
+    expect((await executive.agent.get(`/api/v1/crm/leads/${managerLeadId}/attachments/${attachmentId}/download`)).status).toBe(404);
 
     const unauthorizedAssignment = await executive.agent.post('/api/v1/crm/leads')
       .set('Origin', origin).set('X-CSRF-Token', executive.csrf)
@@ -215,6 +363,65 @@ describe('P2 scoped CRM lifecycle', () => {
     });
     expect((await manager.agent.get('/api/v1/crm/opportunities')).body.data.total).toBe(1);
     expect((await executive.agent.get('/api/v1/crm/opportunities')).body.data.total).toBe(0);
+
+    expect((await manager.agent.get('/api/v1/crm/imports/customers/template')).status).toBe(200);
+    expect((await manager.agent.get('/api/v1/crm/imports/open_leads/template')).status).toBe(200);
+    expect((await administrator.agent.get('/api/v1/crm/imports/customers/template')).status).toBe(403);
+
+    const formulaImport = await manager.agent.post('/api/v1/crm/imports/customers/stage')
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .attach('file', await formulaWorkbookBuffer(), {
+        filename: 'formula-customers.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+    expect(formulaImport.status).toBe(422);
+    expect(formulaImport.body.error.message).toContain('Formula values are not allowed');
+
+    const customerWorkbook = await workbookBuffer(
+      ['display_name', 'legal_name', 'contact_name', 'phone', 'email', 'site_name', 'site_address', 'city'],
+      ['Imported Customer', 'Imported Customer Private Limited', 'Isha Patel', '9876501234', '', 'Imported Site', 'Station Road', 'Surat'],
+    );
+    const stagedCustomers = await manager.agent.post('/api/v1/crm/imports/customers/stage')
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .set('X-Request-Id', 'p2-customer-import-stage')
+      .attach('file', customerWorkbook, {
+        filename: 'customers.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+    expect(stagedCustomers.status, JSON.stringify(stagedCustomers.body)).toBe(201);
+    expect(stagedCustomers.body.data.batch).toMatchObject({ totalRows: 1, validRows: 1, invalidRows: 0, status: 'staged' });
+    expect(stagedCustomers.body.data.batch).not.toHaveProperty('storageName');
+    const committedCustomers = await manager.agent.post(`/api/v1/crm/imports/${stagedCustomers.body.data.batch.id}/commit`)
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .set('X-Request-Id', 'p2-customer-import-commit')
+      .send({ expectedVersion: stagedCustomers.body.data.batch.rowVersion });
+    expect(committedCustomers.status, JSON.stringify(committedCustomers.body)).toBe(200);
+    expect(committedCustomers.body.data.batch).toMatchObject({ status: 'completed' });
+    expect(committedCustomers.body.data.batch.rows[0]).toMatchObject({ status: 'created' });
+    expect((await manager.agent.post(`/api/v1/crm/imports/${stagedCustomers.body.data.batch.id}/commit`)
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .send({ expectedVersion: stagedCustomers.body.data.batch.rowVersion })).status).toBe(409);
+
+    const leadWorkbook = await workbookBuffer(
+      ['inquiry_name', 'company_name', 'contact_name', 'phone', 'email', 'address', 'source', 'service_category_code', 'owner_email'],
+      ['Imported open lead', 'Imported Customer', 'Isha Patel', '9876501234', '', 'Station Road, Surat', 'Excel import', 'FIRE_ALARM', managerEmail],
+    );
+    const stagedLeads = await manager.agent.post('/api/v1/crm/imports/open_leads/stage')
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .set('X-Request-Id', 'p2-lead-import-stage')
+      .attach('file', leadWorkbook, {
+        filename: 'open-leads.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+    expect(stagedLeads.status, JSON.stringify(stagedLeads.body)).toBe(201);
+    expect(stagedLeads.body.data.batch).toMatchObject({ validRows: 1, invalidRows: 0 });
+    expect(stagedLeads.body.data.batch.rows[0].warnings.length).toBeGreaterThan(0);
+    const committedLeads = await manager.agent.post(`/api/v1/crm/imports/${stagedLeads.body.data.batch.id}/commit`)
+      .set('Origin', origin).set('X-CSRF-Token', manager.csrf)
+      .set('X-Request-Id', 'p2-lead-import-commit')
+      .send({ expectedVersion: stagedLeads.body.data.batch.rowVersion });
+    expect(committedLeads.status, JSON.stringify(committedLeads.body)).toBe(200);
+    expect(committedLeads.body.data.batch.rows[0]).toMatchObject({ status: 'created' });
 
     const audit = await pool.query<{ action: string }>(`
       select action from audit_events

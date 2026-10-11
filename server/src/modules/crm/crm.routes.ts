@@ -1,24 +1,37 @@
 import { Router } from 'express';
+import { AppError } from '../../core/errors/appError.js';
 import { getRequestId } from '../../core/http/requestContext.js';
 import { sendData } from '../../core/http/response.js';
 import { requireAuthentication, requireCsrf, requirePermission } from '../auth/auth.middleware.js';
 import { getPrincipal } from '../auth/auth.types.js';
+import { createPrivateUpload, resolvePrivateFile } from '../../infrastructure/storage/localFileStorage.js';
 import {
+  activityInputSchema,
+  bulkLeadAssignmentSchema,
+  bulkReminderInputSchema,
+  completeReminderSchema,
+  commitImportSchema,
   contactInputSchema,
   customerChildParamsSchema,
   customerInputSchema,
   customerListQuerySchema,
+  crmImportTypeParamsSchema,
   idParamsSchema,
   leadInputSchema,
+  leadAttachmentParamsSchema,
+  leadChildParamsSchema,
   leadListQuerySchema,
   leadStageInputSchema,
   opportunityListQuerySchema,
   qualifyLeadInputSchema,
+  reminderInputSchema,
+  reminderListQuerySchema,
   serviceCategoryInputSchema,
   siteInputSchema,
   versionedReasonSchema,
 } from './crm.schemas.js';
 import { crmService } from './crm.service.js';
+import { buildImportTemplate } from './crm.imports.js';
 
 function serviceCategoryDto(category: {
   id: string; code: string; name: string; status: 'active' | 'inactive'; rowVersion: number;
@@ -146,8 +159,35 @@ function opportunityDto(opportunity: {
   };
 }
 
+function attachmentDto(attachment: {
+  id: string; originalName: string; mimeType: string; sizeBytes: number; checksumSha256: string;
+  createdByUserId: string; createdAt: Date; createdByName?: string;
+}) {
+  return {
+    id: attachment.id,
+    originalName: attachment.originalName,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+    checksumSha256: attachment.checksumSha256,
+    createdByUserId: attachment.createdByUserId,
+    createdByName: attachment.createdByName,
+    createdAt: attachment.createdAt,
+  };
+}
+
 export function createCrmRouter() {
   const router = Router();
+  const attachmentUpload = createPrivateUpload({
+    allowedMimeTypes: new Set(['application/pdf', 'image/jpeg', 'image/png']),
+    maxFileBytes: 20 * 1024 * 1024,
+  });
+  const importUpload = createPrivateUpload({
+    allowedMimeTypes: new Set([
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/octet-stream',
+    ]),
+    maxFileBytes: 5 * 1024 * 1024,
+  });
   router.use(requireAuthentication);
 
   router.get('/service-categories', requirePermission('crm.service_category.read'), async (request, response) => {
@@ -212,6 +252,60 @@ export function createCrmRouter() {
   router.get('/assignees', requirePermission('crm.lead.assign'), async (request, response) => {
     sendData(request, response, { items: await crmService.listAssignees(getPrincipal(request)) });
   });
+  router.get('/imports/:type/template', async (request, response) => {
+    const { type } = crmImportTypeParamsSchema.parse(request.params);
+    crmService.assertImportPermission(getPrincipal(request), type);
+    const workbook = await buildImportTemplate(type);
+    response
+      .status(200)
+      .setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .setHeader('Content-Disposition', `attachment; filename="fire-safety-${type}-import.xlsx"`)
+      .send(workbook);
+  });
+  router.post(
+    '/imports/:type/stage',
+    requireCsrf,
+    async (request, _response, next) => {
+      try {
+        const { type } = crmImportTypeParamsSchema.parse(request.params);
+        crmService.assertImportPermission(getPrincipal(request), type);
+        next();
+      } catch (error) {
+        next(error);
+      }
+    },
+    importUpload.single('file'),
+    async (request, response) => {
+      const { type } = crmImportTypeParamsSchema.parse(request.params);
+      if (!request.file) throw new AppError('VALIDATION_ERROR', 'Choose an Excel workbook to upload.', 422);
+      const batch = await crmService.stageImport(getPrincipal(request), type, request.file, getRequestId(request));
+      sendData(request, response, { batch }, 201);
+    },
+  );
+  router.get('/imports/:id', async (request, response) => {
+    const { id } = idParamsSchema.parse(request.params);
+    sendData(request, response, { batch: await crmService.getImportBatch(getPrincipal(request), id) });
+  });
+  router.post('/imports/:id/commit', requireCsrf, async (request, response) => {
+    const { id } = idParamsSchema.parse(request.params);
+    const { expectedVersion } = commitImportSchema.parse(request.body);
+    const batch = await crmService.commitImport(getPrincipal(request), id, expectedVersion, getRequestId(request));
+    sendData(request, response, { batch });
+  });
+  router.get('/reminders', requirePermission('crm.lead.read'), async (request, response) => {
+    const result = await crmService.listMyReminders(
+      getPrincipal(request), reminderListQuerySchema.parse(request.query),
+    );
+    sendData(request, response, result);
+  });
+  router.post('/reminders/:id/complete', requireCsrf, requirePermission('crm.lead.write'), async (request, response) => {
+    const { id } = idParamsSchema.parse(request.params);
+    const { expectedVersion } = completeReminderSchema.parse(request.body);
+    const reminder = await crmService.completeReminder(
+      getPrincipal(request), id, expectedVersion, getRequestId(request),
+    );
+    sendData(request, response, { reminder });
+  });
   router.get('/leads', requirePermission('crm.lead.read'), async (request, response) => {
     const result = await crmService.listLeads(getPrincipal(request), leadListQuerySchema.parse(request.query));
     sendData(request, response, { ...result, items: result.items.map(leadDto) });
@@ -222,9 +316,78 @@ export function createCrmRouter() {
     );
     sendData(request, response, { lead: leadDto(result.lead), duplicateHints: result.duplicateHints }, 201);
   });
+  router.post('/leads/bulk/assign', requireCsrf, requirePermission('crm.lead.assign'), async (request, response) => {
+    const result = await crmService.bulkAssignLeads(
+      getPrincipal(request), bulkLeadAssignmentSchema.parse(request.body), getRequestId(request),
+    );
+    sendData(request, response, result);
+  });
+  router.post('/leads/bulk/reminders', requireCsrf, requirePermission('crm.lead.write'), async (request, response) => {
+    const result = await crmService.bulkCreateReminders(
+      getPrincipal(request), bulkReminderInputSchema.parse(request.body), getRequestId(request),
+    );
+    sendData(request, response, result, 201);
+  });
   router.get('/leads/:id', requirePermission('crm.lead.read'), async (request, response) => {
     const { id } = idParamsSchema.parse(request.params);
     sendData(request, response, { lead: leadDto(await crmService.getLead(getPrincipal(request), id)) });
+  });
+  router.get('/leads/:leadId/activities', requirePermission('crm.lead.read'), async (request, response) => {
+    const { leadId } = leadChildParamsSchema.parse(request.params);
+    sendData(request, response, { items: await crmService.listActivities(getPrincipal(request), leadId) });
+  });
+  router.post('/leads/:leadId/activities', requireCsrf, requirePermission('crm.lead.write'), async (request, response) => {
+    const { leadId } = leadChildParamsSchema.parse(request.params);
+    const activity = await crmService.createActivity(
+      getPrincipal(request), leadId, activityInputSchema.parse(request.body), getRequestId(request),
+    );
+    sendData(request, response, { activity }, 201);
+  });
+  router.get('/leads/:leadId/reminders', requirePermission('crm.lead.read'), async (request, response) => {
+    const { leadId } = leadChildParamsSchema.parse(request.params);
+    sendData(request, response, { items: await crmService.listLeadReminders(getPrincipal(request), leadId) });
+  });
+  router.post('/leads/:leadId/reminders', requireCsrf, requirePermission('crm.lead.write'), async (request, response) => {
+    const { leadId } = leadChildParamsSchema.parse(request.params);
+    const reminder = await crmService.createReminder(
+      getPrincipal(request), leadId, reminderInputSchema.parse(request.body), getRequestId(request),
+    );
+    sendData(request, response, { reminder }, 201);
+  });
+  router.get('/leads/:leadId/attachments', requirePermission('crm.lead.read'), async (request, response) => {
+    const { leadId } = leadChildParamsSchema.parse(request.params);
+    const items = await crmService.listAttachments(getPrincipal(request), leadId);
+    sendData(request, response, { items: items.map(attachmentDto) });
+  });
+  router.post(
+    '/leads/:leadId/attachments',
+    requireCsrf,
+    requirePermission('crm.lead.write'),
+    async (request, _response, next) => {
+      try {
+        const { leadId } = leadChildParamsSchema.parse(request.params);
+        await crmService.getLead(getPrincipal(request), leadId);
+        next();
+      } catch (error) {
+        next(error);
+      }
+    },
+    attachmentUpload.single('file'),
+    async (request, response) => {
+      const { leadId } = leadChildParamsSchema.parse(request.params);
+      if (!request.file) throw new AppError('VALIDATION_ERROR', 'Choose a file to upload.', 422);
+      const attachment = await crmService.createAttachment(
+        getPrincipal(request), leadId, request.file, getRequestId(request),
+      );
+      sendData(request, response, { attachment: attachmentDto(attachment) }, 201);
+    },
+  );
+  router.get('/leads/:leadId/attachments/:attachmentId/download', requirePermission('crm.lead.read'), async (request, response, next) => {
+    const { leadId, attachmentId } = leadAttachmentParamsSchema.parse(request.params);
+    const attachment = await crmService.getAttachment(getPrincipal(request), leadId, attachmentId);
+    response.download(resolvePrivateFile(attachment.storageName), attachment.originalName, (error) => {
+      if (error && !response.headersSent) next(error);
+    });
   });
   router.post('/leads/:id/stage', requireCsrf, requirePermission('crm.lead.write'), async (request, response) => {
     const { id } = idParamsSchema.parse(request.params);

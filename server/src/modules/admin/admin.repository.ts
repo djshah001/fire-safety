@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gt, ilike, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
 import {
   permissions,
@@ -16,6 +16,8 @@ export function createAdminRepository(executor: DatabaseExecutor) {
       search?: string;
       limit: number;
       offset: number;
+      sort: 'name' | 'email' | 'status' | 'lastLoginAt';
+      direction: 'asc' | 'desc';
     }) {
       const searchCondition = input.search
         ? or(ilike(users.name, `%${input.search}%`), ilike(users.email, `%${input.search}%`))
@@ -25,6 +27,8 @@ export function createAdminRepository(executor: DatabaseExecutor) {
         input.status ? eq(users.status, input.status) : undefined,
         searchCondition,
       );
+      const sortColumn = { name: users.name, email: users.email, status: users.status, lastLoginAt: users.lastLoginAt }[input.sort];
+      const order = input.direction === 'asc' ? asc : desc;
       const [items, totals] = await Promise.all([
         executor.select({
           id: users.id,
@@ -38,7 +42,7 @@ export function createAdminRepository(executor: DatabaseExecutor) {
           disabledAt: users.disabledAt,
           disabledReason: users.disabledReason,
           createdAt: users.createdAt,
-        }).from(users).where(where).orderBy(asc(users.name)).limit(input.limit).offset(input.offset),
+        }).from(users).where(where).orderBy(order(sortColumn), order(users.id)).limit(input.limit).offset(input.offset),
         executor.select({ count: count() }).from(users).where(where),
       ]);
       return { items, total: totals[0]?.count ?? 0 };

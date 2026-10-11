@@ -78,6 +78,8 @@ Use the generated, repository-local shadcn primitives from `client/src/component
 
 Use TanStack Query v5 object APIs and typed `queryOptions` factories; pass AbortSignal and keep server state out of Jotai. Axios owns transport, TanStack owns cached server state, Jotai owns local UI preferences, React Hook Form owns unsaved complex inputs, URL parameters own shareable list filters.
 
+All implemented directories use the shared shadcn-based server table/toolbar pattern: allowlisted server sorting, bounded server pagination, scoped totals, URL-backed search/filter state, and a shadcn Sheet for non-trivial filters. Use Sonner for transient success/failure feedback and persistent Alert content when the user must retain or act on the message. Extend the grouped/collapsible shadcn sidebar for future menus and submenus; do not reintroduce flat page-local navigation.
+
 React 19 tools are optional. `useActionState` can own a small form action or wrap one `mutateAsync` flow; do not maintain two competing submit states. `Activity` requires a compatible installed version and a measured need; it is not permissions enforcement and must be cleared on identity changes. No forced Server Functions/RSC conversion for the Vite SPA. Transitions/deferred rendering must not defer business correctness.
 
 Approvals, receipt/stock posting and financial issue wait for server confirmation. Disable repeat submission in UI while retaining backend idempotency. Background refetch cannot overwrite dirty forms; a version conflict offers reload/review, not silent overwrite. Dirty-form navigation has clear save/discard choices.

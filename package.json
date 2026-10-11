@@ -13,6 +13,11 @@
     "client",
     "server"
   ],
+  "overrides": {
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
+  },
   "scripts": {
     "dev": "concurrently --kill-others-on-fail --names API,WORKER,CLIENT --prefix-colors blue,magenta,green \"npm run dev --workspace @fire-safety/server\" \"npm run dev:worker --workspace @fire-safety/server\" \"npm run dev --workspace @fire-safety/client\"",
     "dev:client": "npm run dev --workspace @fire-safety/client",

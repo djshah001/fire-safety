@@ -70,6 +70,8 @@ Use the repository-owned shadcn components in `client/src/components/ui` for eve
 
 Support desktop/mobile, keyboard access, labelled controls and usable loading/empty/error/forbidden/conflict states. Preserve dirty forms across refetch; clear sensitive cache and preserved views on identity change. Show real implemented routes and honest commercial/provider status.
 
+Use the shared shadcn `ServerDataTable`/`ListToolbar` for directories: allowlisted server sorting, bounded server pagination, scoped totals, URL search/filter state and a Sheet for non-trivial filters. Use Sonner for transient mutation feedback and Alerts for persistent actionable errors. Extend the grouped/collapsible shadcn sidebar with permission-visible menus/submenus for future modules.
+
 ## Verification and handoff
 
 Use scripts actually defined in the relevant package manifest. Setup/build/lint/typecheck/test command names are not established yet; discover and document them when available. Do not invent or report nonexistent commands as passing.

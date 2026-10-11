@@ -30,6 +30,16 @@ async function mockCrm(page: Page) {
         source: 'Referral', stage: 'new', ownerUserId: user.id, rowVersion: 1,
         updatedAt: '2026-10-10T10:00:00.000Z', serviceCategoryName: 'Fire alarm system',
       }], total: 1, page: 1, pageSize: 20 }, requestId: 'e2e-leads' } });
+    } else if (path.endsWith('/crm/reminders')) {
+      await route.fulfill({ json: { data: { items: [{
+        id: 'reminder-1', ruleId: 'rule-1', leadId: 'lead-1', leadNumber: 'FS-LEAD-2026-000001',
+        leadName: 'Warehouse alarm enquiry', title: 'Call customer', dueAt: '2026-10-12T10:00:00.000Z',
+        timezone: 'Asia/Kolkata', recurrence: 'none', status: 'pending', rowVersion: 1, completedAt: null,
+      }], total: 1, page: 1, pageSize: 5 }, requestId: 'e2e-reminders' } });
+    } else if (path.endsWith('/crm/customers')) {
+      await route.fulfill({ json: { data: { items: [], total: 3, page: 1, pageSize: 1 }, requestId: 'e2e-customers' } });
+    } else if (path.endsWith('/crm/opportunities')) {
+      await route.fulfill({ json: { data: { items: [], total: 2, page: 1, pageSize: 1 }, requestId: 'e2e-opportunities' } });
     } else if (path.endsWith('/crm/leads/lead-1')) {
       await route.fulfill({ json: { data: { lead: {
         id: 'lead-1', leadNumber: 'FS-LEAD-2026-000001', inquiryName: 'Warehouse alarm enquiry',
@@ -50,8 +60,16 @@ test.describe('P2 CRM screens', () => {
     await mockCrm(page);
     await page.goto('/crm/leads');
     await expect(page.getByRole('heading', { name: 'Leads', exact: true })).toBeVisible();
-    const leadRow = page.getByRole('button', { name: /Warehouse alarm enquiry/ });
+    const leadRow = page.getByRole('row', { name: /Warehouse alarm enquiry/ });
     await expect(leadRow).toBeVisible();
+    await page.getByLabel('Select Warehouse alarm enquiry').click();
+    await expect(page.getByText('1 selected', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Assign owner' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Schedule reminder' })).toBeVisible();
+    await page.getByRole('button', { name: 'Clear selection' }).click();
+    await page.getByRole('button', { name: 'Import' }).click();
+    await expect(page.getByRole('heading', { name: 'Import open leads' })).toBeVisible();
+    await page.getByRole('button', { name: 'Cancel' }).click();
     await leadRow.click();
     await expect(page.getByRole('heading', { name: 'Warehouse alarm enquiry' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Qualify' })).toBeVisible();
@@ -60,13 +78,27 @@ test.describe('P2 CRM screens', () => {
     await expect(page.getByLabel('Service')).toBeVisible();
   });
 
+  test('shows permission-scoped CRM metrics on the dashboard', async ({ page }) => {
+    await mockCrm(page);
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: `Welcome back, ${user.name}` })).toBeVisible();
+    await expect(page.getByText('Visible leads', { exact: true })).toBeVisible();
+    await expect(page.getByText('Pending follow-ups', { exact: true })).toBeVisible();
+    await expect(page.getByText('Unawarded opportunities', { exact: true })).toBeVisible();
+    await expect(page.getByText('Active customers', { exact: true })).toBeVisible();
+    const recentLeads = page.getByRole('region', { name: 'Recently updated leads' });
+    const followUps = page.getByRole('region', { name: 'Next follow-ups' });
+    await expect(recentLeads.getByRole('link', { name: /Warehouse alarm enquiry/ })).toBeVisible();
+    await expect(followUps.getByRole('link', { name: /Call customer/ })).toBeVisible();
+  });
+
   test('keeps the CRM navigation and lead view usable on mobile', async ({ browser }) => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: 'dark' });
     const page = await context.newPage();
     await mockCrm(page);
     await page.goto('/crm/leads');
     await expect(page.getByRole('heading', { name: 'Leads', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Open navigation' }).click();
+    await page.getByRole('button', { name: 'Toggle Sidebar' }).click();
     await expect(page.getByRole('link', { name: 'Customers' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Opportunities' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

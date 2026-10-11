@@ -1,20 +1,23 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, LoaderCircle, Plus, Search } from "lucide-react";
+import { Building2, FileUp, LoaderCircle, Plus } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useOutletContext, useSearchParams } from "react-router-dom";
 import { z } from "zod";
-import { createCustomer, customersQuery, type DuplicateHint } from "@/api/crm";
+import type { CurrentUser } from "@/api/auth";
+import { createCustomer, customersQuery, type CustomerSummary, type DuplicateHint, type MasterStatus } from "@/api/crm";
 import { getApiErrorMessage } from "@/api/client";
+import { ListToolbar } from "@/components/data-table/ListToolbar";
+import { ServerDataTable, type ServerColumn } from "@/components/data-table/ServerDataTable";
+import { StatusBadge } from "@/components/data-table/StatusBadge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
+import { CrmImportDialog } from "@/features/crm/CrmImportDialog";
 
 const schema = z
   .object({
@@ -42,16 +45,20 @@ const schema = z
 type Fields = z.infer<typeof schema>;
 
 export function CustomersPage() {
+  const { user } = useOutletContext<{ user: CurrentUser }>();
+  const canManage = user.permissions.includes("crm.customer_master.manage");
   const [searchParams, setSearchParams] = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [duplicates, setDuplicates] = useState<DuplicateHint[]>([]);
   const search = searchParams.get("search") ?? "";
-  const status =
-    searchParams.get("status") === "inactive"
-      ? ("inactive" as const)
-      : undefined;
+  const status = (["active", "inactive"].includes(searchParams.get("status") ?? "") ? searchParams.get("status") : undefined) as MasterStatus | undefined;
+  const page = Math.max(1, Number(searchParams.get("page")) || 1);
+  const pageSize = [10, 20, 50, 100].includes(Number(searchParams.get("pageSize"))) ? Number(searchParams.get("pageSize")) : 20;
+  const sort = (["name", "status", "updatedAt"].includes(searchParams.get("sort") ?? "") ? searchParams.get("sort") : "name") as "name" | "status" | "updatedAt";
+  const direction = searchParams.get("direction") === "desc" ? "desc" : "asc";
   const customers = useQuery(
-    customersQuery({ search: search || undefined, status }),
+    customersQuery({ search: search || undefined, status, page, pageSize, sort, direction }),
   );
   const queryClient = useQueryClient();
   const form = useForm<Fields>({
@@ -99,13 +106,19 @@ export function CustomersPage() {
     },
   });
 
-  function updateFilter(name: "search" | "status", value: string) {
+  function updateFilter(name: string, value: string) {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(name, value);
     else next.delete(name);
-    next.delete("page");
+    if (name !== "page") next.delete("page");
     setSearchParams(next, { replace: true });
   }
+
+  const columns: Array<ServerColumn<CustomerSummary, typeof sort>> = [
+    { key: "name", label: "Customer", sort: "name", className: "min-w-64", cell: (customer) => <Link className="font-medium hover:underline" to={`/crm/customers/${customer.id}`}>{customer.displayName}<span className="mt-1 block text-sm font-normal text-muted-foreground">{customer.legalName || "No separate legal name"}</span></Link> },
+    { key: "status", label: "Status", sort: "status", cell: (customer) => <StatusBadge status={customer.status} /> },
+    { key: "updated", label: "Updated", sort: "updatedAt", className: "tabular-nums", cell: (customer) => new Date(customer.updatedAt).toLocaleDateString() },
+  ];
 
   return (
     <main className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
@@ -120,90 +133,23 @@ export function CustomersPage() {
             explicit access grant.
           </p>
         </div>
-        <Button
-          className="min-h-11"
-          onClick={() => {
-            setDuplicates([]);
-            setShowCreate(true);
-          }}
-          size="lg"
-          type="button"
-        >
-          <Plus size={18} /> Add customer
-        </Button>
+        {canManage && <div className="flex flex-wrap gap-2">
+          <Button onClick={() => setShowImport(true)} type="button" variant="outline"><FileUp /> Import</Button>
+          <Button
+            onClick={() => {
+              setDuplicates([]);
+              setShowCreate(true);
+            }}
+            type="button"
+          >
+            <Plus /> Add customer
+          </Button>
+        </div>}
       </div>
 
-      <section className="mt-6 grid gap-3 rounded-2xl border border-border bg-card p-4 shadow-sm sm:grid-cols-[1fr_12rem]">
-        <label className="relative">
-          <span className="sr-only">Search customers</span>
-          <Search
-            className="pointer-events-none absolute left-3 top-3.5 text-muted-foreground"
-            size={18}
-          />
-          <Input
-            className="min-h-11 pl-10"
-            defaultValue={search}
-            key={search}
-            onBlur={(event) =>
-              updateFilter("search", event.target.value.trim())
-            }
-            onKeyDown={(event) => {
-              if (event.key === "Enter")
-                updateFilter("search", event.currentTarget.value.trim());
-            }}
-            placeholder="Search customers"
-          />
-        </label>
-        <Select onValueChange={(value) => updateFilter("status", value === "all" ? "" : value)} value={status ?? "all"}>
-          <SelectTrigger aria-label="Customer status" className="min-h-11 w-full"><SelectValue /></SelectTrigger>
-          <SelectContent><SelectItem value="all">Active and inactive</SelectItem><SelectItem value="inactive">Inactive only</SelectItem></SelectContent>
-        </Select>
-      </section>
+      <div className="mt-6"><ListToolbar search={search} onSearch={(value) => updateFilter("search", value)} activeFilters={status ? 1 : 0} onClear={() => updateFilter("status", "")}><div className="space-y-2"><Label>Status</Label><Select onValueChange={(value) => updateFilter("status", value === "all" ? "" : value)} value={status ?? "all"}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All statuses</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem></SelectContent></Select></div></ListToolbar></div>
 
-      <section className="mt-6 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-        <div className="border-b border-border px-5 py-4">
-          <h2 className="font-semibold">Customer directory</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {customers.data
-              ? `${customers.data.total} visible customer${customers.data.total === 1 ? "" : "s"}`
-              : "Loading customers…"}
-          </p>
-        </div>
-        {customers.isPending ? (
-          <div className="space-y-3 p-5">{[1, 2, 3].map((item) => <Skeleton className="h-16" key={item} />)}</div>
-        ) : customers.isError ? (
-          <Alert className="m-5 w-auto" variant="destructive"><AlertDescription>{getApiErrorMessage(customers.error)}</AlertDescription></Alert>
-        ) : customers.data.items.length === 0 ? (
-          <div className="grid min-h-48 place-items-center p-6 text-center">
-            <div>
-              <Building2 className="mx-auto text-muted-foreground" />
-              <p className="mt-3 font-medium">No customers in this view</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Create one or wait until a customer is linked to work assigned
-                to you.
-              </p>
-            </div>
-          </div>
-        ) : (
-          <div className="divide-y divide-border">
-            {customers.data.items.map((customer) => (
-              <Link
-                className="flex items-center justify-between gap-4 px-5 py-4 hover:bg-accent"
-                key={customer.id}
-                to={`/crm/customers/${customer.id}`}
-              >
-                <div>
-                  <p className="font-medium">{customer.displayName}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {customer.legalName || "No separate legal name"}
-                  </p>
-                </div>
-                <Badge className="capitalize" variant={customer.status === "active" ? "default" : "secondary"}>{customer.status}</Badge>
-              </Link>
-            ))}
-          </div>
-        )}
-      </section>
+      <section className="mt-4 overflow-hidden rounded-xl border bg-card shadow-sm">{customers.isError ? <Alert className="m-4" variant="destructive"><AlertDescription>{getApiErrorMessage(customers.error)}</AlertDescription></Alert> : <ServerDataTable columns={columns} rows={customers.data?.items ?? []} rowKey={(item) => item.id} loading={customers.isPending} empty={<div><Building2 className="mx-auto mb-2" />No customers in this view.</div>} sort={sort} direction={direction} onSort={(nextSort, nextDirection) => { const next = new URLSearchParams(searchParams); next.set("sort", nextSort); next.set("direction", nextDirection); next.delete("page"); setSearchParams(next, { replace: true }); }} page={page} pageSize={pageSize} total={customers.data?.total ?? 0} onPageChange={(nextPage) => updateFilter("page", String(nextPage))} onPageSizeChange={(nextSize) => { const next = new URLSearchParams(searchParams); next.set("pageSize", String(nextSize)); next.set("page", "1"); setSearchParams(next, { replace: true }); }} />}</section>
 
       <Dialog onOpenChange={setShowCreate} open={showCreate}>
         <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-2xl">
@@ -337,6 +283,12 @@ export function CustomersPage() {
           </form>
         </DialogContent>
       </Dialog>
+      <CrmImportDialog
+        onCommitted={() => queryClient.invalidateQueries({ queryKey: ["crm", "customers"] })}
+        onOpenChange={setShowImport}
+        open={showImport}
+        type="customers"
+      />
     </main>
   );
 }

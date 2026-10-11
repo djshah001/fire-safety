@@ -11,11 +11,14 @@ export class AdminService {
 
   async listUsers(principal: AuthenticatedPrincipal, input: {
     status?: 'active' | 'disabled'; search?: string; page: number; pageSize: number;
+    sort: 'name' | 'email' | 'status' | 'lastLoginAt'; direction: 'asc' | 'desc';
   }) {
     const result = await createAdminRepository(this.database).listUsers({
       companyId: principal.companyId,
       status: input.status,
       search: input.search,
+      sort: input.sort,
+      direction: input.direction,
       limit: input.pageSize,
       offset: (input.page - 1) * input.pageSize,
     });

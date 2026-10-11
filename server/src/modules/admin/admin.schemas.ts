@@ -8,6 +8,8 @@ export const listUsersQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
+  sort: z.enum(['name', 'email', 'status', 'lastLoginAt']).default('name'),
+  direction: z.enum(['asc', 'desc']).default('asc'),
 });
 
 export const createUserSchema = z.object({

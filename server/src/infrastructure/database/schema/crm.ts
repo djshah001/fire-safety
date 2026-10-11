@@ -4,6 +4,7 @@ import {
   check,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   primaryKey,
@@ -33,6 +34,13 @@ export const opportunityCommercialStateEnum = pgEnum('opportunity_commercial_sta
   'lost',
   'on_hold',
 ]);
+export const crmActivityTypeEnum = pgEnum('crm_activity_type', ['call', 'meeting', 'note']);
+export const reminderRecurrenceEnum = pgEnum('reminder_recurrence', ['none', 'daily', 'weekly', 'monthly']);
+export const reminderRuleStatusEnum = pgEnum('reminder_rule_status', ['active', 'completed', 'cancelled']);
+export const reminderOccurrenceStatusEnum = pgEnum('reminder_occurrence_status', ['pending', 'completed', 'cancelled']);
+export const crmImportTypeEnum = pgEnum('crm_import_type', ['customers', 'open_leads']);
+export const crmImportBatchStatusEnum = pgEnum('crm_import_batch_status', ['staged', 'committing', 'completed', 'cancelled']);
+export const crmImportRowStatusEnum = pgEnum('crm_import_row_status', ['valid', 'invalid', 'created', 'failed']);
 
 export const serviceCategories = pgTable('service_categories', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -199,6 +207,123 @@ export const leadMembers = pgTable('lead_members', {
   check('lead_members_role_valid', sql`${table.role} in ('owner', 'collaborator', 'viewer')`),
 ]);
 
+export const crmActivities = pgTable('crm_activities', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  leadId: uuid('lead_id').notNull().references(() => leads.id, { onDelete: 'restrict' }),
+  type: crmActivityTypeEnum('type').notNull(),
+  summary: varchar('summary', { length: 2_000 }).notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('crm_activities_lead_occurred_idx').on(table.companyId, table.leadId, table.occurredAt),
+]);
+
+export const reminderRules = pgTable('reminder_rules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  leadId: uuid('lead_id').notNull().references(() => leads.id, { onDelete: 'restrict' }),
+  assigneeUserId: uuid('assignee_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  title: varchar('title', { length: 200 }).notNull(),
+  timezone: varchar('timezone', { length: 80 }).notNull(),
+  recurrence: reminderRecurrenceEnum('recurrence').notNull().default('none'),
+  status: reminderRuleStatusEnum('status').notNull().default('active'),
+  rowVersion: integer('row_version').notNull().default(1),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('reminder_rules_lead_status_idx').on(table.companyId, table.leadId, table.status),
+  check('reminder_rules_row_version_positive', sql`${table.rowVersion} > 0`),
+]);
+
+export const reminderOccurrences = pgTable('reminder_occurrences', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  ruleId: uuid('rule_id').notNull().references(() => reminderRules.id, { onDelete: 'restrict' }),
+  leadId: uuid('lead_id').notNull().references(() => leads.id, { onDelete: 'restrict' }),
+  assigneeUserId: uuid('assignee_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  dueAt: timestamp('due_at', { withTimezone: true }).notNull(),
+  status: reminderOccurrenceStatusEnum('status').notNull().default('pending'),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  completedByUserId: uuid('completed_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  rowVersion: integer('row_version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('reminder_occurrences_rule_due_uidx').on(table.ruleId, table.dueAt),
+  index('reminder_occurrences_assignee_due_idx').on(table.companyId, table.assigneeUserId, table.status, table.dueAt),
+  index('reminder_occurrences_lead_due_idx').on(table.companyId, table.leadId, table.dueAt),
+  check('reminder_occurrences_row_version_positive', sql`${table.rowVersion} > 0`),
+  check('reminder_occurrences_completion_consistent', sql`(${table.status} = 'completed' and ${table.completedAt} is not null and ${table.completedByUserId} is not null) or (${table.status} <> 'completed' and ${table.completedAt} is null and ${table.completedByUserId} is null)`),
+]);
+
+export const leadAttachments = pgTable('lead_attachments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  leadId: uuid('lead_id').notNull().references(() => leads.id, { onDelete: 'restrict' }),
+  originalName: varchar('original_name', { length: 255 }).notNull(),
+  storageName: varchar('storage_name', { length: 64 }).notNull(),
+  mimeType: varchar('mime_type', { length: 100 }).notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  checksumSha256: varchar('checksum_sha256', { length: 64 }).notNull(),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('lead_attachments_storage_name_uidx').on(table.storageName),
+  index('lead_attachments_lead_created_idx').on(table.companyId, table.leadId, table.createdAt),
+  check('lead_attachments_size_positive', sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 20971520`),
+]);
+
+export type CrmImportPayload = Record<string, string | null>;
+export type CrmImportIssue = { field?: string; message: string };
+
+export const crmImportBatches = pgTable('crm_import_batches', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  type: crmImportTypeEnum('type').notNull(),
+  status: crmImportBatchStatusEnum('status').notNull().default('staged'),
+  originalName: varchar('original_name', { length: 255 }).notNull(),
+  storageName: varchar('storage_name', { length: 64 }).notNull(),
+  mimeType: varchar('mime_type', { length: 100 }).notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  checksumSha256: varchar('checksum_sha256', { length: 64 }).notNull(),
+  totalRows: integer('total_rows').notNull(),
+  validRows: integer('valid_rows').notNull(),
+  invalidRows: integer('invalid_rows').notNull(),
+  rowVersion: integer('row_version').notNull().default(1),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  committedAt: timestamp('committed_at', { withTimezone: true }),
+}, (table) => [
+  uniqueIndex('crm_import_batches_storage_name_uidx').on(table.storageName),
+  index('crm_import_batches_company_created_idx').on(table.companyId, table.createdAt),
+  check('crm_import_batches_counts_valid', sql`${table.totalRows} >= 0 and ${table.validRows} >= 0 and ${table.invalidRows} >= 0 and ${table.totalRows} = ${table.validRows} + ${table.invalidRows}`),
+  check('crm_import_batches_file_size_valid', sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 5242880`),
+  check('crm_import_batches_row_version_positive', sql`${table.rowVersion} > 0`),
+]);
+
+export const crmImportRows = pgTable('crm_import_rows', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  batchId: uuid('batch_id').notNull().references(() => crmImportBatches.id, { onDelete: 'cascade' }),
+  rowNumber: integer('row_number').notNull(),
+  payload: jsonb('payload').$type<CrmImportPayload>().notNull(),
+  issues: jsonb('issues').$type<CrmImportIssue[]>().notNull().default([]),
+  warnings: jsonb('warnings').$type<CrmImportIssue[]>().notNull().default([]),
+  status: crmImportRowStatusEnum('status').notNull(),
+  createdRecordId: uuid('created_record_id'),
+  resultMessage: varchar('result_message', { length: 500 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('crm_import_rows_batch_row_uidx').on(table.batchId, table.rowNumber),
+  index('crm_import_rows_batch_status_idx').on(table.companyId, table.batchId, table.status),
+  check('crm_import_rows_row_number_valid', sql`${table.rowNumber} >= 2`),
+  check('crm_import_rows_result_consistent', sql`(${table.status} = 'created' and ${table.createdRecordId} is not null) or ${table.status} <> 'created'`),
+]);
+
 export const opportunities = pgTable('opportunities', {
   id: uuid('id').primaryKey().defaultRandom(),
   companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
@@ -233,3 +358,8 @@ export const opportunityMembers = pgTable('opportunity_members', {
 export type Customer = typeof customers.$inferSelect;
 export type Lead = typeof leads.$inferSelect;
 export type Opportunity = typeof opportunities.$inferSelect;
+export type CrmActivity = typeof crmActivities.$inferSelect;
+export type ReminderOccurrence = typeof reminderOccurrences.$inferSelect;
+export type LeadAttachment = typeof leadAttachments.$inferSelect;
+export type CrmImportBatch = typeof crmImportBatches.$inferSelect;
+export type CrmImportRow = typeof crmImportRows.$inferSelect;

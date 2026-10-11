@@ -26,12 +26,12 @@ export type Role = {
 
 export type Permission = { code: string; description: string };
 
-export const employeesQuery = queryOptions({
-  queryKey: ['admin', 'employees'] as const,
+export const employeesQuery = (filters: { search?: string; status?: 'active' | 'disabled'; page?: number; pageSize?: number; sort?: 'name' | 'email' | 'status' | 'lastLoginAt'; direction?: 'asc' | 'desc' } = {}) => queryOptions({
+  queryKey: ['admin', 'employees', filters] as const,
   queryFn: async ({ signal }) => {
     const response = await apiClient.get<ApiEnvelope<{
       items: Employee[]; total: number; page: number; pageSize: number;
-    }>>('/admin/users', { signal });
+    }>>('/admin/users', { params: filters, signal });
     return response.data.data;
   },
 });

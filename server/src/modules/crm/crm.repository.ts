@@ -19,11 +19,18 @@ import {
   customerContacts,
   customerMembers,
   customers,
+  crmActivities,
+  crmImportBatches,
+  crmImportRows,
   documentCounters,
+  leadAttachments,
   leadMembers,
   leads,
   opportunities,
   opportunityMembers,
+  outboxJobs,
+  reminderOccurrences,
+  reminderRules,
   rolePermissions,
   roles,
   serviceCategories,
@@ -108,6 +115,15 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       return category;
     },
 
+    async findServiceCategoryByCode(companyId: string, code: string) {
+      const [category] = await executor.select().from(serviceCategories).where(and(
+        eq(serviceCategories.companyId, companyId),
+        eq(serviceCategories.code, code),
+        eq(serviceCategories.status, 'active'),
+      )).limit(1);
+      return category;
+    },
+
     async createServiceCategory(input: typeof serviceCategories.$inferInsert) {
       const [category] = await executor.insert(serviceCategories).values(input).returning();
       return category;
@@ -129,6 +145,7 @@ export function createCrmRepository(executor: DatabaseExecutor) {
 
     async listCustomers(access: CrmAccess, input: {
       status?: 'active' | 'inactive'; search?: string; limit: number; offset: number;
+      sort: 'name' | 'status' | 'updatedAt'; direction: 'asc' | 'desc';
     }) {
       const scope = customerAccessCondition(executor, access);
       const search = input.search ? ilike(customers.displayName, `%${input.search}%`) : undefined;
@@ -146,9 +163,11 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         rowVersion: customers.rowVersion,
         updatedAt: customers.updatedAt,
       };
+      const sortColumn = { name: customers.displayName, status: customers.status, updatedAt: customers.updatedAt }[input.sort];
+      const order = input.direction === 'asc' ? asc : desc;
       const [items, totals] = await Promise.all([
         executor.select(selection).from(customers).where(where)
-          .orderBy(asc(customers.displayName), asc(customers.id)).limit(input.limit).offset(input.offset),
+          .orderBy(order(sortColumn), order(customers.id)).limit(input.limit).offset(input.offset),
         executor.select({ count: count() }).from(customers).where(where),
       ]);
       return { items, total: totals[0]?.count ?? 0 };
@@ -313,6 +332,28 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       return user;
     },
 
+    async findActiveUserByEmail(companyId: string, emailNormalized: string, now = new Date()) {
+      const [user] = await executor.select({ id: users.id, name: users.name, email: users.email })
+        .from(users).where(and(
+          eq(users.companyId, companyId),
+          eq(users.emailNormalized, emailNormalized),
+          eq(users.status, 'active'),
+          exists(executor.select({ value: sql`1` }).from(userRoleAssignments)
+            .innerJoin(roles, eq(roles.id, userRoleAssignments.roleId))
+            .innerJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+            .where(and(
+              eq(userRoleAssignments.companyId, companyId),
+              eq(userRoleAssignments.userId, users.id),
+              eq(roles.companyId, companyId),
+              eq(roles.isActive, true),
+              eq(rolePermissions.permissionCode, 'crm.lead.write'),
+              lte(userRoleAssignments.validFrom, now),
+              or(isNull(userRoleAssignments.validUntil), gt(userRoleAssignments.validUntil, now)),
+            ))),
+        )).limit(1);
+      return user;
+    },
+
     async listAssignees(companyId: string, now = new Date()) {
       return executor.select({ id: users.id, name: users.name, email: users.email })
         .from(users).where(and(
@@ -391,8 +432,45 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       await executor.insert(leadMembers).values(values).onConflictDoNothing();
     },
 
+    async changeLeadOwner(
+      companyId: string,
+      leadId: string,
+      expectedVersion: number,
+      ownerUserId: string,
+      now: Date,
+    ) {
+      const [lead] = await executor.update(leads).set({
+        ownerUserId,
+        rowVersion: sql`${leads.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(leads.companyId, companyId),
+        eq(leads.id, leadId),
+        eq(leads.rowVersion, expectedVersion),
+      )).returning();
+      return lead;
+    },
+
+    async replaceLeadOwnerMember(companyId: string, leadId: string, ownerUserId: string) {
+      await executor.delete(leadMembers).where(and(
+        eq(leadMembers.companyId, companyId),
+        eq(leadMembers.leadId, leadId),
+        eq(leadMembers.role, 'owner'),
+      ));
+      await executor.insert(leadMembers).values({
+        companyId,
+        leadId,
+        userId: ownerUserId,
+        role: 'owner',
+      }).onConflictDoUpdate({
+        target: [leadMembers.leadId, leadMembers.userId],
+        set: { role: 'owner' },
+      });
+    },
+
     async listLeads(access: CrmAccess, input: {
       stage?: typeof leads.$inferSelect.stage; search?: string; limit: number; offset: number;
+      sort: 'leadNumber' | 'inquiryName' | 'stage' | 'updatedAt'; direction: 'asc' | 'desc';
     }) {
       const search = input.search ? or(
         ilike(leads.leadNumber, `%${input.search}%`),
@@ -421,10 +499,17 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         updatedAt: leads.updatedAt,
         serviceCategoryName: serviceCategories.name,
       };
+      const sortColumn = {
+        leadNumber: leads.leadNumber,
+        inquiryName: leads.inquiryName,
+        stage: leads.stage,
+        updatedAt: leads.updatedAt,
+      }[input.sort];
+      const order = input.direction === 'asc' ? asc : desc;
       const [items, totals] = await Promise.all([
         executor.select(selection).from(leads)
           .innerJoin(serviceCategories, eq(serviceCategories.id, leads.serviceCategoryId))
-          .where(where).orderBy(desc(leads.updatedAt), desc(leads.id)).limit(input.limit).offset(input.offset),
+          .where(where).orderBy(order(sortColumn), order(leads.id)).limit(input.limit).offset(input.offset),
         executor.select({ count: count() }).from(leads).where(where),
       ]);
       return { items, total: totals[0]?.count ?? 0 };
@@ -517,6 +602,242 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       return lead;
     },
 
+    async listActivities(companyId: string, leadId: string) {
+      return executor.select({
+        id: crmActivities.id,
+        type: crmActivities.type,
+        summary: crmActivities.summary,
+        occurredAt: crmActivities.occurredAt,
+        createdAt: crmActivities.createdAt,
+        createdByUserId: crmActivities.createdByUserId,
+        createdByName: users.name,
+      }).from(crmActivities)
+        .innerJoin(users, eq(users.id, crmActivities.createdByUserId))
+        .where(and(eq(crmActivities.companyId, companyId), eq(crmActivities.leadId, leadId)))
+        .orderBy(desc(crmActivities.occurredAt), desc(crmActivities.id))
+        .limit(100);
+    },
+
+    async createActivity(input: typeof crmActivities.$inferInsert) {
+      const [activity] = await executor.insert(crmActivities).values(input).returning();
+      return activity;
+    },
+
+    async createReminderRule(input: typeof reminderRules.$inferInsert) {
+      const [rule] = await executor.insert(reminderRules).values(input).returning();
+      return rule;
+    },
+
+    async createReminderOccurrence(input: typeof reminderOccurrences.$inferInsert) {
+      const [occurrence] = await executor.insert(reminderOccurrences).values(input).returning();
+      return occurrence;
+    },
+
+    async enqueueReminderOccurrence(companyId: string, occurrenceId: string, dueAt: Date) {
+      await executor.insert(outboxJobs).values({
+        companyId,
+        type: 'crm.reminder_due',
+        payload: { occurrenceId },
+        dedupKey: `reminder:${occurrenceId}`,
+        dueAt,
+      }).onConflictDoNothing();
+    },
+
+    async listLeadReminders(companyId: string, leadId: string) {
+      return executor.select({
+        id: reminderOccurrences.id,
+        ruleId: reminderOccurrences.ruleId,
+        title: reminderRules.title,
+        assigneeUserId: reminderOccurrences.assigneeUserId,
+        assigneeName: users.name,
+        dueAt: reminderOccurrences.dueAt,
+        timezone: reminderRules.timezone,
+        recurrence: reminderRules.recurrence,
+        status: reminderOccurrences.status,
+        rowVersion: reminderOccurrences.rowVersion,
+        completedAt: reminderOccurrences.completedAt,
+      }).from(reminderOccurrences)
+        .innerJoin(reminderRules, eq(reminderRules.id, reminderOccurrences.ruleId))
+        .innerJoin(users, eq(users.id, reminderOccurrences.assigneeUserId))
+        .where(and(eq(reminderOccurrences.companyId, companyId), eq(reminderOccurrences.leadId, leadId)))
+        .orderBy(asc(reminderOccurrences.dueAt), asc(reminderOccurrences.id))
+        .limit(100);
+    },
+
+    async listMyReminders(companyId: string, userId: string, input: {
+      status?: 'pending' | 'completed' | 'cancelled'; search?: string; limit: number; offset: number;
+      sort: 'dueAt' | 'title' | 'status'; direction: 'asc' | 'desc';
+    }) {
+      const where = and(
+        eq(reminderOccurrences.companyId, companyId),
+        eq(reminderOccurrences.assigneeUserId, userId),
+        input.status ? eq(reminderOccurrences.status, input.status) : undefined,
+        input.search ? or(
+          ilike(reminderRules.title, `%${input.search}%`),
+          ilike(leads.leadNumber, `%${input.search}%`),
+          ilike(leads.inquiryName, `%${input.search}%`),
+        ) : undefined,
+      );
+      const sortColumn = { dueAt: reminderOccurrences.dueAt, title: reminderRules.title, status: reminderOccurrences.status }[input.sort];
+      const order = input.direction === 'asc' ? asc : desc;
+      const selection = {
+        id: reminderOccurrences.id,
+        ruleId: reminderOccurrences.ruleId,
+        leadId: reminderOccurrences.leadId,
+        leadNumber: leads.leadNumber,
+        leadName: leads.inquiryName,
+        title: reminderRules.title,
+        dueAt: reminderOccurrences.dueAt,
+        timezone: reminderRules.timezone,
+        recurrence: reminderRules.recurrence,
+        status: reminderOccurrences.status,
+        rowVersion: reminderOccurrences.rowVersion,
+        completedAt: reminderOccurrences.completedAt,
+      };
+      const [items, totals] = await Promise.all([
+        executor.select(selection).from(reminderOccurrences)
+          .innerJoin(reminderRules, eq(reminderRules.id, reminderOccurrences.ruleId))
+          .innerJoin(leads, eq(leads.id, reminderOccurrences.leadId))
+          .where(where).orderBy(order(sortColumn), order(reminderOccurrences.id))
+          .limit(input.limit).offset(input.offset),
+        executor.select({ count: count() }).from(reminderOccurrences)
+          .innerJoin(reminderRules, eq(reminderRules.id, reminderOccurrences.ruleId))
+          .innerJoin(leads, eq(leads.id, reminderOccurrences.leadId))
+          .where(where),
+      ]);
+      return { items, total: totals[0]?.count ?? 0 };
+    },
+
+    async completeReminder(companyId: string, userId: string, occurrenceId: string, expectedVersion: number, now: Date) {
+      const [occurrence] = await executor.update(reminderOccurrences).set({
+        status: 'completed',
+        completedAt: now,
+        completedByUserId: userId,
+        rowVersion: sql`${reminderOccurrences.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(reminderOccurrences.companyId, companyId),
+        eq(reminderOccurrences.id, occurrenceId),
+        eq(reminderOccurrences.assigneeUserId, userId),
+        eq(reminderOccurrences.status, 'pending'),
+        eq(reminderOccurrences.rowVersion, expectedVersion),
+      )).returning();
+      return occurrence;
+    },
+
+    async listAttachments(companyId: string, leadId: string) {
+      return executor.select({
+        id: leadAttachments.id,
+        originalName: leadAttachments.originalName,
+        mimeType: leadAttachments.mimeType,
+        sizeBytes: leadAttachments.sizeBytes,
+        checksumSha256: leadAttachments.checksumSha256,
+        createdByUserId: leadAttachments.createdByUserId,
+        createdByName: users.name,
+        createdAt: leadAttachments.createdAt,
+      }).from(leadAttachments)
+        .innerJoin(users, eq(users.id, leadAttachments.createdByUserId))
+        .where(and(eq(leadAttachments.companyId, companyId), eq(leadAttachments.leadId, leadId)))
+        .orderBy(desc(leadAttachments.createdAt), desc(leadAttachments.id));
+    },
+
+    async createAttachment(input: typeof leadAttachments.$inferInsert) {
+      const [attachment] = await executor.insert(leadAttachments).values(input).returning();
+      return attachment;
+    },
+
+    async findAttachment(companyId: string, leadId: string, attachmentId: string) {
+      const [attachment] = await executor.select().from(leadAttachments).where(and(
+        eq(leadAttachments.companyId, companyId),
+        eq(leadAttachments.leadId, leadId),
+        eq(leadAttachments.id, attachmentId),
+      )).limit(1);
+      return attachment;
+    },
+
+    async createImportBatch(
+      input: typeof crmImportBatches.$inferInsert,
+      rows: Array<Omit<typeof crmImportRows.$inferInsert, 'batchId' | 'companyId'>>,
+    ) {
+      const [batch] = await executor.insert(crmImportBatches).values(input).returning();
+      if (rows.length > 0) {
+        await executor.insert(crmImportRows).values(rows.map((row) => ({
+          ...row,
+          companyId: input.companyId,
+          batchId: batch!.id,
+        })));
+      }
+      return batch;
+    },
+
+    async findImportBatch(companyId: string, batchId: string) {
+      const [batch] = await executor.select().from(crmImportBatches).where(and(
+        eq(crmImportBatches.companyId, companyId),
+        eq(crmImportBatches.id, batchId),
+      )).limit(1);
+      return batch;
+    },
+
+    async listImportRows(companyId: string, batchId: string) {
+      return executor.select().from(crmImportRows).where(and(
+        eq(crmImportRows.companyId, companyId),
+        eq(crmImportRows.batchId, batchId),
+      )).orderBy(asc(crmImportRows.rowNumber));
+    },
+
+    async claimImportBatch(companyId: string, batchId: string, expectedVersion: number) {
+      const [batch] = await executor.update(crmImportBatches).set({
+        status: 'committing',
+        rowVersion: sql`${crmImportBatches.rowVersion} + 1`,
+      }).where(and(
+        eq(crmImportBatches.companyId, companyId),
+        eq(crmImportBatches.id, batchId),
+        eq(crmImportBatches.rowVersion, expectedVersion),
+        inArray(crmImportBatches.status, ['staged', 'committing']),
+      )).returning();
+      return batch;
+    },
+
+    async markImportRowCreated(companyId: string, rowId: string, recordId: string, now: Date) {
+      const [row] = await executor.update(crmImportRows).set({
+        status: 'created',
+        createdRecordId: recordId,
+        resultMessage: null,
+        updatedAt: now,
+      }).where(and(
+        eq(crmImportRows.companyId, companyId),
+        eq(crmImportRows.id, rowId),
+        eq(crmImportRows.status, 'valid'),
+      )).returning();
+      return row;
+    },
+
+    async markImportRowFailed(companyId: string, rowId: string, message: string, now: Date) {
+      await executor.update(crmImportRows).set({
+        status: 'failed',
+        resultMessage: message.slice(0, 500),
+        updatedAt: now,
+      }).where(and(
+        eq(crmImportRows.companyId, companyId),
+        eq(crmImportRows.id, rowId),
+        eq(crmImportRows.status, 'valid'),
+      ));
+    },
+
+    async completeImportBatch(companyId: string, batchId: string, expectedVersion: number, now: Date) {
+      const [batch] = await executor.update(crmImportBatches).set({
+        status: 'completed',
+        committedAt: now,
+        rowVersion: sql`${crmImportBatches.rowVersion} + 1`,
+      }).where(and(
+        eq(crmImportBatches.companyId, companyId),
+        eq(crmImportBatches.id, batchId),
+        eq(crmImportBatches.rowVersion, expectedVersion),
+        eq(crmImportBatches.status, 'committing'),
+      )).returning();
+      return batch;
+    },
+
     async createOpportunity(input: typeof opportunities.$inferInsert) {
       const [opportunity] = await executor.insert(opportunities).values(input).returning();
       return opportunity;
@@ -536,6 +857,7 @@ export function createCrmRepository(executor: DatabaseExecutor) {
 
     async listOpportunities(access: CrmAccess, input: {
       state?: typeof opportunities.$inferSelect.commercialState; search?: string; limit: number; offset: number;
+      sort: 'title' | 'customerName' | 'state' | 'updatedAt'; direction: 'asc' | 'desc';
     }) {
       const search = input.search ? or(
         ilike(opportunities.title, `%${input.search}%`),
@@ -560,11 +882,18 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         rowVersion: opportunities.rowVersion,
         updatedAt: opportunities.updatedAt,
       };
+      const sortColumn = {
+        title: opportunities.title,
+        customerName: customers.displayName,
+        state: opportunities.commercialState,
+        updatedAt: opportunities.updatedAt,
+      }[input.sort];
+      const order = input.direction === 'asc' ? asc : desc;
       const [items, totals] = await Promise.all([
         executor.select(selection).from(opportunities)
           .innerJoin(leads, eq(leads.id, opportunities.leadId))
           .innerJoin(customers, eq(customers.id, opportunities.customerId))
-          .where(where).orderBy(desc(opportunities.updatedAt), desc(opportunities.id))
+          .where(where).orderBy(order(sortColumn), order(opportunities.id))
           .limit(input.limit).offset(input.offset),
         executor.select({ count: count() }).from(opportunities)
           .innerJoin(leads, eq(leads.id, opportunities.leadId))

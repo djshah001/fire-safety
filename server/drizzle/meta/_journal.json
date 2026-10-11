@@ -36,6 +36,20 @@
       "when": 1791638525376,
       "tag": "0004_reconcile_crm_role_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791652291677,
+      "tag": "0005_perfect_killmonger",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791694954694,
+      "tag": "0006_p2_crm_imports",
+      "breakpoints": true
     }
   ]
 }

@@ -6,7 +6,6 @@ import {
   Plus,
   Power,
   RefreshCw,
-  Search,
   ShieldCheck,
   Users,
   UserRoundCheck,
@@ -14,7 +13,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Controller, useForm } from "react-hook-form";
-import { useNavigate, useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { z } from "zod";
 
 import {
@@ -28,6 +27,7 @@ import {
 } from "@/api/admin";
 import type { CurrentUser } from "@/api/auth";
 import { getApiErrorMessage } from "@/api/client";
+import { ListToolbar } from "@/components/data-table/ListToolbar";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -169,8 +169,13 @@ export function EmployeesPage() {
     user.permissions.includes("identity.users.manage") &&
     user.permissions.includes("identity.roles.manage");
 
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<StatusFilter>("all");
+  const [params, setParams] = useSearchParams();
+  const search = params.get("search") ?? "";
+  const status = (["active", "disabled"].includes(params.get("status") ?? "") ? params.get("status") : "all") as StatusFilter;
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const pageSize = [10, 20, 50, 100].includes(Number(params.get("pageSize"))) ? Number(params.get("pageSize")) : 20;
+  const sort = (["name", "email", "status", "lastLoginAt"].includes(params.get("sort") ?? "") ? params.get("sort") : "name") as "name" | "email" | "status" | "lastLoginAt";
+  const direction = params.get("direction") === "desc" ? "desc" : "asc";
   const [showCreate, setShowCreate] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -182,7 +187,8 @@ export function EmployeesPage() {
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
   const [roleReason, setRoleReason] = useState("");
 
-  const employees = useQuery(employeesQuery);
+  const employeesOptions = employeesQuery({ search: search.trim() || undefined, status: status === "all" ? undefined : status, page, pageSize, sort, direction });
+  const employees = useQuery(employeesOptions);
   const roles = useQuery({ ...rolesQuery(), enabled: canManage });
 
   const form = useForm<Fields>({
@@ -190,9 +196,16 @@ export function EmployeesPage() {
     defaultValues,
   });
 
+  function updateList(values: Record<string, string | number | undefined>) {
+    const next = new URLSearchParams(params);
+    Object.entries(values).forEach(([key, value]) => value === undefined || value === "" || value === "all" ? next.delete(key) : next.set(key, String(value)));
+    if (!("page" in values)) next.delete("page");
+    setParams(next, { replace: true });
+  }
+
   async function refreshEmployees() {
     await queryClient.invalidateQueries({
-      queryKey: employeesQuery.queryKey,
+      queryKey: ["admin", "employees"],
     });
   }
 
@@ -361,20 +374,7 @@ export function EmployeesPage() {
     (employee) => employee.mustChangePassword,
   ).length;
 
-  const searchTerm = search.trim().toLowerCase();
-  const filteredEmployees = items.filter((employee) => {
-    const matchesStatus = status === "all" || employee.status === status;
-    const searchableText = [
-      employee.name,
-      employee.email,
-      employee.employeeCode ?? "",
-      ...employee.roles.map((role) => role.name),
-    ]
-      .join(" ")
-      .toLowerCase();
-
-    return matchesStatus && searchableText.includes(searchTerm);
-  });
+  const filteredEmployees = items;
 
   const passwordResult = passwordSchema.safeParse(temporaryPassword);
   const actionValid =
@@ -495,37 +495,7 @@ export function EmployeesPage() {
             </Button>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <div className="relative flex-1">
-              <Search
-                aria-hidden="true"
-                className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                aria-label="Search loaded employees"
-                placeholder="Search by name, email, code, or role..."
-                className="h-10 pl-9"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-            <Select
-              value={status}
-              onValueChange={(value) => setStatus(value as StatusFilter)}
-            >
-              <SelectTrigger
-                aria-label="Filter by account status"
-                className="h-10 w-full sm:w-44"
-              >
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="active">Active</SelectItem>
-                <SelectItem value="disabled">Disabled</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          <ListToolbar search={search} onSearch={(value) => updateList({ search: value })} activeFilters={status === "all" ? 0 : 1} onClear={() => updateList({ status: undefined })}><div className="space-y-2"><Label>Status</Label><Select value={status} onValueChange={(value) => updateList({ status: value })}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All statuses</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="disabled">Disabled</SelectItem></SelectContent></Select></div></ListToolbar>
         </CardHeader>
 
         <CardContent className="p-0">
@@ -563,10 +533,7 @@ export function EmployeesPage() {
                 <Button
                   variant="outline"
                   className="mt-5"
-                  onClick={() => {
-                    setSearch("");
-                    setStatus("all");
-                  }}
+                  onClick={() => updateList({ search: undefined, status: undefined })}
                 >
                   Clear filters
                 </Button>
@@ -581,10 +548,10 @@ export function EmployeesPage() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/40 hover:bg-muted/40">
-                  <TableHead className="min-w-64 pl-6">Employee</TableHead>
+                  <TableHead className="min-w-64 pl-6"><Button className="-ml-3" onClick={() => updateList({ sort: "name", direction: sort === "name" && direction === "asc" ? "desc" : "asc" })} size="sm" variant="ghost">Employee</Button></TableHead>
                   <TableHead>Roles</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="min-w-44">Account security</TableHead>
+                  <TableHead><Button className="-ml-3" onClick={() => updateList({ sort: "status", direction: sort === "status" && direction === "asc" ? "desc" : "asc" })} size="sm" variant="ghost">Status</Button></TableHead>
+                  <TableHead className="min-w-44"><Button className="-ml-3" onClick={() => updateList({ sort: "lastLoginAt", direction: sort === "lastLoginAt" && direction === "asc" ? "desc" : "asc" })} size="sm" variant="ghost">Account security</Button></TableHead>
                   {canManage && (
                     <TableHead className="pr-6 text-right">Actions</TableHead>
                   )}
@@ -752,12 +719,7 @@ export function EmployeesPage() {
         </CardContent>
 
         {employees.isSuccess && (
-          <div className="border-t px-6 py-3 text-xs text-muted-foreground">
-            Showing {filteredEmployees.length} of {items.length} loaded
-            employees.
-            {employees.data.total > items.length &&
-              " Additional accounts are not included in this view."}
-          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t px-6 py-3 text-sm text-muted-foreground"><span>{employees.data.total === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, employees.data.total)} of {employees.data.total}</span><div className="flex items-center gap-2"><Select value={String(pageSize)} onValueChange={(value) => updateList({ pageSize: Number(value), page: 1 })}><SelectTrigger aria-label="Rows per page" className="w-20"><SelectValue /></SelectTrigger><SelectContent>{[10, 20, 50, 100].map((size) => <SelectItem key={size} value={String(size)}>{size}</SelectItem>)}</SelectContent></Select><Button disabled={page <= 1} onClick={() => updateList({ page: page - 1 })} size="sm" variant="outline">Previous</Button><span>{page} / {Math.max(1, Math.ceil(employees.data.total / pageSize))}</span><Button disabled={page >= Math.ceil(employees.data.total / pageSize)} onClick={() => updateList({ page: page + 1 })} size="sm" variant="outline">Next</Button></div></div>
         )}
       </Card>
 

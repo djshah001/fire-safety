@@ -63,6 +63,7 @@ const OpportunitiesPage = lazy(() =>
     default: module.OpportunitiesPage,
   })),
 );
+const FollowUpsPage = lazy(() => import('@/features/crm/FollowUpsPage').then((module) => ({ default: module.FollowUpsPage })));
 
 function NotFoundPage() {
   return (
@@ -94,6 +95,7 @@ const router = createBrowserRouter([
       { path: "/crm/customers", element: <CustomersPage /> },
       { path: "/crm/customers/:id", element: <CustomerDetailPage /> },
       { path: "/crm/leads", element: <LeadsPage /> },
+      { path: "/crm/follow-ups", element: <FollowUpsPage /> },
       { path: "/crm/opportunities", element: <OpportunitiesPage /> },
       { path: "/account", element: <AccountPage /> },
     ],

@@ -16,7 +16,7 @@ The original blueprint's full ERP milestone is replaced by this narrower pilot. 
 | --- | --- | ---: | --- | --- |
 | P0 | Validate docs, inspect Prem starter, collect minimal company decisions | 1–2 | Yes | Technical planning and Prem source audit prepared; company validation pending |
 | P1 | Working foundation, employee access and themed shell | 3–5 | Yes | Complete locally 2026-10-09; production company/provider/hosting configuration remains pending |
-| P2 | CRM, masters, private attachments and recurring follow-ups | 4–6 | Yes | In progress; scoped CRM checkpoint complete locally 2026-10-10 |
+| P2 | CRM, masters, private attachments and recurring follow-ups | 4–6 | Yes | In progress; checkpoints 1–3 complete locally 2026-10-11 |
 | P3 | Free CAD design, approvals, BOQ, quotation and project start | 6–10 | Yes | Not started |
 | P4 | Vendor comparison, PO approval, receipts/inspection | 5–8 | Yes | Not started |
 | P5 | End-to-end pilot hardening and rollout | 3–5 | Yes | Not started |
@@ -56,9 +56,9 @@ Exit checks: client/API/worker start, migration from empty database, login/reset
 
 ## 5. P2 — CRM and necessary masters
 
-Current status (2026-10-10): checkpoint 1 is complete locally. The reviewed CRM migration, exact role/action permissions, customer/contact/site and service-category masters, assignment-scoped lead capture/stages, qualification into a separately unawarded opportunity, consistent scoped counts/search and responsive shadcn screens are implemented and verified. Duplicate matches warn without merging; lead numbers allocate transactionally and mutable records use optimistic row versions. System administration still grants no CRM visibility, and eligible assignees are active users with current lead-write capability.
+Current status (2026-10-11): checkpoints 1–3 are complete locally. In addition to the CRM masters and assignment-scoped lead/opportunity flow, leads now have immutable call/meeting/note activity, recurring follow-up rules with distinct worker-materialized occurrences, private checksummed PDF/image attachments, persistent customer/open-lead Excel staging and versioned bulk assignment/reminder actions. Customer, lead, opportunity and follow-up directories use allowlisted server sorting, scoped totals/pagination, URL search/filter state and repository-owned shadcn Table/Sheet controls. The application shell uses grouped/collapsible shadcn navigation; the scoped CRM dashboard, sticky selectable tables, semantic statuses, floating bulk bar and import preview apply the modern density guidance from `crm-design.md`.
 
-Still pending in P2: activities/calls, recurring reminders and worker delivery, private record attachments/download authorization, staged Excel import/bulk operations, and minimal vendor/item/unit masters. Therefore the P2 exit journey and phase are not yet complete.
+Still pending in P2: free-design authorization, minimal vendor/item/unit masters and configured external email delivery. In-app follow-up records are implemented; no WhatsApp/SMS/provider delivery is claimed. Therefore the P2 exit journey and phase are not yet complete.
 
 Implement customer/contact/site and minimal vendor/item/unit masters required for later phases, with deactivate rather than destructive deletion. Prioritize lead and opportunity forms, membership, possible-duplicate warning, calls/activities, attachments, recurring reminders and role-scoped search. Use basic server pagination/filtering from the first list.
 
