@@ -31,7 +31,7 @@ function addCalendarDays(value: Date, days: number) {
 }
 
 function canOpenEngineering(principal: AuthenticatedPrincipal) {
-  return ['engineering.design.write', 'engineering.design.assign_engineer', 'engineering.design.review', 'engineering.design.customer_decision', 'engineering.estimate.read', 'engineering.boq.purchase_review', 'engineering.boq.final_review', 'engineering.quotation.read']
+  return ['engineering.design.write', 'engineering.design.assign_engineer', 'engineering.design.review', 'engineering.design.customer_decision', 'engineering.estimate.read', 'engineering.boq.purchase_review', 'engineering.boq.final_review', 'engineering.quotation.read', 'project.start']
     .some((permission) => hasPermission(principal, permission));
 }
 

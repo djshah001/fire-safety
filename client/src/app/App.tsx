@@ -73,6 +73,8 @@ const BoqTemplatesPage = lazy(() => import('@/features/engineering/BoqTemplatesP
 const QuotationQueuePage = lazy(() => import('@/features/engineering/QuotationQueuePage').then((module) => ({ default: module.QuotationQueuePage })));
 const QuotationWorkspacePage = lazy(() => import('@/features/engineering/QuotationWorkspacePage').then((module) => ({ default: module.QuotationWorkspacePage })));
 const NotificationsPage = lazy(() => import('@/features/notifications/NotificationsPage').then((module) => ({ default: module.NotificationsPage })));
+const ProjectsPage = lazy(() => import('@/features/projects/ProjectsPage').then((module) => ({ default: module.ProjectsPage })));
+const ProjectPage = lazy(() => import('@/features/projects/ProjectPage').then((module) => ({ default: module.ProjectPage })));
 
 function NotFoundPage() {
   return (
@@ -119,6 +121,8 @@ const router = createBrowserRouter([
       { path: "/masters/units", element: <MasterDataPage /> },
       { path: "/account", element: <AccountPage /> },
       { path: "/notifications", element: <NotificationsPage /> },
+      { path: "/projects", element: <ProjectsPage /> },
+      { path: "/projects/:projectId", element: <ProjectPage /> },
     ],
   },
   { path: "*", element: <NotFoundPage /> },

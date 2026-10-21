@@ -158,7 +158,8 @@ REST `/api/v1` remains the default; no new query protocol is necessary. Represen
 | GET /crm/design-assignees; POST /crm/leads/:id/authorize-design | Eligible design assignments and replay-safe free-design handoff, not award |
 | POST /design-package-revisions/:id/submit | Freeze/review exact package |
 | POST /design-package-revisions/:id/customer-decisions | Sales records evidence and customer decision |
-| POST /design-package-revisions/:id/start-project | Project creation from approved design; commercial award optional |
+| GET /projects; GET /projects/:id | Membership-scoped project register and immutable baseline detail |
+| GET /projects/start-options/:jobId; POST /projects/from-design/:jobId | Idempotent project creation from approved design; commercial award optional |
 | POST /quotation-revisions/:id/submit, /issue, /accept | Explicit commercial transitions |
 | POST /approval-requests/:id/approve, /return, /reject | Authorized revision-bound decisions |
 | POST /purchase-comparisons/:id/select | Supplier choice + justified exceptions |

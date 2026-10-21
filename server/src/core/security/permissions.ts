@@ -30,6 +30,8 @@ export const permissionCatalog = {
   'engineering.quotation.customer_decision': 'Record customer quotation decisions and evidence.',
   'engineering.payment_plan.read': 'View cash and non-cash payment plans for assigned opportunities.',
   'engineering.payment_plan.write': 'Configure cash and non-cash payment plans for assigned opportunities.',
+  'project.read': 'View projects where the employee is an explicit project member.',
+  'project.start': 'Start one project from an exact customer-approved design in assigned scope.',
   'procurement.vendor.read': 'View operational vendor identity and contact fields.',
   'procurement.vendor.manage': 'Create, update, and deactivate vendor master records.',
   'procurement.item.read': 'View item, category, and unit master records.',
@@ -59,6 +61,7 @@ export const salesExecutivePermissionCodes: PermissionCode[] = [
   'engineering.quotation.write',
   'engineering.quotation.issue',
   'engineering.quotation.customer_decision',
+  'project.read',
 ];
 
 export const salesManagerPermissionCodes: PermissionCode[] = [
@@ -69,10 +72,12 @@ export const salesManagerPermissionCodes: PermissionCode[] = [
   'engineering.quotation.approve',
   'engineering.payment_plan.read',
   'engineering.payment_plan.write',
+  'project.start',
 ];
 
 export const designEngineerPermissionCodes: PermissionCode[] = [
   'engineering.design.write',
+  'project.read',
 ];
 
 export const designHeadPermissionCodes: PermissionCode[] = [
@@ -80,6 +85,7 @@ export const designHeadPermissionCodes: PermissionCode[] = [
   'engineering.design.assign_engineer',
   'engineering.design.review',
   'engineering.quotation.read',
+  'project.read',
 ];
 
 export const purchaseExecutivePermissionCodes: PermissionCode[] = [
@@ -89,6 +95,7 @@ export const purchaseExecutivePermissionCodes: PermissionCode[] = [
   'procurement.item.manage',
   'engineering.estimate.read',
   'engineering.estimate.write',
+  'project.read',
 ];
 
 export const purchaseManagerPermissionCodes: PermissionCode[] = [
@@ -99,6 +106,7 @@ export const purchaseManagerPermissionCodes: PermissionCode[] = [
   'engineering.estimate.read',
   'engineering.boq.template.manage',
   'engineering.boq.purchase_review',
+  'project.read',
 ];
 
 export const boqAdminApproverPermissionCodes: PermissionCode[] = [
@@ -109,4 +117,8 @@ export const boqAdminApproverPermissionCodes: PermissionCode[] = [
 export const receiverPermissionCodes: PermissionCode[] = [
   'procurement.vendor.read',
   'procurement.item.read',
+  'project.read',
 ];
+
+export const managementPermissionCodes: PermissionCode[] = ['project.read', 'project.start'];
+export const projectManagerPermissionCodes: PermissionCode[] = ['project.read'];

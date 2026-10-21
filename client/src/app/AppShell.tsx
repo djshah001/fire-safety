@@ -20,6 +20,7 @@ import {
   ClipboardList,
   FileText,
   Bell,
+  FolderKanban,
 } from "lucide-react";
 import type { CSSProperties } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -76,6 +77,7 @@ const pageTitles: Record<string, string> = {
   "/": "Overview",
   "/account": "My account",
   "/notifications": "Notifications",
+  "/projects": "Projects",
   "/admin/employees": "Employees",
   "/admin/roles": "Roles & permissions",
   "/crm/customers": "Customers",
@@ -339,7 +341,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
       to: "/engineering/design-jobs",
       label: "Design jobs",
       icon: ClipboardPenLine,
-      visible: ["engineering.design.write", "engineering.design.review", "engineering.design.customer_decision", "engineering.estimate.read"]
+      visible: ["engineering.design.write", "engineering.design.review", "engineering.design.customer_decision", "engineering.estimate.read", "project.start"]
         .some((permission) => user.permissions.includes(permission)),
     },
     {
@@ -372,6 +374,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
     visible: true,
   };
   const notifications: NavItem = { to: "/notifications", label: "Notifications", icon: Bell, visible: true };
+  const projects: NavItem = { to: "/projects", label: "Projects", icon: FolderKanban, visible: user.permissions.includes("project.read") };
 
   const pageTitle = currentPageTitle(location.pathname);
 
@@ -425,6 +428,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
               <SidebarMenu>
                 <NavigationLink item={overview} />
                 <NavigationLink item={notifications} />
+                <NavigationLink item={projects} />
                 <NavigationGroup
                   label="CRM"
                   icon={BriefcaseBusiness}

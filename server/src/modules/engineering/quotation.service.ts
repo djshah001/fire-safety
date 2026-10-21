@@ -7,6 +7,8 @@ import { ensureUploadRoot, removePrivateFile, resolvePrivateFile } from '../../i
 import { createAuthRepository } from '../auth/auth.repository.js';
 import { hasPermission } from '../auth/auth.middleware.js';
 import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
+import { createNotificationRepository } from '../notifications/notification.repository.js';
+import { createProjectRepository } from '../projects/project.repository.js';
 import { createEngineeringRepository } from './engineering.repository.js';
 import { renderDemoQuotationPdf } from './quotation.pdf.js';
 import { createQuotationRepository } from './quotation.repository.js';
@@ -348,10 +350,17 @@ export class QuotationService {
       const tx = createQuotationRepository(transaction);
       const updated = await tx.transition(principal.companyId, revisionId, input.expectedVersion, 'issued', { status: input.decision });
       if (!updated) throw new ConflictError('The quotation changed or already has a customer decision.');
-      await tx.createCustomerDecision({ companyId: principal.companyId, quotationRevisionId: revisionId, decision: input.decision, evidenceReference: input.evidenceReference, customerOrderReference: input.customerOrderReference, notes: input.notes, recordedByUserId: principal.userId });
+      const decision = await tx.createCustomerDecision({ companyId: principal.companyId, quotationRevisionId: revisionId, decision: input.decision, evidenceReference: input.evidenceReference, customerOrderReference: input.customerOrderReference, notes: input.notes, recordedByUserId: principal.userId });
       if (input.decision === 'accepted') {
         await tx.setCommercialState(principal.companyId, context.opportunityId, 'awarded');
         await tx.setLeadStage(principal.companyId, context.leadId, 'won');
+        const projects = createProjectRepository(transaction);
+        const project = await projects.findByOpportunityUnscoped(principal.companyId, context.opportunityId);
+        if (project) {
+          await projects.attachCommercialBaseline({ companyId: principal.companyId, projectId: project.id, quotationRevisionId: revisionId, quotationCustomerDecisionId: decision.id, customerEvidenceSnapshot: input.evidenceReference, customerOrderReference: input.customerOrderReference, acceptedAt: decision.recordedAt, createdByUserId: principal.userId });
+          const recipients = (await projects.listMemberIds(principal.companyId, project.id)).map((member) => member.userId).filter((userId) => userId !== principal.userId);
+          await createNotificationRepository(transaction).createMany(recipients.map((recipientUserId) => ({ companyId: principal.companyId, recipientUserId, type: 'project.commercially_awarded', severity: 'success' as const, title: 'Project commercially awarded', message: `${project.projectNumber} now has an accepted quotation baseline.`, link: `/projects/${project.id}`, targetType: 'project', targetId: project.id, dedupKey: `project-awarded:${project.id}:${revisionId}` })));
+        }
       }
       await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: `engineering.quotation_customer_${input.decision}`, targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, evidenceReference: input.evidenceReference, customerOrderReference: input.customerOrderReference } });
       return updated;

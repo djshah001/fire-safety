@@ -1580,6 +1580,45 @@ async function seed() {
         scenario,
       });
     }
+    stage = "project register";
+    const demoProject = await one<IdRow>(client, `
+      insert into projects (
+        company_id, project_number, opportunity_id, customer_id, site_id, title,
+        start_date, target_completion_date, start_reason, started_by_user_id
+      )
+      select $1, 'DEMO-PRJ-001', opportunity.id, opportunity.customer_id, opportunity.site_id,
+        'Demo unawarded project started from approved design', current_date, current_date + 30,
+        'Synthetic local example proving that approved design can start work before quotation acceptance.', $3
+      from opportunities opportunity
+      where opportunity.id = $2 and opportunity.site_id is not null
+      on conflict (company_id, opportunity_id) do update set title = excluded.title
+      returning id
+    `, [company.id, opportunities[3]!.id, managerId]);
+    for (const [userId, role] of [[managerId, 'project_manager'], [designerId, 'design'], [designHeadId, 'design'], [executiveId, 'sales']] as const) {
+      await client.query(`
+        insert into project_members (company_id, project_id, user_id, role, assigned_by_user_id)
+        values ($1, $2, $3, $4, $5)
+        on conflict (project_id, user_id) do nothing
+      `, [company.id, demoProject.id, userId, role, managerId]);
+    }
+    await client.query(`
+      insert into project_design_baselines (
+        company_id, project_id, design_job_id, design_revision_id,
+        design_customer_decision_id, customer_evidence_snapshot, created_by_user_id
+      )
+      select $1, $2, $3, revision.id, decision.id, decision.evidence_reference, $5
+      from design_package_revisions revision
+      join design_customer_decisions decision on decision.revision_id = revision.id and decision.decision = 'approved'
+      where revision.id = $4
+      on conflict (project_id) do nothing
+    `, [company.id, demoProject.id, designJobs[2]!.id, downstreamDesigns[2]!.id, managerId]);
+    await client.query(`
+      insert into notifications (company_id, recipient_user_id, type, severity, title, message, link, target_type, target_id, dedup_key)
+      values ($1, $2, 'project.started', 'success', 'Demo project assigned',
+        'An unawarded project was started from an approved design and assigned to you.',
+        '/projects/' || $3::text, 'project', $3::uuid, 'demo-project-started:' || $3::text)
+      on conflict (company_id, recipient_user_id, dedup_key) do nothing
+    `, [company.id, designerId, demoProject.id]);
     const downstreamBoqs: Array<IdRow | undefined> = [];
     for (const [jobIndex, scenario] of [
       [0, "Demo approved BOQ ready for quotation"],
@@ -1636,7 +1675,7 @@ async function seed() {
       [
         `Demo seed complete for ${company.name}.`,
         `Created/refreshed ${userDefinitions.length} demo users, ${customers.length} customers and ${leads.length} leads.`,
-        `Ensured ${opportunities.length} assigned opportunities, ${designJobs.length} design jobs and 2 quotation checkpoints.`,
+        `Ensured ${opportunities.length} assigned opportunities, ${designJobs.length} design jobs, 1 project and 2 quotation checkpoints.`,
         "Workflow starts: DEMO-LEAD-003 authorize design; 006 upload/review design; 007 build BOQ; 004 build quotation; 008 approve quotation; 009 issue and record decision.",
         "Login: demo.admin@example.test",
         `Password: ${demoPassword}`,

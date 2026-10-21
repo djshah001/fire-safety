@@ -37,6 +37,7 @@ Before changing an existing repository, inspect its instructions, lockfiles, scr
 | B-19 | Sales management assigns only the design head. That assigned design head selects the design engineer. A design package may contain multiple CAD originals and multiple PDF previews. |
 | B-20 | Assigning a design engineer starts a 2-calendar-day first-submission clock. The assigned engineer may record at most three reasoned extensions of exactly 3 calendar days each. The clock stops on the first submitted design revision; review/return cycles do not restart it. |
 | B-21 | In-app notifications are private to their explicit recipient. Assignment, deadline, design-review and BOQ handoff events are transactional and deduplicated; a hidden UI item never substitutes for recipient scoping in the API or worker. |
+| B-22 | Project start binds one opportunity to an immutable exact customer-approved design/evidence baseline, active site and explicit members. Creation is idempotent and unique per opportunity. An approved BOQ is optional; quotation/customer-PO acceptance is never a start gate and later commercial acceptance creates a separate baseline. |
 | B-20 | Design engineering owns BOQ quantities only. An explicitly assigned purchase employee owns costing; a different purchase head reviews it; a different explicitly assigned administrative approver gives final approval before quotation. System administration alone does not grant this commercial approval. |
 
 ## 3. Authorization and privacy

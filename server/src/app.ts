@@ -17,6 +17,7 @@ import { createEngineeringRouter } from './modules/engineering/engineering.route
 import { createBoqRouter } from './modules/engineering/boq.routes.js';
 import { createQuotationRouter } from './modules/engineering/quotation.routes.js';
 import { createNotificationRouter } from './modules/notifications/notification.routes.js';
+import { createProjectRouter } from './modules/projects/project.routes.js';
 
 export type AppDependencies = {
   checkReadiness?: ReadinessCheck;
@@ -49,6 +50,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   }));
   app.use('/api/v1/auth', createAuthRouter());
   app.use('/api/v1/notifications', createNotificationRouter());
+  app.use('/api/v1/projects', createProjectRouter());
   app.use('/api/v1/admin', createAdminRouter());
   app.use('/api/v1/crm', createCrmRouter());
   app.use('/api/v1/masters', createMastersRouter());

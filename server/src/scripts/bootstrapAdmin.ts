@@ -2,6 +2,8 @@ import { count, eq } from 'drizzle-orm';
 import { env } from '../config/env.js';
 import {
   permissionCatalog,
+  managementPermissionCodes,
+  projectManagerPermissionCodes,
   boqAdminApproverPermissionCodes,
   designEngineerPermissionCodes,
   designHeadPermissionCodes,
@@ -118,6 +120,8 @@ async function bootstrap() {
     const purchaseManagerRole = createdRoles.find((role) => role.code === 'purchase_manager')!;
     const boqAdminApproverRole = createdRoles.find((role) => role.code === 'boq_admin_approver')!;
     const receiverRole = createdRoles.find((role) => role.code === 'receiver')!;
+    const managementRole = createdRoles.find((role) => role.code === 'management')!;
+    const projectManagerRole = createdRoles.find((role) => role.code === 'project_manager')!;
     await transaction.insert(rolePermissions).values([
       ...systemAdminPermissionCodes.map((permissionCode) => ({ roleId: adminRole.id, permissionCode })),
       ...salesExecutivePermissionCodes.map((permissionCode) => ({ roleId: salesExecutiveRole.id, permissionCode })),
@@ -128,6 +132,8 @@ async function bootstrap() {
       ...purchaseManagerPermissionCodes.map((permissionCode) => ({ roleId: purchaseManagerRole.id, permissionCode })),
       ...boqAdminApproverPermissionCodes.map((permissionCode) => ({ roleId: boqAdminApproverRole.id, permissionCode })),
       ...receiverPermissionCodes.map((permissionCode) => ({ roleId: receiverRole.id, permissionCode })),
+      ...managementPermissionCodes.map((permissionCode) => ({ roleId: managementRole.id, permissionCode })),
+      ...projectManagerPermissionCodes.map((permissionCode) => ({ roleId: projectManagerRole.id, permissionCode })),
     ]);
     const [admin] = await transaction.insert(users).values({
       companyId: company!.id,
