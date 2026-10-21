@@ -15,6 +15,8 @@ import { createCrmRouter } from './modules/crm/crm.routes.js';
 import { createMastersRouter } from './modules/masters/masters.routes.js';
 import { createEngineeringRouter } from './modules/engineering/engineering.routes.js';
 import { createBoqRouter } from './modules/engineering/boq.routes.js';
+import { createQuotationRouter } from './modules/engineering/quotation.routes.js';
+import { createNotificationRouter } from './modules/notifications/notification.routes.js';
 
 export type AppDependencies = {
   checkReadiness?: ReadinessCheck;
@@ -46,11 +48,13 @@ export function createApp(dependencies: AppDependencies = {}) {
     legacyHeaders: false,
   }));
   app.use('/api/v1/auth', createAuthRouter());
+  app.use('/api/v1/notifications', createNotificationRouter());
   app.use('/api/v1/admin', createAdminRouter());
   app.use('/api/v1/crm', createCrmRouter());
   app.use('/api/v1/masters', createMastersRouter());
   app.use('/api/v1/engineering', createEngineeringRouter());
   app.use('/api/v1/engineering', createBoqRouter());
+  app.use('/api/v1/engineering', createQuotationRouter());
 
   app.use(notFoundHandler);
   app.use(errorHandler);

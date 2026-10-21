@@ -39,9 +39,11 @@ export const importDefinitions: Record<CrmImportType, ImportDefinition> = {
       { key: 'address', label: 'address', width: 34 },
       { key: 'source', label: 'source', required: true, width: 20 },
       { key: 'service_category_code', label: 'service_category_code', required: true, width: 24 },
+      { key: 'purpose_code', label: 'purpose_code', required: true, width: 20 },
+      { key: 'sector_code', label: 'sector_code', required: true, width: 20 },
       { key: 'owner_email', label: 'owner_email', width: 28 },
     ],
-    example: ['Warehouse alarm enquiry', 'Example Industries', 'Anita Shah', '9876543210', 'anita@example.test', '12 Industrial Estate, Ahmedabad', 'Referral', 'FIRE_ALARM', 'sales@example.test'],
+    example: ['Warehouse alarm enquiry', 'Example Industries', 'Anita Shah', '9876543210', 'anita@example.test', '12 Industrial Estate, Ahmedabad', 'Referral', 'FIRE_ALARM', 'NEW_PROJECT', 'WAREHOUSE_LOGISTICS', 'sales@example.test'],
   },
 };
 

@@ -1,0 +1,371 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
+import { Decimal } from 'decimal.js';
+import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../core/errors/appError.js';
+import { db, type Database } from '../../infrastructure/database/db.js';
+import { ensureUploadRoot, removePrivateFile, resolvePrivateFile } from '../../infrastructure/storage/localFileStorage.js';
+import { createAuthRepository } from '../auth/auth.repository.js';
+import { hasPermission } from '../auth/auth.middleware.js';
+import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
+import { createEngineeringRepository } from './engineering.repository.js';
+import { renderDemoQuotationPdf } from './quotation.pdf.js';
+import { createQuotationRepository } from './quotation.repository.js';
+
+type HeaderInput = {
+  title: string; validityDays: number; exclusions: string; deliveryTerms: string; paymentTerms: string;
+  additionalDiscount: string; taxLabel?: string; taxAmount: string; roundingAdjustment: string; expectedVersion: number;
+};
+
+function validationError(message: string) { return new AppError('VALIDATION_ERROR', message, 422); }
+
+function totals(lines: Array<{ lineSubtotal: string; discountAmount: string }>, additionalDiscount: string, taxAmount: string, roundingAdjustment: string) {
+  const subtotal = lines.reduce((sum, line) => sum.plus(line.lineSubtotal), new Decimal(0));
+  const lineDiscountTotal = lines.reduce((sum, line) => sum.plus(line.discountAmount), new Decimal(0));
+  const afterLineDiscounts = subtotal.minus(lineDiscountTotal);
+  const additional = new Decimal(additionalDiscount);
+  if (additional.gt(afterLineDiscounts)) throw validationError('Additional discount cannot exceed the value after line discounts.');
+  const grandTotal = afterLineDiscounts.minus(additional).plus(taxAmount).plus(roundingAdjustment);
+  if (grandTotal.isNegative()) throw validationError('Quotation grand total cannot be negative.');
+  return {
+    subtotal: subtotal.toFixed(2),
+    lineDiscountTotal: lineDiscountTotal.toFixed(2),
+    additionalDiscount: additional.toFixed(2),
+    taxAmount: new Decimal(taxAmount).toFixed(2),
+    roundingAdjustment: new Decimal(roundingAdjustment).toFixed(2),
+    grandTotal: grandTotal.toFixed(2),
+  };
+}
+
+type RevisionRow = Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['listRevisions']>>[number];
+
+function revisionDto(revision: RevisionRow, options: {
+  lines: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['listLines']>>;
+  review: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['findReview']>> | null;
+  document: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['findIssueDocument']>> | null;
+  decision: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['findCustomerDecision']>> | null;
+  canViewPaymentPlan: boolean;
+  isContributor: boolean;
+}) {
+  const base = {
+    id: revision.id, quotationId: revision.quotationId, boqRevisionId: revision.boqRevisionId,
+    revisionNumber: revision.revisionNumber, status: revision.status, title: revision.title,
+    customerName: revision.customerNameSnapshot, currency: revision.currency, validityDays: revision.validityDays,
+    exclusions: revision.exclusions, deliveryTerms: revision.deliveryTerms, paymentTerms: revision.paymentTerms,
+    taxLabel: revision.taxLabel, subtotal: revision.subtotal, lineDiscountTotal: revision.lineDiscountTotal,
+    additionalDiscount: revision.additionalDiscount, taxAmount: revision.taxAmount,
+    roundingAdjustment: revision.roundingAdjustment, grandTotal: revision.grandTotal,
+    createdByUserId: revision.createdByUserId, submittedByUserId: revision.submittedByUserId,
+    submittedAt: revision.submittedAt, approvedByUserId: revision.approvedByUserId, approvedAt: revision.approvedAt,
+    issuedByUserId: revision.issuedByUserId, issuedAt: revision.issuedAt, rowVersion: revision.rowVersion,
+    createdAt: revision.createdAt, updatedAt: revision.updatedAt,
+    lines: options.lines.map((line) => ({
+      id: line.id, boqLineId: line.boqLineId, lineNumber: line.lineNumber, section: line.sectionSnapshot,
+      itemCode: line.itemCodeSnapshot, itemName: line.itemNameSnapshot, specification: line.specificationSnapshot,
+      unitSymbol: line.unitSymbolSnapshot, quantity: line.quantity, unitRate: line.unitRate,
+      discountAmount: line.discountAmount, lineSubtotal: line.lineSubtotal, lineTotal: line.lineTotal,
+      notes: line.notes, rowVersion: line.rowVersion,
+    })),
+    review: options.review ? { decision: options.review.decision, reason: options.review.reason, actorUserId: options.review.actorUserId, actedAt: options.review.actedAt } : null,
+    issueDocument: options.document ? { id: options.document.id, originalName: options.document.originalName, mimeType: options.document.mimeType, sizeBytes: options.document.sizeBytes, templateVersion: options.document.templateVersion, isDemo: options.document.isDemo, createdAt: options.document.createdAt } : null,
+    customerDecision: options.decision ? { decision: options.decision.decision, evidenceReference: options.decision.evidenceReference, customerOrderReference: options.decision.customerOrderReference, notes: options.decision.notes, recordedByUserId: options.decision.recordedByUserId, recordedAt: options.decision.recordedAt } : null,
+    isContributor: options.isContributor,
+  };
+  return options.canViewPaymentPlan
+    ? { ...base, paymentPlan: revision.cashPercentage === null ? null : { cashPercentage: revision.cashPercentage, nonCashPercentage: revision.nonCashPercentage! } }
+    : base;
+}
+
+export class QuotationService {
+  constructor(private readonly database: Database = db) {}
+
+  private assertPermission(principal: AuthenticatedPrincipal, permission: string) {
+    if (principal.mustChangePassword) throw new ForbiddenError('Change the temporary password before using this feature.');
+    if (!hasPermission(principal, permission)) throw new ForbiddenError();
+  }
+
+  private async job(principal: AuthenticatedPrincipal, jobId: string, permission = 'engineering.quotation.read') {
+    this.assertPermission(principal, permission);
+    const job = await createEngineeringRepository(this.database).findJob({ companyId: principal.companyId, userId: principal.userId }, jobId);
+    if (!job) throw new NotFoundError('Design job not found.');
+    return job;
+  }
+
+  async listQueue(principal: AuthenticatedPrincipal, input: { search?: string; status?: RevisionRow['status']; page: number; pageSize: number; sort: 'quotationNumber' | 'title' | 'status' | 'updatedAt' | 'grandTotal'; direction: 'asc' | 'desc' }) {
+    this.assertPermission(principal, 'engineering.quotation.read');
+    const result = await createQuotationRepository(this.database).listQueue(
+      { companyId: principal.companyId, userId: principal.userId },
+      { ...input, limit: input.pageSize, offset: (input.page - 1) * input.pageSize },
+    );
+    return { ...result, page: input.page, pageSize: input.pageSize };
+  }
+
+  async getWorkspace(principal: AuthenticatedPrincipal, jobId: string) {
+    const job = await this.job(principal, jobId);
+    const repository = createQuotationRepository(this.database);
+    const quotation = await repository.findQuotation(principal.companyId, jobId);
+    const canViewPaymentPlan = hasPermission(principal, 'engineering.payment_plan.read');
+    const revisions = quotation ? await repository.listRevisions(principal.companyId, quotation.id) : [];
+    return {
+      job,
+      context: await repository.findContext(principal.companyId, jobId),
+      quotation: quotation ? { id: quotation.id, quotationNumber: quotation.quotationNumber, createdAt: quotation.createdAt } : null,
+      eligibleBoqs: await repository.listApprovedBoqs(principal.companyId, jobId),
+      revisions: await Promise.all(revisions.map(async (revision) => revisionDto(revision, {
+        lines: await repository.listLines(principal.companyId, revision.id),
+        review: await repository.findReview(principal.companyId, revision.id) ?? null,
+        document: await repository.findIssueDocument(principal.companyId, revision.id) ?? null,
+        decision: await repository.findCustomerDecision(principal.companyId, revision.id) ?? null,
+        canViewPaymentPlan,
+        isContributor: await repository.hasContributor(principal.companyId, revision.id, principal.userId),
+      }))),
+      capabilities: {
+        canWrite: hasPermission(principal, 'engineering.quotation.write'),
+        canApprove: hasPermission(principal, 'engineering.quotation.approve'),
+        canIssue: hasPermission(principal, 'engineering.quotation.issue'),
+        canRecordDecision: hasPermission(principal, 'engineering.quotation.customer_decision'),
+        canViewPaymentPlan,
+        canWritePaymentPlan: hasPermission(principal, 'engineering.payment_plan.write'),
+      },
+      documentMode: 'demo' as const,
+    };
+  }
+
+  async createRevision(principal: AuthenticatedPrincipal, jobId: string, input: { boqRevisionId: string; sourceRevisionId?: string; title: string; exclusions: string; deliveryTerms: string; paymentTerms: string }, requestId: string) {
+    await this.job(principal, jobId, 'engineering.quotation.write');
+    const repository = createQuotationRepository(this.database);
+    const [context, boq, existingQuotation] = await Promise.all([
+      repository.findContext(principal.companyId, jobId),
+      repository.findApprovedBoq(principal.companyId, jobId, input.boqRevisionId),
+      repository.findQuotation(principal.companyId, jobId),
+    ]);
+    if (!context) throw new NotFoundError('Design job context not found.');
+    if (!boq) throw validationError('Choose an approved BOQ revision from this design job.');
+    const boqScope = await repository.listBoqLines(principal.companyId, boq.id);
+    if (boqScope.length === 0) throw validationError('The approved BOQ has no technical scope lines.');
+    const existingRevisions = existingQuotation ? await repository.listRevisions(principal.companyId, existingQuotation.id) : [];
+    if (existingRevisions.some((revision) => revision.status === 'draft')) throw new ConflictError('This quotation already has a draft revision.');
+    if (existingRevisions.length > 0 && !['returned', 'issued', 'declined'].includes(existingRevisions[0]!.status)) {
+      throw new ConflictError('Create a revision only after return, issue for negotiation, or customer decline.');
+    }
+    const source = input.sourceRevisionId ? await repository.findRevision(principal.companyId, jobId, input.sourceRevisionId) : undefined;
+    if (input.sourceRevisionId && (!source || !['returned', 'issued', 'declined'].includes(source.revision.status))) {
+      throw validationError('Only a returned, issued, or declined quotation can be copied.');
+    }
+
+    return this.database.transaction(async (transaction) => {
+      const tx = createQuotationRepository(transaction);
+      const now = new Date();
+      const quotation = existingQuotation ?? await tx.createQuotation({
+        companyId: principal.companyId, designJobId: jobId, opportunityId: context.opportunityId,
+        quotationNumber: await tx.allocateQuotationNumber(principal.companyId, now), createdByUserId: principal.userId,
+      });
+      const revision = await tx.createRevision({
+        companyId: principal.companyId, quotationId: quotation.id, boqRevisionId: boq.id,
+        revisionNumber: await tx.nextRevisionNumber(principal.companyId, quotation.id), title: input.title,
+        customerNameSnapshot: context.customerName, exclusions: input.exclusions,
+        deliveryTerms: input.deliveryTerms, paymentTerms: input.paymentTerms, createdByUserId: principal.userId,
+      });
+      const sourceLines = source ? await tx.listLines(principal.companyId, source.revision.id) : [];
+      const sourceByBoqLine = new Map(sourceLines.map((line) => [line.boqLineId, line]));
+      for (const line of boqScope) {
+        const copied = sourceByBoqLine.get(line.id);
+        const unitRate = copied?.unitRate ?? '0.00';
+        const lineSubtotal = new Decimal(line.quantity).mul(unitRate).toDecimalPlaces(2).toFixed(2);
+        const discountAmount = copied && new Decimal(copied.discountAmount).lte(lineSubtotal) ? copied.discountAmount : '0.00';
+        await tx.createLine({
+          companyId: principal.companyId, quotationRevisionId: revision.id, boqLineId: line.id,
+          lineNumber: line.lineNumber, sectionSnapshot: line.section, itemCodeSnapshot: line.itemCodeSnapshot,
+          itemNameSnapshot: line.itemNameSnapshot, specificationSnapshot: line.specificationSnapshot,
+          unitSymbolSnapshot: line.unitSymbolSnapshot, quantity: line.quantity, unitRate,
+          discountAmount, lineSubtotal, lineTotal: new Decimal(lineSubtotal).minus(discountAmount).toFixed(2),
+          notes: copied?.notes,
+        });
+      }
+      await tx.addContributor(principal.companyId, revision.id, principal.userId);
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_revision_created', targetType: 'quotation_revision', targetId: revision.id, requestId, metadata: { designJobId: jobId, quotationNumber: quotation.quotationNumber, revisionNumber: revision.revisionNumber, boqRevisionId: boq.id, copiedFrom: source?.revision.id } });
+      return { quotation, revision };
+    });
+  }
+
+  private async draft(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, permission = 'engineering.quotation.write') {
+    await this.job(principal, jobId, permission);
+    const found = await createQuotationRepository(this.database).findRevision(principal.companyId, jobId, revisionId);
+    if (!found) throw new NotFoundError('Quotation revision not found.');
+    if (found.revision.status !== 'draft') throw new ConflictError('Submitted quotation revisions are immutable. Create a new revision for changes.');
+    return found;
+  }
+
+  async updateHeader(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, input: HeaderInput, requestId: string) {
+    const found = await this.draft(principal, jobId, revisionId);
+    const repository = createQuotationRepository(this.database);
+    const calculated = totals(await repository.listLines(principal.companyId, revisionId), input.additionalDiscount, input.taxAmount, input.roundingAdjustment);
+    return this.database.transaction(async (transaction) => {
+      const tx = createQuotationRepository(transaction);
+      const updated = await tx.updateDraft(principal.companyId, revisionId, input.expectedVersion, {
+        title: input.title, validityDays: input.validityDays, exclusions: input.exclusions,
+        deliveryTerms: input.deliveryTerms, paymentTerms: input.paymentTerms, taxLabel: input.taxLabel,
+        ...calculated,
+      });
+      if (!updated) throw new ConflictError('The quotation changed. Refresh and try again.');
+      await tx.addContributor(principal.companyId, revisionId, principal.userId);
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_header_updated', targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, grandTotal: calculated.grandTotal, previousVersion: found.revision.rowVersion } });
+      return updated;
+    });
+  }
+
+  async updateLine(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, lineId: string, input: { unitRate: string; discountAmount: string; notes?: string; expectedRevisionVersion: number; expectedLineVersion: number }, requestId: string) {
+    await this.draft(principal, jobId, revisionId);
+    const repository = createQuotationRepository(this.database);
+    const line = await repository.findLine(principal.companyId, revisionId, lineId);
+    if (!line) throw new NotFoundError('Quotation line not found.');
+    const lineSubtotal = new Decimal(line.quantity).mul(input.unitRate).toDecimalPlaces(2);
+    if (new Decimal(input.discountAmount).gt(lineSubtotal)) throw validationError('Line discount cannot exceed its subtotal.');
+    const prospective = (await repository.listLines(principal.companyId, revisionId)).map((item) => item.id === lineId
+      ? { lineSubtotal: lineSubtotal.toFixed(2), discountAmount: new Decimal(input.discountAmount).toFixed(2) }
+      : item);
+    const revision = (await repository.findRevision(principal.companyId, jobId, revisionId))!.revision;
+    const calculated = totals(prospective, revision.additionalDiscount, revision.taxAmount, revision.roundingAdjustment);
+    return this.database.transaction(async (transaction) => {
+      const tx = createQuotationRepository(transaction);
+      const updatedRevision = await tx.updateDraft(principal.companyId, revisionId, input.expectedRevisionVersion, calculated);
+      if (!updatedRevision) throw new ConflictError('The quotation changed. Refresh and try again.');
+      const updatedLine = await tx.updateLine(principal.companyId, revisionId, lineId, input.expectedLineVersion, {
+        unitRate: new Decimal(input.unitRate).toFixed(2), discountAmount: new Decimal(input.discountAmount).toFixed(2),
+        lineSubtotal: lineSubtotal.toFixed(2), lineTotal: lineSubtotal.minus(input.discountAmount).toFixed(2), notes: input.notes,
+      });
+      if (!updatedLine) throw new ConflictError('The quotation line changed. Refresh and try again.');
+      await tx.addContributor(principal.companyId, revisionId, principal.userId);
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_line_priced', targetType: 'quotation_line', targetId: lineId, requestId, metadata: { designJobId: jobId, quotationRevisionId: revisionId, lineTotal: updatedLine.lineTotal } });
+      return updatedLine;
+    });
+  }
+
+  async updatePaymentPlan(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, input: { cashPercentage: string; nonCashPercentage: string; expectedVersion: number }, requestId: string) {
+    await this.draft(principal, jobId, revisionId, 'engineering.payment_plan.write');
+    if (!new Decimal(input.cashPercentage).plus(input.nonCashPercentage).eq(100)) throw validationError('Cash and non-cash percentages must total exactly 100.');
+    return this.database.transaction(async (transaction) => {
+      const tx = createQuotationRepository(transaction);
+      const updated = await tx.updateDraft(principal.companyId, revisionId, input.expectedVersion, {
+        cashPercentage: new Decimal(input.cashPercentage).toFixed(2), nonCashPercentage: new Decimal(input.nonCashPercentage).toFixed(2),
+      });
+      if (!updated) throw new ConflictError('The quotation changed. Refresh and try again.');
+      await tx.addContributor(principal.companyId, revisionId, principal.userId);
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_payment_plan_updated', targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, cashPercentage: input.cashPercentage, nonCashPercentage: input.nonCashPercentage } });
+      return updated;
+    });
+  }
+
+  async submit(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, expectedVersion: number, requestId: string) {
+    const found = await this.draft(principal, jobId, revisionId);
+    if (new Decimal(found.revision.grandTotal).lte(0)) throw validationError('Quotation grand total must be greater than zero before submission.');
+    if (found.revision.cashPercentage === null || found.revision.nonCashPercentage === null) throw validationError('An authorized sales manager must configure the full cash/non-cash payment plan before submission.');
+    return this.database.transaction(async (transaction) => {
+      const tx = createQuotationRepository(transaction);
+      const updated = await tx.transition(principal.companyId, revisionId, expectedVersion, 'draft', { status: 'submitted', submittedByUserId: principal.userId, submittedAt: new Date() });
+      if (!updated) throw new ConflictError('The quotation changed or is no longer a draft.');
+      await tx.addContributor(principal.companyId, revisionId, principal.userId);
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_submitted', targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, quotationId: found.quotation.id, revisionNumber: found.revision.revisionNumber } });
+      return updated;
+    });
+  }
+
+  async review(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, input: { decision: 'approved' | 'returned'; reason?: string; expectedVersion: number }, requestId: string) {
+    await this.job(principal, jobId, 'engineering.quotation.approve');
+    const repository = createQuotationRepository(this.database);
+    const found = await repository.findRevision(principal.companyId, jobId, revisionId);
+    if (!found) throw new NotFoundError('Quotation revision not found.');
+    if (found.revision.status !== 'submitted') throw new ConflictError('This quotation is not awaiting approval.');
+    if (await repository.hasContributor(principal.companyId, revisionId, principal.userId)) throw new ForbiddenError('You cannot approve or return a quotation revision that you prepared.');
+    const now = new Date();
+    return this.database.transaction(async (transaction) => {
+      const tx = createQuotationRepository(transaction);
+      const updated = await tx.transition(principal.companyId, revisionId, input.expectedVersion, 'submitted', input.decision === 'approved'
+        ? { status: 'approved', approvedByUserId: principal.userId, approvedAt: now }
+        : { status: 'returned' });
+      if (!updated) throw new ConflictError('The quotation changed or is no longer awaiting approval.');
+      await tx.createReview({ companyId: principal.companyId, quotationRevisionId: revisionId, decision: input.decision, reason: input.reason, actorUserId: principal.userId });
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: `engineering.quotation_${input.decision}`, targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, reason: input.reason } });
+      return updated;
+    });
+  }
+
+  async issue(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, expectedVersion: number, requestId: string) {
+    await this.job(principal, jobId, 'engineering.quotation.issue');
+    const repository = createQuotationRepository(this.database);
+    const [found, context] = await Promise.all([
+      repository.findRevision(principal.companyId, jobId, revisionId), repository.findContext(principal.companyId, jobId),
+    ]);
+    if (!found || !context) throw new NotFoundError('Quotation revision not found.');
+    if (found.revision.status !== 'approved') throw new ConflictError('Only an approved quotation can be issued.');
+    if (await repository.findIssueDocument(principal.companyId, revisionId)) throw new ConflictError('This quotation revision already has an issued snapshot.');
+    const lines = await repository.listLines(principal.companyId, revisionId);
+    const pdf = renderDemoQuotationPdf({
+      quotationNumber: found.quotation.quotationNumber, revisionNumber: found.revision.revisionNumber,
+      customerName: found.revision.customerNameSnapshot, title: found.revision.title, currency: found.revision.currency,
+      validityDays: found.revision.validityDays, exclusions: found.revision.exclusions, deliveryTerms: found.revision.deliveryTerms,
+      paymentTerms: found.revision.paymentTerms, subtotal: found.revision.subtotal,
+      lineDiscountTotal: found.revision.lineDiscountTotal, additionalDiscount: found.revision.additionalDiscount,
+      taxLabel: found.revision.taxLabel, taxAmount: found.revision.taxAmount,
+      roundingAdjustment: found.revision.roundingAdjustment, grandTotal: found.revision.grandTotal,
+      lines: lines.map((line) => ({ lineNumber: line.lineNumber, itemCode: line.itemCodeSnapshot, itemName: line.itemNameSnapshot, specification: line.specificationSnapshot, quantity: line.quantity, unitSymbol: line.unitSymbolSnapshot, unitRate: line.unitRate, discountAmount: line.discountAmount, lineTotal: line.lineTotal })),
+    });
+    const storageName = `${randomUUID()}.pdf`;
+    await ensureUploadRoot();
+    await writeFile(resolvePrivateFile(storageName), pdf);
+    const now = new Date();
+    try {
+      return await this.database.transaction(async (transaction) => {
+        const tx = createQuotationRepository(transaction);
+        const updated = await tx.transition(principal.companyId, revisionId, expectedVersion, 'approved', { status: 'issued', issuedByUserId: principal.userId, issuedAt: now });
+        if (!updated) throw new ConflictError('The quotation changed or is no longer approved.');
+        const document = await tx.createIssueDocument({
+          companyId: principal.companyId, quotationRevisionId: revisionId,
+          originalName: `${found.quotation.quotationNumber}-R${found.revision.revisionNumber}-DEMO.pdf`, storageName,
+          mimeType: 'application/pdf', sizeBytes: pdf.byteLength,
+          checksumSha256: createHash('sha256').update(pdf).digest('hex'), templateVersion: 'demo-v1', isDemo: true,
+          createdByUserId: principal.userId,
+        });
+        await tx.setCommercialState(principal.companyId, context.opportunityId, 'quoted');
+        await tx.setLeadStage(principal.companyId, context.leadId, 'commercial_negotiation');
+        await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_issued_demo', targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, documentId: document.id, templateVersion: 'demo-v1', grandTotal: found.revision.grandTotal } });
+        return { revision: updated, document };
+      });
+    } catch (error) {
+      await removePrivateFile(storageName);
+      throw error;
+    }
+  }
+
+  async recordCustomerDecision(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, input: { decision: 'accepted' | 'declined'; evidenceReference: string; customerOrderReference?: string; notes?: string; expectedVersion: number }, requestId: string) {
+    await this.job(principal, jobId, 'engineering.quotation.customer_decision');
+    const repository = createQuotationRepository(this.database);
+    const [found, context] = await Promise.all([
+      repository.findRevision(principal.companyId, jobId, revisionId), repository.findContext(principal.companyId, jobId),
+    ]);
+    if (!found || !context) throw new NotFoundError('Quotation revision not found.');
+    if (found.revision.status !== 'issued') throw new ConflictError('Record a customer decision only against an issued quotation revision.');
+    return this.database.transaction(async (transaction) => {
+      const tx = createQuotationRepository(transaction);
+      const updated = await tx.transition(principal.companyId, revisionId, input.expectedVersion, 'issued', { status: input.decision });
+      if (!updated) throw new ConflictError('The quotation changed or already has a customer decision.');
+      await tx.createCustomerDecision({ companyId: principal.companyId, quotationRevisionId: revisionId, decision: input.decision, evidenceReference: input.evidenceReference, customerOrderReference: input.customerOrderReference, notes: input.notes, recordedByUserId: principal.userId });
+      if (input.decision === 'accepted') {
+        await tx.setCommercialState(principal.companyId, context.opportunityId, 'awarded');
+        await tx.setLeadStage(principal.companyId, context.leadId, 'won');
+      }
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: `engineering.quotation_customer_${input.decision}`, targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, evidenceReference: input.evidenceReference, customerOrderReference: input.customerOrderReference } });
+      return updated;
+    });
+  }
+
+  async getDocument(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, documentId: string) {
+    await this.job(principal, jobId);
+    const found = await createQuotationRepository(this.database).findRevision(principal.companyId, jobId, revisionId);
+    if (!found) throw new NotFoundError('Quotation revision not found.');
+    const document = await createQuotationRepository(this.database).findIssueDocument(principal.companyId, revisionId, documentId);
+    if (!document) throw new NotFoundError('Issued quotation document not found.');
+    return document;
+  }
+}
+
+export const quotationService = new QuotationService();

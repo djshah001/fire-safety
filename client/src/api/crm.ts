@@ -9,6 +9,7 @@ export type DuplicateHint = { type: 'customer' | 'lead'; id: string; label: stri
 export type ServiceCategory = {
   id: string; code: string; name: string; status: MasterStatus; rowVersion: number;
 };
+export type LeadClassification = ServiceCategory;
 export type CustomerSummary = {
   id: string; displayName: string; legalName: string | null; status: MasterStatus;
   rowVersion: number; createdAt?: string; updatedAt: string;
@@ -36,6 +37,7 @@ export type Lead = {
   contactName: string; phone: string | null; email: string | null; source: string;
   stage: LeadStage; ownerUserId: string; rowVersion: number; updatedAt: string;
   serviceCategoryName?: string; address?: string | null; serviceCategoryId?: string;
+  purposeId: string; purposeName: string; sectorId: string; sectorName: string;
   customerId?: string | null; primaryContactId?: string | null; siteId?: string | null;
   lostReason?: string | null; qualificationNotes?: string | null; createdAt?: string;
 };
@@ -47,7 +49,7 @@ export type Opportunity = {
 export type Assignee = { id: string; name: string; email: string };
 export type DesignJob = {
   id: string; leadId: string; opportunityId: string; title: string; status: string;
-  designerUserId: string; designHeadUserId: string; surveyRequested: boolean;
+  designerUserId: string | null; designHeadUserId: string; surveyRequested: boolean;
   authorizationNotes: string; authorizedByUserId: string; authorizedAt: string; rowVersion: number;
 };
 export type CrmActivity = {
@@ -99,6 +101,17 @@ export const serviceCategoriesQuery = (includeInactive = false) => queryOptions(
   queryKey: ['crm', 'service-categories', { includeInactive }] as const,
   queryFn: async ({ signal }) => {
     const response = await apiClient.get<ApiEnvelope<{ items: ServiceCategory[] }>>('/crm/service-categories', {
+      params: includeInactive ? { includeInactive: true } : undefined, signal,
+    });
+    return response.data.data.items;
+  },
+});
+
+export const leadClassificationsQuery = (type: 'purposes' | 'sectors', includeInactive = false) => queryOptions({
+  queryKey: ['crm', 'classifications', type, { includeInactive }] as const,
+  queryFn: async ({ signal }) => {
+    const resource = type === 'purposes' ? 'lead-purposes' : 'market-sectors';
+    const response = await apiClient.get<ApiEnvelope<{ items: LeadClassification[] }>>(`/crm/classifications/${resource}`, {
       params: includeInactive ? { includeInactive: true } : undefined, signal,
     });
     return response.data.data.items;
@@ -213,6 +226,12 @@ export async function createServiceCategory(input: { code: string; name: string 
   return response.data.data.category;
 }
 
+export async function createLeadClassification(type: 'purposes' | 'sectors', input: { code: string; name: string }) {
+  const resource = type === 'purposes' ? 'lead-purposes' : 'market-sectors';
+  const response = await apiClient.post<ApiEnvelope<{ classification: LeadClassification }>>(`/crm/classifications/${resource}`, input);
+  return response.data.data.classification;
+}
+
 export type CreateCustomerInput = {
   displayName: string;
   legalName?: string;
@@ -242,7 +261,7 @@ export async function addCustomerSite(customerId: string, input: {
 
 export async function createLead(input: {
   inquiryName: string; companyName?: string; contactName: string; phone?: string; email?: string;
-  address?: string; source: string; serviceCategoryId: string; ownerUserId?: string;
+  address?: string; source: string; serviceCategoryId: string; purposeId: string; sectorId: string; ownerUserId?: string;
 }) {
   const response = await apiClient.post<ApiEnvelope<{ lead: Lead; duplicateHints: DuplicateHint[] }>>('/crm/leads', input);
   return response.data.data;
@@ -317,7 +336,7 @@ export async function qualifyLead(input: {
 }
 
 export async function authorizeLeadDesign(input: {
-  leadId: string; expectedVersion: number; title: string; designerUserId: string;
+  leadId: string; expectedVersion: number; title: string;
   designHeadUserId: string; surveyRequested: boolean; authorizationNotes: string;
 }) {
   const response = await apiClient.post<ApiEnvelope<{ designJob: DesignJob; replayed: boolean }>>(

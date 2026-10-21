@@ -24,13 +24,23 @@ function csrfFrom(response: request.Response) {
 }
 
 async function cleanFixtures() {
+  await pool.query('delete from quotation_customer_decisions');
+  await pool.query('delete from quotation_issue_documents');
+  await pool.query('delete from quotation_review_actions');
+  await pool.query('delete from quotation_revision_contributors');
+  await pool.query('delete from quotation_lines');
+  await pool.query('delete from quotation_revisions');
+  await pool.query('delete from quotations');
   await pool.query('delete from design_customer_decisions');
   await pool.query('delete from design_review_actions');
   await pool.query('delete from design_revision_files');
   await pool.query('delete from boq_review_actions');
+  await pool.query('delete from boq_revision_contributors');
   await pool.query('delete from estimate_cost_lines');
   await pool.query('delete from boq_lines');
   await pool.query('delete from boq_revisions');
+  await pool.query('delete from boq_template_items');
+  await pool.query('delete from boq_templates');
   await pool.query('delete from design_package_revisions');
   await pool.query('delete from design_jobs');
   await pool.query('delete from opportunity_members');
@@ -48,7 +58,7 @@ async function cleanFixtures() {
   await pool.query('delete from items');
   await pool.query('delete from item_categories');
   await pool.query('delete from units');
-  await pool.query("delete from document_counters where document_type = 'LEAD'");
+  await pool.query("delete from document_counters where document_type in ('LEAD', 'QUOTATION')");
   await pool.query('delete from auth_sessions');
   await pool.query('delete from audit_events');
   await pool.query('delete from users where email_normalized = any($1)', [Object.values(emails)]);
@@ -164,6 +174,7 @@ describe('P2 purchasing masters and free-design authorization', () => {
     const app = createApp();
     const sales = await login(app, emails.sales);
     const outsider = await login(app, emails.outsider);
+    const head = await login(app, emails.head);
 
     const service = await sales.agent.post('/api/v1/crm/service-categories')
       .set('Origin', origin).set('X-CSRF-Token', sales.csrf)
@@ -173,9 +184,13 @@ describe('P2 purchasing masters and free-design authorization', () => {
       .send({ displayName: 'Design Customer', contacts: [{ name: 'Customer Contact', phone: '9876509998', isPrimary: true }], addresses: [], sites: [] });
     const customerId = customer.body.data.customer.id as string;
     const contactId = customer.body.data.customer.contacts[0].id as string;
+    const purposeId = (await sales.agent.get('/api/v1/crm/classifications/lead-purposes')).body.data.items
+      .find((item: { code: string }) => item.code === 'NEW_PROJECT').id as string;
+    const sectorId = (await sales.agent.get('/api/v1/crm/classifications/market-sectors')).body.data.items
+      .find((item: { code: string }) => item.code === 'INDUSTRIAL').id as string;
     const leadResponse = await sales.agent.post('/api/v1/crm/leads')
       .set('Origin', origin).set('X-CSRF-Token', sales.csrf)
-      .send({ inquiryName: 'Warehouse sprinkler design', contactName: 'Customer Contact', phone: '9876509998', source: 'Referral', serviceCategoryId: service.body.data.category.id });
+      .send({ inquiryName: 'Warehouse sprinkler design', contactName: 'Customer Contact', phone: '9876509998', source: 'Referral', serviceCategoryId: service.body.data.category.id, purposeId, sectorId });
     const lead = leadResponse.body.data.lead;
     const qualification = await sales.agent.post(`/api/v1/crm/leads/${lead.id}/qualify`)
       .set('Origin', origin).set('X-CSRF-Token', sales.csrf)
@@ -185,21 +200,26 @@ describe('P2 purchasing masters and free-design authorization', () => {
     const qualifiedLead = (await sales.agent.get(`/api/v1/crm/leads/${lead.id}`)).body.data.lead;
     expect((await outsider.agent.get(`/api/v1/crm/leads/${lead.id}`)).status).toBe(404);
 
-    const designers = await sales.agent.get('/api/v1/crm/design-assignees?role=designer');
     const heads = await sales.agent.get('/api/v1/crm/design-assignees?role=design_head');
-    const designerId = designers.body.data.items.find((item: { email: string }) => item.email === emails.designer).id;
     const headId = heads.body.data.items.find((item: { email: string }) => item.email === emails.head).id;
-    expect(designerId).not.toBe(headId);
 
     const payload = {
       expectedVersion: qualifiedLead.rowVersion,
-      title: 'Warehouse sprinkler free design', designerUserId: designerId, designHeadUserId: headId,
+      title: 'Warehouse sprinkler free design', designHeadUserId: headId,
       surveyRequested: false, authorizationNotes: 'Prepare the preliminary CAD layout from customer dimensions.',
     };
     const authorization = await sales.agent.post(`/api/v1/crm/leads/${lead.id}/authorize-design`)
       .set('Origin', origin).set('X-CSRF-Token', sales.csrf).send(payload);
     expect(authorization.status).toBe(201);
-    expect(authorization.body.data).toMatchObject({ replayed: false, designJob: { status: 'authorized', surveyRequested: false } });
+    expect(authorization.body.data).toMatchObject({ replayed: false, designJob: { status: 'awaiting_designer', designerUserId: null, surveyRequested: false } });
+    const jobId = authorization.body.data.designJob.id as string;
+    const eligibleDesigners = await head.agent.get(`/api/v1/engineering/design-jobs/${jobId}/eligible-designers`);
+    const designerId = eligibleDesigners.body.data.items.find((item: { email: string }) => item.email === emails.designer).id;
+    const assigned = await head.agent.post(`/api/v1/engineering/design-jobs/${jobId}/assign-designer`)
+      .set('Origin', origin).set('X-CSRF-Token', head.csrf)
+      .send({ designerUserId: designerId, expectedVersion: authorization.body.data.designJob.rowVersion });
+    expect(assigned.status).toBe(200);
+    expect(assigned.body.data.job).toMatchObject({ status: 'authorized', designerUserId: designerId });
 
     const replay = await sales.agent.post(`/api/v1/crm/leads/${lead.id}/authorize-design`)
       .set('Origin', origin).set('X-CSRF-Token', sales.csrf).send(payload);

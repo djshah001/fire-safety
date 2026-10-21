@@ -47,13 +47,18 @@ describe('CRM request validation', () => {
     })).toThrow();
   });
 
-  it('requires different design and review assignees', () => {
-    const sameUserId = '00000000-0000-4000-8000-000000000001';
+  it('requires a design head while leaving engineer assignment to that head', () => {
+    const designHeadUserId = '00000000-0000-4000-8000-000000000001';
+    expect(authorizeDesignInputSchema.parse({
+      expectedVersion: 1,
+      title: 'Warehouse design',
+      designHeadUserId,
+      surveyRequested: false,
+      authorizationNotes: 'Prepare a preliminary layout.',
+    })).toMatchObject({ designHeadUserId });
     expect(() => authorizeDesignInputSchema.parse({
       expectedVersion: 1,
       title: 'Warehouse design',
-      designerUserId: sameUserId,
-      designHeadUserId: sameUserId,
       surveyRequested: false,
       authorizationNotes: 'Prepare a preliminary layout.',
     })).toThrow();

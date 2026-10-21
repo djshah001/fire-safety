@@ -15,19 +15,11 @@ export const createBoqSchema = z.object({
   changeSummary: z.string().trim().min(2).max(1_000),
 });
 
-export const boqLineInputSchema = z.object({
-  itemId: uuid,
-  section: z.string().trim().min(1).max(120),
-  specification: z.string().trim().min(1).max(2_000),
-  brand: z.string().trim().max(120).optional(),
-  model: z.string().trim().max(120).optional(),
+export const boqQuantityInputSchema = z.object({
   quantity: decimal,
-  drawingReference: z.string().trim().max(200).optional(),
-  notes: z.string().trim().max(1_000).optional(),
   expectedBoqVersion: version,
-  expectedLineVersion: version.optional(),
+  expectedLineVersion: version,
 });
-export const boqLineUpdateSchema = boqLineInputSchema.extend({ expectedLineVersion: version });
 
 export const estimateLineInputSchema = z.object({
   boqLineId: uuid.optional(),
@@ -49,6 +41,29 @@ export const boqReviewSchema = z.object({
   expectedVersion: version,
 }).superRefine((value, context) => {
   if (value.decision === 'returned' && !value.reason) context.addIssue({ code: 'custom', path: ['reason'], message: 'A return reason is required.' });
+});
+
+export const boqTemplateParamsSchema = z.object({ templateId: uuid });
+export const boqTemplateInputSchema = z.object({
+  sectorId: uuid,
+  name: z.string().trim().min(2).max(160),
+  costingUserId: uuid,
+  purchaseHeadUserId: uuid,
+  adminApproverUserId: uuid,
+  expectedVersion: version.optional(),
+  items: z.array(z.object({
+    itemId: uuid,
+    section: z.string().trim().min(1).max(120),
+  })).min(1).max(200),
+}).superRefine((value, context) => {
+  const people = [value.costingUserId, value.purchaseHeadUserId, value.adminApproverUserId];
+  if (new Set(people).size !== people.length) {
+    context.addIssue({ code: 'custom', path: ['costingUserId'], message: 'Costing, purchase approval and final approval must use different employees.' });
+  }
+  const itemIds = value.items.map((item) => item.itemId);
+  if (new Set(itemIds).size !== itemIds.length) {
+    context.addIssue({ code: 'custom', path: ['items'], message: 'Each inventory item may appear once in a sector template.' });
+  }
 });
 
 export const itemCatalogQuerySchema = z.object({ search: z.string().trim().max(120).optional() });

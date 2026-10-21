@@ -32,6 +32,15 @@ describe('outbox handlers', () => {
     })).resolves.toBeUndefined();
   });
 
+  it('accepts a versioned design deadline payload for local notification materialization', async () => {
+    await expect(handleOutboxJob({
+      ...job,
+      type: 'engineering.design_deadline',
+      payload: { jobId: '00000000-0000-4000-8000-000000000098', dueAt: '2026-10-23T17:30:00+05:30' },
+    })).resolves.toBeUndefined();
+    await expect(handleOutboxJob({ ...job, type: 'engineering.design_deadline', payload: { jobId: 'invalid' } })).rejects.toThrow();
+  });
+
   it('does not claim password reset delivery when email is unconfigured', async () => {
     await expect(handleOutboxJob(job)).rejects.toEqual(expect.objectContaining({
       message: expect.stringContaining('not configured'),

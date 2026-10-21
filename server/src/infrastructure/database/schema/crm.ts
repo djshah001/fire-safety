@@ -60,6 +60,42 @@ export const serviceCategories = pgTable('service_categories', {
   check('service_categories_row_version_positive', sql`${table.rowVersion} > 0`),
 ]);
 
+export const leadPurposes = pgTable('lead_purposes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  code: varchar('code', { length: 40 }).notNull(),
+  name: varchar('name', { length: 120 }).notNull(),
+  nameNormalized: varchar('name_normalized', { length: 120 }).notNull(),
+  status: masterStatusEnum('status').notNull().default('active'),
+  rowVersion: integer('row_version').notNull().default(1),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('lead_purposes_company_code_uidx').on(table.companyId, table.code),
+  uniqueIndex('lead_purposes_company_name_uidx').on(table.companyId, table.nameNormalized),
+  index('lead_purposes_company_status_idx').on(table.companyId, table.status),
+  check('lead_purposes_row_version_positive', sql`${table.rowVersion} > 0`),
+]);
+
+export const marketSectors = pgTable('market_sectors', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  code: varchar('code', { length: 40 }).notNull(),
+  name: varchar('name', { length: 120 }).notNull(),
+  nameNormalized: varchar('name_normalized', { length: 120 }).notNull(),
+  status: masterStatusEnum('status').notNull().default('active'),
+  rowVersion: integer('row_version').notNull().default(1),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('market_sectors_company_code_uidx').on(table.companyId, table.code),
+  uniqueIndex('market_sectors_company_name_uidx').on(table.companyId, table.nameNormalized),
+  index('market_sectors_company_status_idx').on(table.companyId, table.status),
+  check('market_sectors_row_version_positive', sql`${table.rowVersion} > 0`),
+]);
+
 export const customers = pgTable('customers', {
   id: uuid('id').primaryKey().defaultRandom(),
   companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
@@ -174,6 +210,8 @@ export const leads = pgTable('leads', {
   address: varchar('address', { length: 500 }),
   source: varchar('source', { length: 100 }).notNull(),
   serviceCategoryId: uuid('service_category_id').notNull().references(() => serviceCategories.id, { onDelete: 'restrict' }),
+  purposeId: uuid('purpose_id').notNull().references(() => leadPurposes.id, { onDelete: 'restrict' }),
+  sectorId: uuid('sector_id').notNull().references(() => marketSectors.id, { onDelete: 'restrict' }),
   ownerUserId: uuid('owner_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
   customerId: uuid('customer_id').references(() => customers.id, { onDelete: 'restrict' }),
   primaryContactId: uuid('primary_contact_id').references(() => customerContacts.id, { onDelete: 'restrict' }),
@@ -188,6 +226,8 @@ export const leads = pgTable('leads', {
 }, (table) => [
   uniqueIndex('leads_company_number_uidx').on(table.companyId, table.leadNumber),
   index('leads_company_owner_stage_idx').on(table.companyId, table.ownerUserId, table.stage),
+  index('leads_company_purpose_idx').on(table.companyId, table.purposeId),
+  index('leads_company_sector_idx').on(table.companyId, table.sectorId),
   index('leads_company_phone_idx').on(table.companyId, table.phoneNormalized),
   index('leads_company_email_idx').on(table.companyId, table.emailNormalized),
   check('leads_contact_method_required', sql`${table.phoneNormalized} is not null or ${table.emailNormalized} is not null`),

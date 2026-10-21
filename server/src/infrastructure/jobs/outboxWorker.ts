@@ -27,6 +27,7 @@ const passwordResetPayloadSchema = z.object({
   token: z.string().min(32),
 });
 const reminderDuePayloadSchema = z.object({ occurrenceId: z.uuid() });
+const designDeadlinePayloadSchema = z.object({ jobId: z.uuid(), dueAt: z.iso.datetime({ offset: true }) });
 
 export type OutboxHandlerOptions = Omit<MailDeliveryOptions, 'mode'> & {
   mailDeliveryMode?: MailDeliveryMode;
@@ -73,6 +74,10 @@ export async function handleOutboxJob(job: ClaimedJob, options: OutboxHandlerOpt
     reminderDuePayloadSchema.parse(job.payload);
     return;
   }
+  if (job.type === 'engineering.design_deadline') {
+    designDeadlinePayloadSchema.parse(job.payload);
+    return;
+  }
   if (job.type === 'identity.password_reset_requested') {
     const mode = options.mailDeliveryMode ?? env.MAIL_DELIVERY_MODE;
     if (mode === 'disabled') {
@@ -89,6 +94,29 @@ export async function handleOutboxJob(job: ClaimedJob, options: OutboxHandlerOpt
     return;
   }
   throw new PermanentJobError(`No handler is registered for job type ${job.type}.`);
+}
+
+export async function materializeDesignDeadlineNotifications(pool: Pool, job: ClaimedJob) {
+  if (job.type !== 'engineering.design_deadline') return;
+  const { jobId, dueAt } = designDeadlinePayloadSchema.parse(job.payload);
+  await pool.query(`
+    insert into notifications (
+      company_id, recipient_user_id, type, severity, title, message,
+      link, target_type, target_id, dedup_key
+    )
+    select design.company_id, recipient.user_id, 'engineering.design_overdue',
+      'warning'::notification_severity, 'Design task overdue',
+      design.title || ' passed its design deadline before first submission.',
+      '/engineering/design-jobs/' || design.id::text, 'design_job', design.id,
+      'design-overdue:' || design.id::text || ':' || extract(epoch from design.design_due_at)::bigint
+    from design_jobs design
+    cross join lateral unnest(array[design.designer_user_id, design.design_head_user_id]) as recipient(user_id)
+    where design.id = $1 and design.company_id = $2
+      and design.designer_completed_at is null
+      and design.design_due_at = $3::timestamptz
+      and recipient.user_id is not null
+    on conflict (company_id, recipient_user_id, dedup_key) do nothing
+  `, [jobId, job.companyId, dueAt]);
 }
 
 export async function materializeNextReminder(pool: Pool, job: ClaimedJob) {
@@ -236,6 +264,9 @@ export async function processOneOutboxJob(
       // Recurrence is durable before any external call, so a provider outage cannot break the series.
       await materializeNextReminder(pool, job);
       await deliverReminderEmail(pool, job, options);
+    }
+    if (job.type === 'engineering.design_deadline') {
+      await materializeDesignDeadlineNotifications(pool, job);
     }
     await markCompleted(pool, job.id, workerId);
     logger.info({ jobId: job.id, jobType: job.type }, 'Outbox job completed');

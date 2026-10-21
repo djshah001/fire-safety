@@ -25,6 +25,7 @@ This document supersedes conflicting suggestions in the earlier implementation b
 | Improve purchasing visibility | Comparable vendor offers, justified supplier selection, approved vendor POs and receipt tracking |
 | Restrict staff access | Employees access assigned pre-sales records and assigned projects; explicit management grants are separately administered |
 | Make follow-ups durable | Recurring reminders survive API/worker restarts and appear in assigned users' queues |
+| Make assigned work visible | Design timers and private in-app notifications surface deadlines, handoffs, returns and approvals to the responsible employees |
 | Support office and site use | Usable desktop/mobile interface, light and dark themes |
 
 Pilot includes identity, permissions, necessary master data, documents, audit, approval queues, CRM, engineering/BOQ/estimating/quotations, a minimal project register and procurement through receipt/inspection. Global search, selected bulk actions, staged Excel imports and printable documents are included. Engineering owns the initial quotation screens to keep the chosen launch modules coherent.
@@ -45,8 +46,11 @@ Default role catalogue:
 | Management / authorized director | Company oversight and exception approval | Explicit company-wide business grant |
 | Sales executive | Leads, notes, reminders, customers, design request and customer evidence | Assigned opportunities/projects |
 | Sales manager | Sales review, quotation approval and assignment | Assigned portfolios/projects; wider scope only by grant |
-| Design engineer | Drawings, BOQ and estimate preparation | Assigned design jobs/projects |
-| Design head | Internal design/BOQ review | Assigned review queue and linked records |
+| Design engineer | Drawings and technical BOQ quantities | Assigned design jobs/projects |
+| Design head | Assign design engineers and review design packages | Assigned review queue and linked records |
+| Purchase executive | BOQ costing and procurement preparation | Explicitly assigned BOQs/projects |
+| Purchase manager | BOQ costing review and procurement approval | Explicitly assigned review queue/projects |
+| BOQ administrative approver | Final BOQ approval before quotation | Explicitly assigned BOQs; separate from technical administration |
 | Purchase executive | RFQs, comparisons and PO preparation | Assigned projects/requisitions |
 | Purchase manager | Selection and PO approval | Assigned purchasing queue/projects |
 | Storekeeper / receiver | Receipt and inspection entry; later stock operations | Explicit warehouse assignment and permitted project deliveries |
@@ -64,10 +68,10 @@ No self-approval. Required steps have actual assigned approvers; an empty step b
 
 1. Sales creates/qualifies a lead and records follow-ups, files and customer/site context.
 2. Confirming the lead means authorization to start free CAD design, not a sale or award. A site survey is optional.
-3. Assigned designer creates drawing revisions and a complete technical BOQ; design head reviews.
+3. Sales management assigns a design head; that head assigns the design engineer. The engineer creates drawing revisions and records quantities against the sector BOQ template.
 4. Sales records customer approval or requested revisions against the exact design package revision.
 5. Once internal review and recorded customer design approval are complete, a manager starts the linked project. This can precede quotation acceptance and customer PO.
-6. Engineering/sales prepares estimate and quotation revisions. Track unawarded/quoted/awarded commercial state independently from execution. Sales records customer acceptance/customer PO when available.
+6. Purchase prepares BOQ costing; a different purchase head reviews it and a different explicitly assigned administrative approver gives final BOQ approval. Sales then prepares quotation revisions. Track unawarded/quoted/awarded commercial state independently from execution.
 7. Assigned purchase staff compare vendor offers, obtain PO approval and record deliveries/inspection.
 8. Later modules add inventory posting, site execution, testing, the three mandatory completion documents and closure.
 
@@ -77,7 +81,7 @@ Default initial cardinality: one opportunity → one active design package → o
 
 | ID | Requirement and acceptance |
 | --- | --- |
-| CRM-01 | Capture client name, company name, contact person, phone, email, address, required service, lead source, owner, attachments, call notes and reminders. Name plus at least one contact method is required; unknown optional details remain blank. |
+| CRM-01 | Capture client name, company name, contact person, phone, email, address, required service, configurable lead purpose, configurable market sector, lead source, owner, attachments, call notes and reminders. Name plus at least one contact method is required; unknown optional details remain blank. |
 | CRM-02 | Default stages: New, Contacted, Qualified, Design authorized, Commercial negotiation, Won, Lost, On hold. Changes record actor/time; Lost requires reason. Design authorization is not Won. Won requires recorded customer commercial evidence under the configured policy. |
 | CRM-03 | Qualification creates/links customer, contact and optional site without losing the original lead history. Site is required before project start, not before initial lead entry. |
 | CRM-04 | Normalize email/phone and show possible duplicates; never auto-merge different sites/customers. Explicit merge permission, preview and audit are required for merges. |
@@ -90,10 +94,10 @@ Service categories are editable masters. Example labels such as supply, design, 
 
 | ID | Requirement and acceptance |
 | --- | --- |
-| ENG-01 | Sales requests free CAD design after lead authorization and assigns a designer/head. Optional survey does not block the flow. |
-| ENG-02 | Preserve original DWG/DXF files and separately uploaded PDF previews. Pilot offers download plus safe PDF preview, not browser CAD editing/conversion. |
+| ENG-01 | Sales head/management requests free CAD design and assigns only an eligible design head. That assigned head selects an eligible design engineer. Optional survey does not block the flow. |
+| ENG-02 | Preserve one or more original DWG/DXF files and one or more separately uploaded PDF previews per revision. Pilot offers download plus safe PDF preview, not browser CAD editing/conversion. |
 | ENG-03 | Draft → Submitted → Internally approved/Returned → Sent to customer → Customer approved/Changes requested. Submission freezes a revision. Customer change requests create another revision; evidence identifies exact package/drawing versions. |
-| ENG-04 | BOQ includes section, item/specification, optional brand/model, unit, full quantity, notes and drawing references. Cost estimate separately includes material, labour, transport, subcontracting, overhead/wastage and margin where authorized. |
+| ENG-04 | A configurable market-sector template supplies the initial BOQ item/specification/unit scope. Design engineering can enter full quantities only. The explicitly assigned purchase coster separately records material, labour, transport, subcontracting, overhead/wastage and margin; the assigned purchase head and then the assigned administrative approver approve before quotation. |
 | ENG-05 | Project start requires approved design revision/package and recorded customer design evidence. It does not require accepted quotation/PO. Authorized manager records start reason, site, assignments and initial target dates; UI shows commercial exposure separately. |
 | ENG-06 | Quotations include exact revision, full scope, item/service lines, currency, rates, discounts, configured taxes/rounding, validity, exclusions, delivery/payment terms and linked design/BOQ. Defaults: INR, 30-day validity, backend decimal calculations. Production taxes/template details require company confirmation. |
 | ENG-07 | Default sales manager approval for every quotation before external issue; no invented amount thresholds. Negotiation creates revisions; customer evidence and order link reference the accepted revision. |

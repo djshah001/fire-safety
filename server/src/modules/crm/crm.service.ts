@@ -180,6 +180,74 @@ export class CrmService {
     });
   }
 
+  listClassifications(
+    principal: AuthenticatedPrincipal,
+    type: 'lead-purposes' | 'market-sectors',
+    includeInactive: boolean,
+  ) {
+    const repository = createCrmRepository(this.database);
+    return type === 'lead-purposes'
+      ? repository.listLeadPurposes(principal.companyId, includeInactive)
+      : repository.listMarketSectors(principal.companyId, includeInactive);
+  }
+
+  async createClassification(
+    principal: AuthenticatedPrincipal,
+    type: 'lead-purposes' | 'market-sectors',
+    input: { code: string; name: string },
+    requestId: string,
+  ) {
+    return this.database.transaction(async (transaction) => {
+      const repository = createCrmRepository(transaction);
+      const values = {
+        companyId: principal.companyId,
+        code: input.code,
+        name: input.name,
+        nameNormalized: normalizeName(input.name),
+        createdByUserId: principal.userId,
+      };
+      const classification = type === 'lead-purposes'
+        ? await repository.createLeadPurpose(values)
+        : await repository.createMarketSector(values);
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: `crm.${type === 'lead-purposes' ? 'lead_purpose' : 'market_sector'}_created`,
+        targetType: type === 'lead-purposes' ? 'lead_purpose' : 'market_sector',
+        targetId: classification.id,
+        requestId,
+      });
+      return classification;
+    });
+  }
+
+  async deactivateClassification(
+    principal: AuthenticatedPrincipal,
+    type: 'lead-purposes' | 'market-sectors',
+    id: string,
+    expectedVersion: number,
+    reason: string,
+    requestId: string,
+  ) {
+    return this.database.transaction(async (transaction) => {
+      const repository = createCrmRepository(transaction);
+      const classification = type === 'lead-purposes'
+        ? await repository.deactivateLeadPurpose(principal.companyId, id, expectedVersion, new Date())
+        : await repository.deactivateMarketSector(principal.companyId, id, expectedVersion, new Date());
+      if (!classification) throw new ConflictError('The classification changed or is already inactive. Refresh and try again.');
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: `crm.${type === 'lead-purposes' ? 'lead_purpose' : 'market_sector'}_deactivated`,
+        targetType: type === 'lead-purposes' ? 'lead_purpose' : 'market_sector',
+        targetId: id,
+        requestId,
+        metadata: { reason },
+      });
+      return classification;
+    });
+  }
+
   listCustomers(principal: AuthenticatedPrincipal, input: {
     status?: 'active' | 'inactive'; search?: string; page: number; pageSize: number;
     sort: 'name' | 'status' | 'updatedAt'; direction: 'asc' | 'desc';
@@ -392,6 +460,14 @@ export class CrmService {
             ? await repository.findServiceCategoryByCode(principal.companyId, categoryCode)
             : undefined;
           if (!category) issues.push({ field: 'service_category_code', message: 'Choose an active service category code.' });
+          const purposeCode = importValue(row.payload, 'purpose_code')?.toUpperCase();
+          const sectorCode = importValue(row.payload, 'sector_code')?.toUpperCase();
+          const [purpose, sector] = await Promise.all([
+            purposeCode ? repository.findLeadPurposeByCode(principal.companyId, purposeCode) : undefined,
+            sectorCode ? repository.findMarketSectorByCode(principal.companyId, sectorCode) : undefined,
+          ]);
+          if (!purpose) issues.push({ field: 'purpose_code', message: 'Choose an active lead purpose code.' });
+          if (!sector) issues.push({ field: 'sector_code', message: 'Choose an active market sector code.' });
           const ownerEmail = normalizeEmail(importValue(row.payload, 'owner_email'));
           const owner = ownerEmail
             ? await repository.findActiveUserByEmail(principal.companyId, ownerEmail)
@@ -409,6 +485,8 @@ export class CrmService {
             address: importValue(row.payload, 'address'),
             source: importValue(row.payload, 'source') ?? '',
             serviceCategoryId: category?.id ?? 'invalid',
+            purposeId: purpose?.id ?? 'invalid',
+            sectorId: sector?.id ?? 'invalid',
             ownerUserId: owner?.id,
           });
           if (!parsed.success) issues.push(...zodIssues(parsed.error));
@@ -615,6 +693,14 @@ export class CrmService {
     const categoryCode = importValue(payload, 'service_category_code')?.toUpperCase() ?? '';
     const category = await lookupRepository.findServiceCategoryByCode(principal.companyId, categoryCode);
     if (!category) throw validationError('The service category is no longer active.');
+    const purposeCode = importValue(payload, 'purpose_code')?.toUpperCase() ?? '';
+    const sectorCode = importValue(payload, 'sector_code')?.toUpperCase() ?? '';
+    const [purpose, sector] = await Promise.all([
+      lookupRepository.findLeadPurposeByCode(principal.companyId, purposeCode),
+      lookupRepository.findMarketSectorByCode(principal.companyId, sectorCode),
+    ]);
+    if (!purpose) throw validationError('The lead purpose is no longer active.');
+    if (!sector) throw validationError('The market sector is no longer active.');
     const ownerEmail = normalizeEmail(importValue(payload, 'owner_email'));
     const owner = ownerEmail
       ? await lookupRepository.findActiveUserByEmail(principal.companyId, ownerEmail)
@@ -632,6 +718,8 @@ export class CrmService {
       address: importValue(payload, 'address'),
       source: importValue(payload, 'source') ?? '',
       serviceCategoryId: category.id,
+      purposeId: purpose.id,
+      sectorId: sector.id,
       ownerUserId: owner.id,
     });
     const phoneNormalized = normalizePhone(input.phone);
@@ -654,6 +742,8 @@ export class CrmService {
         address: input.address,
         source: input.source,
         serviceCategoryId: category.id,
+        purposeId: purpose.id,
+        sectorId: sector.id,
         ownerUserId: owner.id,
         createdByUserId: principal.userId,
       });
@@ -707,11 +797,15 @@ export class CrmService {
     }
     const access = crmAccess(principal);
     const repository = createCrmRepository(this.database);
-    const [category, owner] = await Promise.all([
+    const [category, purpose, sector, owner] = await Promise.all([
       repository.findServiceCategory(principal.companyId, input.serviceCategoryId),
+      repository.findLeadPurpose(principal.companyId, input.purposeId),
+      repository.findMarketSector(principal.companyId, input.sectorId),
       repository.findActiveUser(principal.companyId, ownerUserId),
     ]);
     if (!category || category.status !== 'active') throw validationError('Choose an active service category.');
+    if (!purpose || purpose.status !== 'active') throw validationError('Choose an active lead purpose.');
+    if (!sector || sector.status !== 'active') throw validationError('Choose an active market sector.');
     if (!owner) throw validationError('Choose an active employee as lead owner.');
 
     if (input.customerId) {
@@ -747,6 +841,8 @@ export class CrmService {
         address: input.address,
         source: input.source,
         serviceCategoryId: input.serviceCategoryId,
+        purposeId: input.purposeId,
+        sectorId: input.sectorId,
         ownerUserId,
         customerId: input.customerId,
         primaryContactId: input.primaryContactId,
@@ -767,7 +863,7 @@ export class CrmService {
         targetType: 'lead',
         targetId: lead!.id,
         requestId,
-        metadata: { leadNumber, ownerUserId },
+        metadata: { leadNumber, ownerUserId, purposeId: input.purposeId, sectorId: input.sectorId },
       });
       return lead!.id;
     });
@@ -957,7 +1053,7 @@ export class CrmService {
     if (existing) {
       if (
         lead.stage === 'design_authorized' && existing.title === input.title &&
-        existing.designerUserId === input.designerUserId && existing.designHeadUserId === input.designHeadUserId &&
+        existing.designHeadUserId === input.designHeadUserId &&
         existing.surveyRequested === input.surveyRequested && existing.authorizationNotes === input.authorizationNotes
       ) return { designJob: existing, replayed: true };
       throw new ConflictError('This lead already has a different free-design authorization.');
@@ -968,11 +1064,7 @@ export class CrmService {
     const opportunity = await repository.findOpportunityByLead(principal.companyId, leadId);
     if (!opportunity) throw new ConflictError('The qualified lead is missing its opportunity.');
 
-    const [designer, designHead] = await Promise.all([
-      repository.findEligibleUser(principal.companyId, input.designerUserId, 'engineering.design.write'),
-      repository.findEligibleUser(principal.companyId, input.designHeadUserId, 'engineering.design.review'),
-    ]);
-    if (!designer) throw validationError('Choose an active employee eligible for design work.', { field: 'designerUserId' });
+    const designHead = await repository.findEligibleUser(principal.companyId, input.designHeadUserId, 'engineering.design.review');
     if (!designHead) throw validationError('Choose an active employee eligible for design review.', { field: 'designHeadUserId' });
 
     return this.database.transaction(async (transaction) => {
@@ -987,8 +1079,9 @@ export class CrmService {
         leadId,
         opportunityId: opportunity.id,
         title: input.title,
-        designerUserId: input.designerUserId,
+        designerUserId: null,
         designHeadUserId: input.designHeadUserId,
+        status: 'awaiting_designer',
         surveyRequested: input.surveyRequested,
         authorizationNotes: input.authorizationNotes,
         authorizedByUserId: principal.userId,
@@ -1006,7 +1099,6 @@ export class CrmService {
         metadata: {
           leadId,
           opportunityId: opportunity.id,
-          designerUserId: input.designerUserId,
           designHeadUserId: input.designHeadUserId,
           surveyRequested: input.surveyRequested,
           commercialState: opportunity.commercialState,

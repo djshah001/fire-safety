@@ -83,3 +83,28 @@ export const outboxJobs = pgTable('outbox_jobs', {
   check('outbox_jobs_attempts_valid', sql`${table.attempts} >= 0 and ${table.maxAttempts} > 0 and ${table.attempts} <= ${table.maxAttempts}`),
   check('outbox_jobs_payload_version_positive', sql`${table.payloadVersion} > 0`),
 ]);
+
+export const notificationSeverityEnum = pgEnum('notification_severity', ['info', 'success', 'warning']);
+
+export const notifications = pgTable('notifications', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  recipientUserId: uuid('recipient_user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  type: varchar('type', { length: 80 }).notNull(),
+  severity: notificationSeverityEnum('severity').notNull().default('info'),
+  title: varchar('title', { length: 160 }).notNull(),
+  message: varchar('message', { length: 500 }).notNull(),
+  link: varchar('link', { length: 500 }),
+  targetType: varchar('target_type', { length: 80 }),
+  targetId: uuid('target_id'),
+  dedupKey: varchar('dedup_key', { length: 180 }).notNull(),
+  readAt: timestamp('read_at', { withTimezone: true }),
+  rowVersion: integer('row_version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('notifications_recipient_dedup_uidx').on(table.companyId, table.recipientUserId, table.dedupKey),
+  index('notifications_recipient_created_idx').on(table.companyId, table.recipientUserId, table.createdAt),
+  index('notifications_recipient_unread_idx').on(table.companyId, table.recipientUserId, table.readAt, table.createdAt),
+  check('notifications_row_version_positive', sql`${table.rowVersion} > 0`),
+  check('notifications_target_consistent', sql`(${table.targetType} is null) = (${table.targetId} is null)`),
+]);

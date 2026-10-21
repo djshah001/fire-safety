@@ -12,6 +12,8 @@ import {
   bulkReminderInputSchema,
   completeReminderSchema,
   commitImportSchema,
+  classificationInputSchema,
+  classificationTypeParamsSchema,
   contactInputSchema,
   customerChildParamsSchema,
   customerInputSchema,
@@ -46,6 +48,8 @@ function serviceCategoryDto(category: {
     rowVersion: category.rowVersion,
   };
 }
+
+const classificationDto = serviceCategoryDto;
 
 function contactDto(contact: {
   id: string; name: string; jobTitle: string | null; phone: string | null; email: string | null;
@@ -179,7 +183,7 @@ function attachmentDto(attachment: {
 
 function designJobDto(job: {
   id: string; leadId: string; opportunityId: string; title: string; status: string;
-  designerUserId: string; designHeadUserId: string; surveyRequested: boolean;
+  designerUserId: string | null; designHeadUserId: string; surveyRequested: boolean;
   authorizationNotes: string; authorizedByUserId: string; authorizedAt: Date; rowVersion: number;
 }) {
   return {
@@ -231,6 +235,29 @@ export function createCrmRouter() {
       getPrincipal(request), id, input.expectedVersion, input.reason, getRequestId(request),
     );
     sendData(request, response, { category: serviceCategoryDto(category) });
+  });
+
+  router.get('/classifications/:type', requirePermission('crm.service_category.read'), async (request, response) => {
+    const { type } = classificationTypeParamsSchema.parse(request.params);
+    const includeInactive = request.query.includeInactive === 'true';
+    const items = await crmService.listClassifications(getPrincipal(request), type, includeInactive);
+    sendData(request, response, { items: items.map(classificationDto) });
+  });
+  router.post('/classifications/:type', requireCsrf, requirePermission('crm.service_category.manage'), async (request, response) => {
+    const { type } = classificationTypeParamsSchema.parse(request.params);
+    const classification = await crmService.createClassification(
+      getPrincipal(request), type, classificationInputSchema.parse(request.body), getRequestId(request),
+    );
+    sendData(request, response, { classification: classificationDto(classification) }, 201);
+  });
+  router.post('/classifications/:type/:id/deactivate', requireCsrf, requirePermission('crm.service_category.manage'), async (request, response) => {
+    const { type } = classificationTypeParamsSchema.parse(request.params);
+    const { id } = idParamsSchema.parse(request.params);
+    const input = versionedReasonSchema.parse(request.body);
+    const classification = await crmService.deactivateClassification(
+      getPrincipal(request), type, id, input.expectedVersion, input.reason, getRequestId(request),
+    );
+    sendData(request, response, { classification: classificationDto(classification) });
   });
 
   router.get('/customers', requirePermission('crm.customer.read'), async (request, response) => {

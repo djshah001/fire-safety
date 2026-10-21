@@ -62,6 +62,10 @@ export const serviceCategoryInputSchema = z.object({
   code: z.string().trim().min(2).max(40).regex(/^[A-Za-z0-9_-]+$/).transform((value) => value.toUpperCase()),
   name: z.string().trim().min(2).max(120),
 });
+export const classificationInputSchema = serviceCategoryInputSchema;
+export const classificationTypeParamsSchema = z.object({
+  type: z.enum(['lead-purposes', 'market-sectors']),
+});
 
 export const idParamsSchema = z.object({ id: z.uuid() });
 export const crmImportTypeSchema = z.enum(['customers', 'open_leads']);
@@ -81,6 +85,8 @@ export const leadInputSchema = z.object({
   address: optionalText(500),
   source: z.string().trim().min(2).max(100),
   serviceCategoryId: z.uuid(),
+  purposeId: z.uuid(),
+  sectorId: z.uuid(),
   ownerUserId: z.uuid().optional(),
   customerId: z.uuid().optional(),
   primaryContactId: z.uuid().optional(),
@@ -126,13 +132,9 @@ export const qualifyLeadInputSchema = z.object({
 export const authorizeDesignInputSchema = z.object({
   expectedVersion: z.number().int().positive(),
   title: z.string().trim().min(2).max(200),
-  designerUserId: z.uuid(),
   designHeadUserId: z.uuid(),
   surveyRequested: z.boolean().default(false),
   authorizationNotes: z.string().trim().min(3).max(1_000),
-}).refine((value) => value.designerUserId !== value.designHeadUserId, {
-  message: 'The designer and design head must be different employees.',
-  path: ['designHeadUserId'],
 });
 
 export const designAssigneeQuerySchema = z.object({

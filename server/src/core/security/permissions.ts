@@ -15,10 +15,21 @@ export const permissionCatalog = {
   'crm.lead.authorize_design': 'Authorize free design for a qualified assigned lead and create its design handoff.',
   'crm.opportunity.read': 'View explicitly assigned opportunities.',
   'engineering.design.write': 'Work on explicitly assigned design jobs.',
+  'engineering.design.assign_engineer': 'Assign an eligible design engineer to a design job where the employee is the assigned design head.',
   'engineering.design.review': 'Review explicitly assigned design jobs; authors cannot review their own revisions.',
   'engineering.design.customer_decision': 'Record customer decisions and evidence for design jobs linked to assigned CRM work.',
   'engineering.estimate.read': 'View internal cost estimates for assigned engineering work.',
   'engineering.estimate.write': 'Prepare internal cost estimates for assigned engineering work.',
+  'engineering.boq.template.manage': 'Configure sector-based BOQ item and approval templates.',
+  'engineering.boq.purchase_review': 'Review a costed BOQ as its explicitly assigned purchase head.',
+  'engineering.boq.final_review': 'Perform the final BOQ review as its explicitly assigned administrative approver.',
+  'engineering.quotation.read': 'View quotation revisions for assigned opportunities.',
+  'engineering.quotation.write': 'Prepare quotation revisions for assigned opportunities.',
+  'engineering.quotation.approve': 'Approve quotation revisions prepared by a different employee.',
+  'engineering.quotation.issue': 'Issue approved quotation revisions using the configured document mode.',
+  'engineering.quotation.customer_decision': 'Record customer quotation decisions and evidence.',
+  'engineering.payment_plan.read': 'View cash and non-cash payment plans for assigned opportunities.',
+  'engineering.payment_plan.write': 'Configure cash and non-cash payment plans for assigned opportunities.',
   'procurement.vendor.read': 'View operational vendor identity and contact fields.',
   'procurement.vendor.manage': 'Create, update, and deactivate vendor master records.',
   'procurement.item.read': 'View item, category, and unit master records.',
@@ -42,29 +53,33 @@ export const salesExecutivePermissionCodes: PermissionCode[] = [
   'crm.lead.read',
   'crm.lead.write',
   'crm.lead.qualify',
-  'crm.lead.authorize_design',
   'crm.opportunity.read',
   'engineering.design.customer_decision',
+  'engineering.quotation.read',
+  'engineering.quotation.write',
+  'engineering.quotation.issue',
+  'engineering.quotation.customer_decision',
 ];
 
 export const salesManagerPermissionCodes: PermissionCode[] = [
   ...salesExecutivePermissionCodes,
   'crm.service_category.manage',
   'crm.lead.assign',
-  'engineering.estimate.read',
+  'crm.lead.authorize_design',
+  'engineering.quotation.approve',
+  'engineering.payment_plan.read',
+  'engineering.payment_plan.write',
 ];
 
 export const designEngineerPermissionCodes: PermissionCode[] = [
   'engineering.design.write',
-  'engineering.estimate.read',
-  'engineering.estimate.write',
 ];
 
 export const designHeadPermissionCodes: PermissionCode[] = [
   'engineering.design.write',
+  'engineering.design.assign_engineer',
   'engineering.design.review',
-  'engineering.estimate.read',
-  'engineering.estimate.write',
+  'engineering.quotation.read',
 ];
 
 export const purchaseExecutivePermissionCodes: PermissionCode[] = [
@@ -72,10 +87,23 @@ export const purchaseExecutivePermissionCodes: PermissionCode[] = [
   'procurement.vendor.manage',
   'procurement.item.read',
   'procurement.item.manage',
+  'engineering.estimate.read',
+  'engineering.estimate.write',
 ];
 
 export const purchaseManagerPermissionCodes: PermissionCode[] = [
-  ...purchaseExecutivePermissionCodes,
+  'procurement.vendor.read',
+  'procurement.vendor.manage',
+  'procurement.item.read',
+  'procurement.item.manage',
+  'engineering.estimate.read',
+  'engineering.boq.template.manage',
+  'engineering.boq.purchase_review',
+];
+
+export const boqAdminApproverPermissionCodes: PermissionCode[] = [
+  'engineering.estimate.read',
+  'engineering.boq.final_review',
 ];
 
 export const receiverPermissionCodes: PermissionCode[] = [

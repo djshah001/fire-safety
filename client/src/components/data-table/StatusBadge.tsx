@@ -10,10 +10,10 @@ const tones = {
 };
 
 function toneFor(status: string): keyof typeof tones {
-  if (['won', 'active', 'completed', 'awarded', 'approved', 'design_authorized', 'internally_approved', 'customer_approved'].includes(status)) return 'success';
-  if (['lost', 'cancelled', 'inactive', 'failed'].includes(status)) return 'danger';
-  if (['on_hold', 'pending', 'unawarded', 'returned', 'changes_requested'].includes(status)) return 'attention';
-  if (['contacted', 'qualified', 'quoted', 'commercial_negotiation', 'committing', 'draft', 'under_review', 'submitted', 'sent_to_customer'].includes(status)) return 'progress';
+  if (['won', 'active', 'completed', 'awarded', 'approved', 'accepted', 'design_authorized', 'internally_approved', 'customer_approved'].includes(status)) return 'success';
+  if (['lost', 'cancelled', 'inactive', 'failed', 'declined'].includes(status)) return 'danger';
+  if (['on_hold', 'pending', 'unawarded', 'returned', 'changes_requested', 'awaiting_designer'].includes(status)) return 'attention';
+  if (['contacted', 'qualified', 'quoted', 'commercial_negotiation', 'committing', 'draft', 'under_review', 'submitted', 'costing', 'purchase_review', 'admin_review', 'sent_to_customer', 'issued'].includes(status)) return 'progress';
   return 'neutral';
 }
 

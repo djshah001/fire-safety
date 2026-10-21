@@ -1,6 +1,8 @@
 import { and, asc, count, desc, eq, exists, ilike, max, or, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
 import {
+  boqRevisions,
+  designDeadlineExtensions,
   designCustomerDecisions,
   designJobs,
   designPackageRevisions,
@@ -9,6 +11,7 @@ import {
   leadMembers,
   leads,
   opportunityMembers,
+  outboxJobs,
   users,
 } from '../../infrastructure/database/schema/index.js';
 
@@ -24,6 +27,15 @@ function accessCondition(executor: DatabaseExecutor, access: DesignJobAccess) {
     exists(executor.select({ value: sql`1` }).from(opportunityMembers).where(and(
       eq(opportunityMembers.opportunityId, designJobs.opportunityId), eq(opportunityMembers.companyId, access.companyId), eq(opportunityMembers.userId, access.userId),
     ))),
+    exists(executor.select({ value: sql`1` }).from(boqRevisions).where(and(
+      eq(boqRevisions.designJobId, designJobs.id),
+      eq(boqRevisions.companyId, access.companyId),
+      or(
+        eq(boqRevisions.costingUserId, access.userId),
+        eq(boqRevisions.purchaseHeadUserId, access.userId),
+        eq(boqRevisions.adminApproverUserId, access.userId),
+      ),
+    ))),
   );
 }
 
@@ -35,6 +47,10 @@ const jobFields = {
   status: designJobs.status,
   designerUserId: designJobs.designerUserId,
   designHeadUserId: designJobs.designHeadUserId,
+  designerAssignedAt: designJobs.designerAssignedAt,
+  designDueAt: designJobs.designDueAt,
+  bufferExtensionsUsed: designJobs.bufferExtensionsUsed,
+  designerCompletedAt: designJobs.designerCompletedAt,
   surveyRequested: designJobs.surveyRequested,
   authorizationNotes: designJobs.authorizationNotes,
   authorizedAt: designJobs.authorizedAt,
@@ -62,11 +78,11 @@ export function createEngineeringRepository(executor: DatabaseExecutor) {
     async findJob(access: DesignJobAccess, jobId: string) {
       const [job] = await executor.select({
         ...jobFields,
-        designerName: sql<string>`designer.name`,
+        designerName: sql<string | null>`designer.name`,
         designHeadName: sql<string>`design_head.name`,
       }).from(designJobs)
         .innerJoin(leads, eq(leads.id, designJobs.leadId))
-        .innerJoin(sql`${users} designer`, sql`designer.id = ${designJobs.designerUserId}`)
+        .leftJoin(sql`${users} designer`, sql`designer.id = ${designJobs.designerUserId}`)
         .innerJoin(sql`${users} design_head`, sql`design_head.id = ${designJobs.designHeadUserId}`)
         .where(and(eq(designJobs.id, jobId), eq(designJobs.companyId, access.companyId), accessCondition(executor, access))).limit(1);
       return job;
@@ -76,6 +92,12 @@ export function createEngineeringRepository(executor: DatabaseExecutor) {
       return executor.select().from(designPackageRevisions).where(and(
         eq(designPackageRevisions.companyId, companyId), eq(designPackageRevisions.designJobId, jobId),
       )).orderBy(desc(designPackageRevisions.revisionNumber));
+    },
+
+    async listDeadlineExtensions(companyId: string, jobId: string) {
+      return executor.select().from(designDeadlineExtensions).where(and(
+        eq(designDeadlineExtensions.companyId, companyId), eq(designDeadlineExtensions.designJobId, jobId),
+      )).orderBy(desc(designDeadlineExtensions.sequenceNumber));
     },
 
     async nextRevisionNumber(companyId: string, jobId: string) {
@@ -117,6 +139,73 @@ export function createEngineeringRepository(executor: DatabaseExecutor) {
 
     async updateJobStatus(companyId: string, jobId: string, expectedVersion: number, status: string, now: Date) {
       const [job] = await executor.update(designJobs).set({ status, rowVersion: sql`${designJobs.rowVersion} + 1`, updatedAt: now }).where(and(
+        eq(designJobs.companyId, companyId), eq(designJobs.id, jobId), eq(designJobs.rowVersion, expectedVersion),
+      )).returning();
+      return job;
+    },
+
+    async assignDesigner(companyId: string, jobId: string, expectedVersion: number, designerUserId: string, now: Date, dueAt: Date) {
+      const [job] = await executor.update(designJobs).set({
+        designerUserId,
+        designerAssignedAt: now,
+        designDueAt: dueAt,
+        bufferExtensionsUsed: 0,
+        designerCompletedAt: null,
+        status: 'authorized',
+        rowVersion: sql`${designJobs.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(designJobs.companyId, companyId),
+        eq(designJobs.id, jobId),
+        eq(designJobs.rowVersion, expectedVersion),
+        eq(designJobs.status, 'awaiting_designer'),
+        sql`${designJobs.designerUserId} is null`,
+      )).returning();
+      return job;
+    },
+
+    async useDeadlineBuffer(companyId: string, jobId: string, designerUserId: string, expectedVersion: number, now: Date) {
+      const [job] = await executor.update(designJobs).set({
+        designDueAt: sql`${designJobs.designDueAt} + interval '3 days'`,
+        bufferExtensionsUsed: sql`${designJobs.bufferExtensionsUsed} + 1`,
+        rowVersion: sql`${designJobs.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(designJobs.companyId, companyId),
+        eq(designJobs.id, jobId),
+        eq(designJobs.designerUserId, designerUserId),
+        eq(designJobs.rowVersion, expectedVersion),
+        sql`${designJobs.designerCompletedAt} is null`,
+        sql`${designJobs.designDueAt} is not null`,
+        sql`${designJobs.bufferExtensionsUsed} < 3`,
+      )).returning();
+      return job;
+    },
+
+    async createDeadlineExtension(input: typeof designDeadlineExtensions.$inferInsert) {
+      const [extension] = await executor.insert(designDeadlineExtensions).values(input).returning();
+      return extension;
+    },
+
+    async enqueueDeadline(companyId: string, jobId: string, dueAt: Date) {
+      const epoch = Math.floor(dueAt.getTime() / 1_000);
+      const [job] = await executor.insert(outboxJobs).values({
+        companyId,
+        type: 'engineering.design_deadline',
+        payload: { jobId, dueAt: dueAt.toISOString() },
+        dedupKey: `design-deadline:${jobId}:${epoch}`,
+        dueAt,
+      }).onConflictDoNothing().returning();
+      return job;
+    },
+
+    async submitJobForReview(companyId: string, jobId: string, expectedVersion: number, now: Date) {
+      const [job] = await executor.update(designJobs).set({
+        status: 'under_review',
+        designerCompletedAt: sql`coalesce(${designJobs.designerCompletedAt}, ${now})`,
+        rowVersion: sql`${designJobs.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
         eq(designJobs.companyId, companyId), eq(designJobs.id, jobId), eq(designJobs.rowVersion, expectedVersion),
       )).returning();
       return job;

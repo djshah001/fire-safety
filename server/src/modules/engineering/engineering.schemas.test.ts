@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRevisionSchema, customerDecisionSchema, designJobListQuerySchema, reviewRevisionSchema } from './engineering.schemas.js';
+import { createRevisionSchema, customerDecisionSchema, designJobListQuerySchema, reviewRevisionSchema, useDesignBufferSchema } from './engineering.schemas.js';
 
 describe('engineering input validation', () => {
   it('bounds server pagination and allowlists sorting', () => {
@@ -23,5 +23,12 @@ describe('engineering input validation', () => {
     expect(() => customerDecisionSchema.parse({ decision: 'approved', evidenceReference: ' ', expectedVersion: 1 })).toThrow();
     expect(customerDecisionSchema.parse({ decision: 'changes_requested', evidenceReference: 'Email dated 2026-10-11', expectedVersion: 2 }))
       .toMatchObject({ decision: 'changes_requested', evidenceReference: 'Email dated 2026-10-11' });
+  });
+
+  it('requires a reason and optimistic version for a deadline buffer', () => {
+    expect(useDesignBufferSchema.parse({ reason: 'Waiting for revised floor plan', expectedVersion: 2 }))
+      .toEqual({ reason: 'Waiting for revised floor plan', expectedVersion: 2 });
+    expect(() => useDesignBufferSchema.parse({ reason: ' ', expectedVersion: 2 })).toThrow();
+    expect(() => useDesignBufferSchema.parse({ reason: 'Valid reason', expectedVersion: 0 })).toThrow();
   });
 });

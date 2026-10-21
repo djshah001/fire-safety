@@ -2,6 +2,7 @@ import { count, eq } from 'drizzle-orm';
 import { env } from '../config/env.js';
 import {
   permissionCatalog,
+  boqAdminApproverPermissionCodes,
   designEngineerPermissionCodes,
   designHeadPermissionCodes,
   purchaseExecutivePermissionCodes,
@@ -16,6 +17,8 @@ import { closeDatabase, db } from '../infrastructure/database/db.js';
 import {
   branches,
   companies,
+  leadPurposes,
+  marketSectors,
   permissions,
   rolePermissions,
   roles,
@@ -45,10 +48,35 @@ const roleDefinitions = [
   ['design_head', 'Design head', 'Engineering review role; no approver identity is implied.'],
   ['purchase_executive', 'Purchase executive', 'Procurement preparation role.'],
   ['purchase_manager', 'Purchase manager', 'Procurement review role; no approval policy is implied.'],
+  ['boq_admin_approver', 'BOQ administrative approver', 'Explicit final BOQ approval role; not implied by system administration.'],
   ['receiver', 'Receiver / storekeeper', 'Delivery receipt role; inventory permission is not implied.'],
   ['project_manager', 'Project manager', 'Project role reserved for later configuration.'],
   ['quality_reviewer', 'Quality reviewer', 'Quality role reserved for later configuration.'],
   ['accountant', 'Accountant', 'Finance role with no permissions until finance scope is approved.'],
+] as const;
+
+const defaultLeadPurposes = [
+  ['NEW_PROJECT', 'New project'],
+  ['RENEWAL', 'Renewal'],
+  ['UPGRADE_RETROFIT', 'Upgrade / retrofit'],
+  ['MAINTENANCE_SERVICE', 'Maintenance / service'],
+  ['EXPANSION_EXTENSION', 'Expansion / extension'],
+  ['COMPLIANCE_AUDIT', 'Compliance / audit'],
+  ['REPAIR_REPLACEMENT', 'Repair / replacement'],
+  ['OTHER', 'Other'],
+] as const;
+
+const defaultMarketSectors = [
+  ['INDUSTRIAL', 'Industrial'],
+  ['COMMERCIAL', 'Commercial'],
+  ['RESIDENTIAL', 'Residential'],
+  ['INSTITUTIONAL', 'Institutional'],
+  ['HEALTHCARE', 'Healthcare'],
+  ['HOSPITALITY', 'Hospitality'],
+  ['WAREHOUSE_LOGISTICS', 'Warehouse / logistics'],
+  ['INFRASTRUCTURE_PUBLIC', 'Infrastructure / public'],
+  ['MIXED_USE', 'Mixed use'],
+  ['OTHER', 'Other'],
 ] as const;
 
 async function bootstrap() {
@@ -88,6 +116,7 @@ async function bootstrap() {
     const designHeadRole = createdRoles.find((role) => role.code === 'design_head')!;
     const purchaseExecutiveRole = createdRoles.find((role) => role.code === 'purchase_executive')!;
     const purchaseManagerRole = createdRoles.find((role) => role.code === 'purchase_manager')!;
+    const boqAdminApproverRole = createdRoles.find((role) => role.code === 'boq_admin_approver')!;
     const receiverRole = createdRoles.find((role) => role.code === 'receiver')!;
     await transaction.insert(rolePermissions).values([
       ...systemAdminPermissionCodes.map((permissionCode) => ({ roleId: adminRole.id, permissionCode })),
@@ -97,6 +126,7 @@ async function bootstrap() {
       ...designHeadPermissionCodes.map((permissionCode) => ({ roleId: designHeadRole.id, permissionCode })),
       ...purchaseExecutivePermissionCodes.map((permissionCode) => ({ roleId: purchaseExecutiveRole.id, permissionCode })),
       ...purchaseManagerPermissionCodes.map((permissionCode) => ({ roleId: purchaseManagerRole.id, permissionCode })),
+      ...boqAdminApproverPermissionCodes.map((permissionCode) => ({ roleId: boqAdminApproverRole.id, permissionCode })),
       ...receiverPermissionCodes.map((permissionCode) => ({ roleId: receiverRole.id, permissionCode })),
     ]);
     const [admin] = await transaction.insert(users).values({
@@ -107,6 +137,20 @@ async function bootstrap() {
       passwordHash,
       mustChangePassword: true,
     }).returning({ id: users.id, email: users.email });
+    await transaction.insert(leadPurposes).values(defaultLeadPurposes.map(([code, name]) => ({
+      companyId: company!.id,
+      code,
+      name,
+      nameNormalized: name.toLowerCase(),
+      createdByUserId: admin!.id,
+    })));
+    await transaction.insert(marketSectors).values(defaultMarketSectors.map(([code, name]) => ({
+      companyId: company!.id,
+      code,
+      name,
+      nameNormalized: name.toLowerCase(),
+      createdByUserId: admin!.id,
+    })));
     await transaction.insert(userRoleAssignments).values({
       companyId: company!.id,
       userId: admin!.id,

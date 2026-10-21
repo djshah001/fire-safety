@@ -9,11 +9,21 @@ export const designFileParamsSchema = z.object({ jobId: uuid, revisionId: uuid, 
 
 export const designJobListQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
-  status: z.enum(['authorized', 'draft', 'under_review', 'returned', 'internally_approved', 'sent_to_customer', 'customer_approved', 'changes_requested']).optional(),
+  status: z.enum(['awaiting_designer', 'authorized', 'draft', 'under_review', 'returned', 'internally_approved', 'sent_to_customer', 'customer_approved', 'changes_requested']).optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(10).max(100).default(20),
   sort: z.enum(['title', 'status', 'updatedAt']).default('updatedAt'),
   direction: z.enum(['asc', 'desc']).default('desc'),
+});
+
+export const assignDesignerSchema = z.object({
+  designerUserId: uuid,
+  expectedVersion,
+});
+
+export const useDesignBufferSchema = z.object({
+  reason: z.string().trim().min(3).max(500),
+  expectedVersion,
 });
 
 export const createRevisionSchema = z.object({

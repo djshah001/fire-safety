@@ -18,6 +18,8 @@ import {
   DraftingCompass,
   ClipboardPenLine,
   ClipboardList,
+  FileText,
+  Bell,
 } from "lucide-react";
 import type { CSSProperties } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -25,6 +27,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import type { CurrentUser } from "@/api/auth";
 import { logout } from "@/api/auth";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { NotificationBell } from "@/features/notifications/NotificationBell";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   Collapsible,
@@ -72,6 +75,7 @@ type NavItem = {
 const pageTitles: Record<string, string> = {
   "/": "Overview",
   "/account": "My account",
+  "/notifications": "Notifications",
   "/admin/employees": "Employees",
   "/admin/roles": "Roles & permissions",
   "/crm/customers": "Customers",
@@ -80,6 +84,8 @@ const pageTitles: Record<string, string> = {
   "/crm/opportunities": "Opportunities",
   "/engineering/design-jobs": "Design jobs",
   "/engineering/boqs": "BOQ & estimates",
+  "/engineering/quotations": "Quotations",
+  "/masters/boq-templates": "BOQ templates",
   "/masters/vendors": "Vendors",
   "/masters/items": "Items",
   "/masters/item-categories": "Item categories",
@@ -97,8 +103,10 @@ function initials(name: string) {
 
 function isPathActive(pathname: string, to: string) {
   const isBoqWorkspace = /^\/engineering\/design-jobs\/[^/]+\/boq$/.test(pathname);
+  const isQuotationWorkspace = /^\/engineering\/design-jobs\/[^/]+\/quotations$/.test(pathname);
   if (to === "/engineering/boqs") return pathname === to || isBoqWorkspace;
-  if (to === "/engineering/design-jobs" && isBoqWorkspace) return false;
+  if (to === "/engineering/quotations") return pathname === to || isQuotationWorkspace;
+  if (to === "/engineering/design-jobs" && (isBoqWorkspace || isQuotationWorkspace)) return false;
   return to === "/"
     ? pathname === "/"
     : pathname === to || pathname.startsWith(`${to}/`);
@@ -107,6 +115,9 @@ function isPathActive(pathname: string, to: string) {
 function currentPageTitle(pathname: string) {
   if (/^\/engineering\/design-jobs\/[^/]+\/boq$/.test(pathname)) {
     return "BOQ & estimate";
+  }
+  if (/^\/engineering\/design-jobs\/[^/]+\/quotations$/.test(pathname)) {
+    return "Quotation workspace";
   }
 
   const match = Object.entries(pageTitles)
@@ -338,6 +349,12 @@ export function AppShell({ user }: { user: CurrentUser }) {
       visible: ["engineering.design.write", "engineering.design.review", "engineering.design.customer_decision", "engineering.estimate.read"]
         .some((permission) => user.permissions.includes(permission)),
     },
+    {
+      to: "/engineering/quotations",
+      label: "Quotations",
+      icon: FileText,
+      visible: user.permissions.includes("engineering.quotation.read"),
+    },
   ];
 
   const masters: NavItem[] = [
@@ -345,6 +362,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
     { to: "/masters/items", label: "Items", icon: Boxes, visible: user.permissions.includes("procurement.item.read") },
     { to: "/masters/item-categories", label: "Item categories", icon: Tags, visible: user.permissions.includes("procurement.item.read") },
     { to: "/masters/units", label: "Units", icon: Ruler, visible: user.permissions.includes("procurement.item.read") },
+    { to: "/masters/boq-templates", label: "BOQ templates", icon: ClipboardList, visible: user.permissions.includes("engineering.boq.template.manage") },
   ];
 
   const overview: NavItem = {
@@ -353,6 +371,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
     icon: LayoutDashboard,
     visible: true,
   };
+  const notifications: NavItem = { to: "/notifications", label: "Notifications", icon: Bell, visible: true };
 
   const pageTitle = currentPageTitle(location.pathname);
 
@@ -405,6 +424,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
             <SidebarGroupContent>
               <SidebarMenu>
                 <NavigationLink item={overview} />
+                <NavigationLink item={notifications} />
                 <NavigationGroup
                   label="CRM"
                   icon={BriefcaseBusiness}
@@ -524,7 +544,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
               <span className="font-semibold text-foreground">{pageTitle}</span>
             </nav>
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-1"><NotificationBell /><ThemeToggle /></div>
         </header>
         <main className="flex-1 p-4 md:p-6">
           <Outlet context={{ user }} />

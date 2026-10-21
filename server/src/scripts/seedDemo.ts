@@ -99,6 +99,28 @@ async function seedServiceCategory(
   );
 }
 
+async function seedLeadClassification(
+  client: PoolClient,
+  table: "lead_purposes" | "market_sectors",
+  companyId: string,
+  actorId: string,
+  code: string,
+  name: string,
+) {
+  return one<IdRow>(
+    client,
+    `
+    insert into ${table} (company_id, code, name, name_normalized, created_by_user_id)
+    values ($1, $2, $3::text, lower($3::text), $4)
+    on conflict (company_id, code) do update
+      set name = excluded.name, name_normalized = excluded.name_normalized,
+          status = 'active', row_version = ${table}.row_version + 1, updated_at = now()
+    returning id
+  `,
+    [companyId, code, name, actorId],
+  );
+}
+
 async function seedCustomer(
   client: PoolClient,
   companyId: string,
@@ -217,24 +239,38 @@ async function seedLead(
     lostReason?: string;
     qualificationNotes?: string;
     serviceCategoryId: string;
+    purposeCode?: string;
+    sectorCode?: string;
     ownerUserId: string;
     customerId?: string;
     contactId?: string;
     siteId?: string;
   },
 ) {
+  const purpose = await one<IdRow>(client,
+    `select id from lead_purposes where company_id = $1 and code = $2 and status = 'active'`,
+    [companyId, input.purposeCode ?? "NEW_PROJECT"],
+  );
+  const sector = await one<IdRow>(client,
+    `select id from market_sectors where company_id = $1 and code = $2 and status = 'active'`,
+    [companyId, input.sectorCode ?? "INDUSTRIAL"],
+  );
   await client.query(
     `
     insert into leads (
       company_id, lead_number, inquiry_name, company_name, contact_name,
       phone, phone_normalized, email, email_normalized, address, source,
-      service_category_id, owner_user_id, customer_id, primary_contact_id, site_id,
+      service_category_id, purpose_id, sector_id, owner_user_id, customer_id, primary_contact_id, site_id,
       stage, lost_reason, qualification_notes, created_by_user_id
     ) values (
       $1, $2, $3, $4, 'Demo contact', '+91 90000 00000', '+919000000000', $5::text, lower($5::text),
-      'Demo address, Ahmedabad', 'Demo seed', $6, $7, $8, $9, $10, $11, $12, $13, $14
+      'Demo address, Ahmedabad', 'Demo seed', $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
     )
-    on conflict (company_id, lead_number) do nothing
+    on conflict (company_id, lead_number) do update
+      set purpose_id = excluded.purpose_id,
+          sector_id = excluded.sector_id,
+          service_category_id = excluded.service_category_id,
+          updated_at = now()
   `,
     [
       companyId,
@@ -243,6 +279,8 @@ async function seedLead(
       input.companyName,
       input.email,
       input.serviceCategoryId,
+      purpose.id,
+      sector.id,
       input.ownerUserId,
       input.customerId ?? null,
       input.contactId ?? null,
@@ -474,19 +512,401 @@ async function seedMasterData(
   }
 }
 
+async function seedBoqTemplates(
+  client: PoolClient,
+  companyId: string,
+  actorId: string,
+  costingUserId: string,
+  purchaseHeadUserId: string,
+  adminApproverUserId: string,
+) {
+  const sectorTemplates = [
+    ["INDUSTRIAL", "Industrial fire-safety BOQ", ["DEMO-SMOKE", "DEMO-MS-P65", "DEMO-INSTALL"]],
+    ["COMMERCIAL", "Commercial fire-safety BOQ", ["DEMO-ABC-06", "DEMO-SMOKE", "DEMO-INSTALL"]],
+    ["RESIDENTIAL", "Residential fire-safety BOQ", ["DEMO-ABC-06", "DEMO-SMOKE", "DEMO-INSTALL"]],
+    ["INSTITUTIONAL", "Institutional fire-safety BOQ", ["DEMO-CO2-45", "DEMO-SMOKE", "DEMO-INSTALL"]],
+    ["HEALTHCARE", "Healthcare fire-safety BOQ", ["DEMO-CO2-45", "DEMO-SMOKE", "DEMO-INSTALL"]],
+    ["HOSPITALITY", "Hospitality fire-safety BOQ", ["DEMO-ABC-06", "DEMO-SMOKE", "DEMO-INSTALL"]],
+    ["WAREHOUSE_LOGISTICS", "Warehouse fire-safety BOQ", ["DEMO-ABC-06", "DEMO-MS-P65", "DEMO-INSTALL"]],
+    ["INFRASTRUCTURE_PUBLIC", "Infrastructure fire-safety BOQ", ["DEMO-CO2-45", "DEMO-MS-P65", "DEMO-INSTALL"]],
+    ["MIXED_USE", "Mixed-use fire-safety BOQ", ["DEMO-ABC-06", "DEMO-SMOKE", "DEMO-MS-P65", "DEMO-INSTALL"]],
+    ["OTHER", "General fire-safety BOQ", ["DEMO-ABC-06", "DEMO-SMOKE", "DEMO-INSTALL"]],
+  ] as const;
+
+  for (const [sectorCode, name, itemCodes] of sectorTemplates) {
+    const template = await one<IdRow>(client, `
+      insert into boq_templates (
+        company_id, sector_id, name, costing_user_id, purchase_head_user_id,
+        admin_approver_user_id, created_by_user_id
+      )
+      select $1, sector.id, $3, $4, $5, $6, $7
+      from market_sectors sector
+      where sector.company_id = $1 and sector.code = $2
+      on conflict (company_id, sector_id) do update
+        set name = excluded.name, costing_user_id = excluded.costing_user_id,
+            purchase_head_user_id = excluded.purchase_head_user_id,
+            admin_approver_user_id = excluded.admin_approver_user_id,
+            status = 'active', row_version = boq_templates.row_version + 1, updated_at = now()
+      returning id
+    `, [companyId, sectorCode, name, costingUserId, purchaseHeadUserId, adminApproverUserId, actorId]);
+    await client.query(`delete from boq_template_items where template_id = $1`, [template.id]);
+    for (const [index, itemCode] of itemCodes.entries()) {
+      await client.query(`
+        insert into boq_template_items (company_id, template_id, item_id, section, sort_order)
+        select $1, $2, item.id, category.name, $4
+        from items item inner join item_categories category on category.id = item.category_id
+        where item.company_id = $1 and item.code = $3
+      `, [companyId, template.id, itemCode, index + 1]);
+    }
+  }
+}
+
+async function seedDesignJob(
+  client: PoolClient,
+  input: {
+    companyId: string;
+    leadId: string;
+    opportunityId: string;
+    title: string;
+    designerId: string;
+    designHeadId: string;
+    authorizedById: string;
+  },
+) {
+  await client.query(
+    `
+    insert into design_jobs (
+      company_id, lead_id, opportunity_id, title, designer_user_id, design_head_user_id,
+      designer_assigned_at, design_due_at, survey_requested, authorization_notes, authorized_by_user_id
+    ) values ($1, $2, $3, $4, $5, $6, now() - interval '1 day', now() + interval '1 day', true,
+      'Synthetic authorized design handoff for local workflow testing.', $7)
+    on conflict (company_id, lead_id) do nothing
+  `,
+    [
+      input.companyId,
+      input.leadId,
+      input.opportunityId,
+      input.title,
+      input.designerId,
+      input.designHeadId,
+      input.authorizedById,
+    ],
+  );
+  const job = await one<IdRow>(
+    client,
+    `select id from design_jobs where company_id = $1 and lead_id = $2`,
+    [input.companyId, input.leadId],
+  );
+  await client.query(`
+    insert into outbox_jobs (company_id, type, payload, dedup_key, due_at)
+    select company_id, 'engineering.design_deadline',
+      jsonb_build_object('jobId', id::text, 'dueAt', design_due_at),
+      'design-deadline:' || id::text || ':' || extract(epoch from design_due_at)::bigint,
+      design_due_at
+    from design_jobs where id = $1 and designer_completed_at is null
+    on conflict (company_id, type, dedup_key) do nothing
+  `, [job.id]);
+  return job;
+}
+
+async function ensureCustomerApprovedDesign(
+  client: PoolClient,
+  input: {
+    companyId: string;
+    jobId: string;
+    designerId: string;
+    designHeadId: string;
+    salesUserId: string;
+    scenario: string;
+  },
+) {
+  let revision = (
+    await client.query<IdRow>(
+      `
+      select id from design_package_revisions
+      where company_id = $1 and design_job_id = $2 and status = 'customer_approved'
+      order by revision_number desc limit 1
+    `,
+      [input.companyId, input.jobId],
+    )
+  ).rows[0];
+  if (!revision) {
+    revision = await one<IdRow>(
+      client,
+      `
+      insert into design_package_revisions (
+        company_id, design_job_id, revision_number, title, change_summary, status,
+        created_by_user_id, submitted_by_user_id, submitted_at
+      ) select $1, $2, coalesce(max(revision_number), 0) + 1,
+        $3, 'Synthetic file-free downstream baseline; use the design-ready scenario to test real uploads.',
+        'customer_approved', $4, $4, now()
+      from design_package_revisions where design_job_id = $2 returning id
+    `,
+      [input.companyId, input.jobId, input.scenario, input.designerId],
+    );
+  }
+  await client.query(
+    `
+    insert into design_review_actions (
+      company_id, revision_id, decision, actor_user_id
+    ) values ($1, $2, 'approved', $3)
+    on conflict (revision_id) do nothing
+  `,
+    [input.companyId, revision.id, input.designHeadId],
+  );
+  await client.query(
+    `
+    insert into design_customer_decisions (
+      company_id, revision_id, decision, evidence_reference, notes, recorded_by_user_id
+    ) values ($1, $2, 'approved', $3,
+      'Synthetic local prerequisite only; no real customer evidence is claimed.', $4)
+    on conflict (revision_id) do nothing
+  `,
+    [
+      input.companyId,
+      revision.id,
+      `Demo seed approval for ${input.scenario}`,
+      input.salesUserId,
+    ],
+  );
+  await client.query(
+    `
+    update design_jobs set status = 'customer_approved', designer_completed_at = coalesce(designer_completed_at, now()), row_version = row_version + 1,
+      updated_at = now()
+    where id = $1 and status <> 'customer_approved'
+  `,
+    [input.jobId],
+  );
+  return revision;
+}
+
+async function ensureApprovedBoq(
+  client: PoolClient,
+  input: {
+    companyId: string;
+    jobId: string;
+    designRevisionId: string;
+    designerId: string;
+    designHeadId: string;
+    scenario: string;
+  },
+) {
+  let revision = (
+    await client.query<IdRow>(
+      `
+      select id from boq_revisions
+      where company_id = $1 and design_job_id = $2 and status = 'approved'
+      order by revision_number desc limit 1
+    `,
+      [input.companyId, input.jobId],
+    )
+  ).rows[0];
+  if (revision) return revision;
+
+  revision = await one<IdRow>(
+    client,
+    `
+    insert into boq_revisions (
+      company_id, design_job_id, design_revision_id, revision_number, title, change_summary,
+      status, created_by_user_id, submitted_by_user_id, submitted_at
+    ) select $1, $2, $3, coalesce(max(revision_number), 0) + 1,
+      $4, 'Complete synthetic technical scope for downstream local testing.',
+      'approved', $5, $5, now()
+    from boq_revisions where design_job_id = $2 returning id
+  `,
+    [
+      input.companyId,
+      input.jobId,
+      input.designRevisionId,
+      input.scenario,
+      input.designerId,
+    ],
+  );
+  const demoItem = await one<{
+    id: string;
+    unit_id: string;
+    code: string;
+    name: string;
+    specification: string;
+    symbol: string;
+  }>(
+    client,
+    `
+    select item.id, item.unit_id, item.code, item.name, item.specification, unit.symbol
+    from items item inner join units unit on unit.id = item.unit_id
+    where item.company_id = $1 and item.code = 'DEMO-SMOKE'
+  `,
+    [input.companyId],
+  );
+  const line = await one<IdRow>(
+    client,
+    `
+    insert into boq_lines (
+      company_id, boq_revision_id, line_number, section, item_id, item_code_snapshot,
+      item_name_snapshot, specification_snapshot, unit_id, unit_symbol_snapshot, quantity, notes
+    ) values ($1, $2, 1, 'Fire detection', $3, $4, $5, $6, $7, $8,
+      '12.0000', 'Synthetic full-scope BOQ line.') returning id
+  `,
+    [
+      input.companyId,
+      revision.id,
+      demoItem.id,
+      demoItem.code,
+      demoItem.name,
+      demoItem.specification,
+      demoItem.unit_id,
+      demoItem.symbol,
+    ],
+  );
+  await client.query(
+    `
+    insert into estimate_cost_lines (
+      company_id, boq_revision_id, boq_line_id, line_number, category, description,
+      quantity, unit_rate, line_total, notes
+    ) values ($1, $2, $3, 1, 'material', 'Synthetic detector material cost',
+      '12.0000', '850.00', '10200.00', 'Demo cost only.')
+  `,
+    [input.companyId, revision.id, line.id],
+  );
+  await client.query(
+    `
+    insert into boq_review_actions (company_id, boq_revision_id, decision, actor_user_id)
+    values ($1, $2, 'approved', $3) on conflict (boq_revision_id) do nothing
+  `,
+    [input.companyId, revision.id, input.designHeadId],
+  );
+  return revision;
+}
+
+async function ensureQuotationScenario(
+  client: PoolClient,
+  input: {
+    companyId: string;
+    jobId: string;
+    opportunityId: string;
+    boqRevisionId: string;
+    quotationNumber: string;
+    customerName: string;
+    title: string;
+    status: "submitted" | "approved";
+    salesExecutiveId: string;
+    salesManagerId: string;
+    approverId: string;
+  },
+) {
+  const quotation = await one<IdRow>(
+    client,
+    `
+    insert into quotations (
+      company_id, design_job_id, opportunity_id, quotation_number, created_by_user_id
+    ) values ($1, $2, $3, $4, $5)
+    on conflict (design_job_id) do update set quotation_number = quotations.quotation_number
+    returning id
+  `,
+    [
+      input.companyId,
+      input.jobId,
+      input.opportunityId,
+      input.quotationNumber,
+      input.salesExecutiveId,
+    ],
+  );
+  let revision = (
+    await client.query<IdRow>(
+      `select id from quotation_revisions where quotation_id = $1 and revision_number = 1`,
+      [quotation.id],
+    )
+  ).rows[0];
+  if (revision) return revision;
+
+  revision = await one<IdRow>(
+    client,
+    `
+    insert into quotation_revisions (
+      company_id, quotation_id, boq_revision_id, revision_number, status, title,
+      customer_name_snapshot, currency, validity_days, exclusions, delivery_terms,
+      payment_terms, subtotal, line_discount_total, additional_discount, tax_amount,
+      rounding_adjustment, grand_total, cash_percentage, non_cash_percentage,
+      created_by_user_id, submitted_by_user_id, submitted_at, approved_by_user_id, approved_at
+    ) values (
+      $1, $2, $3, 1, $4::quotation_revision_status, $5, $6, 'INR', 30,
+      'Civil works and statutory fees are excluded from this synthetic quotation.',
+      'Delivery within 4 weeks of written release.',
+      '40% cash and 60% non-cash payment plan; this is not proof of receipt.',
+      '14400.00', '600.00', '300.00', '0.00', '0.00', '13500.00',
+      '40.00', '60.00', $7, $7, now(),
+      case when $4::text = 'approved' then $8::uuid else null end,
+      case when $4::text = 'approved' then now() else null end
+    ) returning id
+  `,
+    [
+      input.companyId,
+      quotation.id,
+      input.boqRevisionId,
+      input.status,
+      input.title,
+      input.customerName,
+      input.salesExecutiveId,
+      input.approverId,
+    ],
+  );
+  await client.query(
+    `
+    insert into quotation_lines (
+      company_id, quotation_revision_id, boq_line_id, line_number, section_snapshot,
+      item_code_snapshot, item_name_snapshot, specification_snapshot, unit_symbol_snapshot,
+      quantity, unit_rate, discount_amount, line_subtotal, line_total, notes
+    )
+    select $1, $2, line.id, line.line_number, line.section, line.item_code_snapshot,
+      line.item_name_snapshot, line.specification_snapshot, line.unit_symbol_snapshot,
+      line.quantity, '1200.00', '600.00', '14400.00', '13800.00',
+      'Synthetic selling price for workflow testing.'
+    from boq_lines line where line.boq_revision_id = $3
+    order by line.line_number
+  `,
+    [input.companyId, revision.id, input.boqRevisionId],
+  );
+  for (const contributorId of [
+    input.salesExecutiveId,
+    input.salesManagerId,
+  ]) {
+    await client.query(
+      `
+      insert into quotation_revision_contributors (
+        company_id, quotation_revision_id, user_id
+      ) values ($1, $2, $3) on conflict do nothing
+    `,
+      [input.companyId, revision.id, contributorId],
+    );
+  }
+  if (input.status === "approved") {
+    await client.query(
+      `
+      insert into quotation_review_actions (
+        company_id, quotation_revision_id, decision, actor_user_id
+      ) values ($1, $2, 'approved', $3)
+      on conflict (quotation_revision_id) do nothing
+    `,
+      [input.companyId, revision.id, input.approverId],
+    );
+  }
+  return revision;
+}
+
 async function seed() {
   const passwordHash = await hashPassword(demoPassword);
   const client = await pool.connect();
   let stage = "schema validation";
   try {
     await client.query("begin");
-    const schema = await one<{ designJobs: string | null }>(
+    const schema = await one<{ designJobs: string | null; quotationRevisions: string | null }>(
       client,
       `
-      select to_regclass('public.design_jobs')::text as "designJobs"
+      select to_regclass('public.design_jobs')::text as "designJobs",
+        to_regclass('public.quotation_revisions')::text as "quotationRevisions"
     `,
     );
-    if (!schema.designJobs)
+    if (!schema.designJobs || !schema.quotationRevisions)
       throw new Error(
         "Demo seed requires current migrations. Run db:migrate first.",
       );
@@ -511,6 +931,7 @@ async function seed() {
       "design_head",
       "purchase_manager",
       "purchase_executive",
+      "boq_admin_approver",
       "receiver",
     ];
     const roles = await client.query<{ code: string }>(
@@ -539,6 +960,7 @@ async function seed() {
           "sales_manager",
           "design_head",
           "purchase_manager",
+          "boq_admin_approver",
         ],
       },
       {
@@ -596,8 +1018,32 @@ async function seed() {
     const executiveId = userIds.get("DEMO-SE")!;
     const designerId = userIds.get("DEMO-DE")!;
     const designHeadId = userIds.get("DEMO-DH")!;
+    const purchaseManagerId = userIds.get("DEMO-PM")!;
+    const purchaseExecutiveId = userIds.get("DEMO-PE")!;
 
-    stage = "service categories";
+    stage = "lead classifications and service categories";
+    for (const [code, name] of [
+      ["NEW_PROJECT", "New project"],
+      ["RENEWAL", "Renewal"],
+      ["UPGRADE_RETROFIT", "Upgrade / retrofit"],
+      ["MAINTENANCE_SERVICE", "Maintenance / service"],
+      ["EXPANSION_EXTENSION", "Expansion / extension"],
+      ["COMPLIANCE_AUDIT", "Compliance / audit"],
+      ["REPAIR_REPLACEMENT", "Repair / replacement"],
+      ["OTHER", "Other"],
+    ] as const) await seedLeadClassification(client, "lead_purposes", company.id, adminId, code, name);
+    for (const [code, name] of [
+      ["INDUSTRIAL", "Industrial"],
+      ["COMMERCIAL", "Commercial"],
+      ["RESIDENTIAL", "Residential"],
+      ["INSTITUTIONAL", "Institutional"],
+      ["HEALTHCARE", "Healthcare"],
+      ["HOSPITALITY", "Hospitality"],
+      ["WAREHOUSE_LOGISTICS", "Warehouse / logistics"],
+      ["INFRASTRUCTURE_PUBLIC", "Infrastructure / public"],
+      ["MIXED_USE", "Mixed use"],
+      ["OTHER", "Other"],
+    ] as const) await seedLeadClassification(client, "market_sectors", company.id, adminId, code, name);
     const suppressionId = (
       await seedServiceCategory(
         client,
@@ -690,6 +1136,8 @@ async function seed() {
         email: "lead2@example.test",
         stage: "contacted",
         serviceCategoryId: detectionId,
+        purposeCode: "UPGRADE_RETROFIT",
+        sectorCode: "HEALTHCARE",
         ownerUserId: managerId,
         ...customers[1],
       }),
@@ -702,6 +1150,7 @@ async function seed() {
         qualificationNotes:
           "Customer confirmed the free design requirement. Ready to authorize design.",
         serviceCategoryId: detectionId,
+        sectorCode: "WAREHOUSE_LOGISTICS",
         ownerUserId: executiveId,
         ...customers[2],
       }),
@@ -714,6 +1163,7 @@ async function seed() {
         qualificationNotes:
           "Free design authorized with separate designer and design head.",
         serviceCategoryId: suppressionId,
+        sectorCode: "INDUSTRIAL",
         ownerUserId: managerId,
         ...customers[0],
       }),
@@ -725,12 +1175,114 @@ async function seed() {
         stage: "lost",
         lostReason: "Synthetic lost lead for filter testing.",
         serviceCategoryId: suppressionId,
+        purposeCode: "RENEWAL",
+        sectorCode: "HEALTHCARE",
         ownerUserId: managerId,
         ...customers[1],
       }),
+      await seedLead(client, company.id, adminId, {
+        leadNumber: "DEMO-LEAD-006",
+        inquiryName: "Design package upload and review scenario",
+        companyName: "Demo Sunrise Hospital",
+        email: "lead6@example.test",
+        stage: "design_authorized",
+        qualificationNotes:
+          "Start here as the designer to create a revision, upload real CAD/PDF files and submit it.",
+        serviceCategoryId: detectionId,
+        purposeCode: "UPGRADE_RETROFIT",
+        sectorCode: "HEALTHCARE",
+        ownerUserId: executiveId,
+        ...customers[1],
+      }),
+      await seedLead(client, company.id, adminId, {
+        leadNumber: "DEMO-LEAD-007",
+        inquiryName: "Approved design ready for BOQ scenario",
+        companyName: "Demo Orion Warehousing",
+        email: "lead7@example.test",
+        stage: "design_authorized",
+        qualificationNotes:
+          "Synthetic customer-approved design baseline ready for BOQ creation.",
+        serviceCategoryId: detectionId,
+        sectorCode: "WAREHOUSE_LOGISTICS",
+        ownerUserId: executiveId,
+        ...customers[2],
+      }),
+      await seedLead(client, company.id, adminId, {
+        leadNumber: "DEMO-LEAD-008",
+        inquiryName: "Quotation awaiting independent review scenario",
+        companyName: "Demo Acme Industrial Systems",
+        email: "lead8@example.test",
+        stage: "design_authorized",
+        qualificationNotes:
+          "Synthetic approved design and BOQ with a submitted quotation.",
+        serviceCategoryId: suppressionId,
+        sectorCode: "INDUSTRIAL",
+        ownerUserId: executiveId,
+        ...customers[0],
+      }),
+      await seedLead(client, company.id, adminId, {
+        leadNumber: "DEMO-LEAD-009",
+        inquiryName: "Approved quotation ready to issue scenario",
+        companyName: "Demo Sunrise Hospital",
+        email: "lead9@example.test",
+        stage: "design_authorized",
+        qualificationNotes:
+          "Synthetic independently approved quotation ready for issue and customer decision.",
+        serviceCategoryId: detectionId,
+        purposeCode: "RENEWAL",
+        sectorCode: "HEALTHCARE",
+        ownerUserId: executiveId,
+        ...customers[1],
+      }),
+      await seedLead(client, company.id, adminId, {
+        leadNumber: "DEMO-LEAD-010",
+        inquiryName: "Pagination example: retail extinguishers",
+        companyName: "Demo Retail One",
+        email: "lead10@example.test",
+        stage: "new",
+        serviceCategoryId: suppressionId,
+        sectorCode: "COMMERCIAL",
+        ownerUserId: executiveId,
+      }),
+      await seedLead(client, company.id, adminId, {
+        leadNumber: "DEMO-LEAD-011",
+        inquiryName: "Pagination example: office alarm",
+        companyName: "Demo Office Two",
+        email: "lead11@example.test",
+        stage: "contacted",
+        serviceCategoryId: detectionId,
+        sectorCode: "COMMERCIAL",
+        ownerUserId: managerId,
+      }),
+      await seedLead(client, company.id, adminId, {
+        leadNumber: "DEMO-LEAD-012",
+        inquiryName: "Pagination example: declined consultation",
+        companyName: "Demo Office Three",
+        email: "lead12@example.test",
+        stage: "lost",
+        lostReason: "Synthetic lost record for pagination and filtering.",
+        serviceCategoryId: suppressionId,
+        purposeCode: "OTHER",
+        sectorCode: "COMMERCIAL",
+        ownerUserId: executiveId,
+      }),
+    ];
+    const leadOwnerIds = [
+      executiveId,
+      managerId,
+      executiveId,
+      managerId,
+      managerId,
+      executiveId,
+      executiveId,
+      executiveId,
+      executiveId,
+      executiveId,
+      managerId,
+      executiveId,
     ];
     for (const [index, lead] of leads.entries()) {
-      const ownerId = index === 0 || index === 2 ? executiveId : managerId;
+      const ownerId = leadOwnerIds[index]!;
       await addLeadMember(client, company.id, lead.id, ownerId, "owner");
       await addLeadMember(client, company.id, lead.id, adminId, "collaborator");
       if (ownerId !== managerId)
@@ -781,58 +1333,140 @@ async function seed() {
     }
 
     stage = "opportunities and design handoff";
-    const qualifiedOpportunity = await seedOpportunity(
-      client,
-      company.id,
-      executiveId,
-      leads[2]!.id,
-      customers[2]!,
-      "Demo Orion fire-safety opportunity",
-    );
-    const authorizedOpportunity = await seedOpportunity(
-      client,
-      company.id,
-      managerId,
-      leads[3]!.id,
-      customers[0]!,
-      "Demo Acme suppression opportunity",
-    );
-    for (const [opportunityId, ownerId] of [
-      [qualifiedOpportunity.id, executiveId],
-      [authorizedOpportunity.id, managerId],
-    ]) {
-      for (const [userId, role] of [
-        [ownerId, "owner"],
+    const opportunityDefinitions = [
+      {
+        lead: leads[2]!, customer: customers[2]!, ownerId: executiveId,
+        title: "Demo Orion fire-safety opportunity",
+      },
+      {
+        lead: leads[3]!, customer: customers[0]!, ownerId: managerId,
+        title: "Demo Acme quotation creation scenario",
+      },
+      {
+        lead: leads[5]!, customer: customers[1]!, ownerId: executiveId,
+        title: "Demo design package workflow scenario",
+      },
+      {
+        lead: leads[6]!, customer: customers[2]!, ownerId: executiveId,
+        title: "Demo BOQ creation workflow scenario",
+      },
+      {
+        lead: leads[7]!, customer: customers[0]!, ownerId: executiveId,
+        title: "Demo quotation review scenario",
+      },
+      {
+        lead: leads[8]!, customer: customers[1]!, ownerId: executiveId,
+        title: "Demo quotation issue scenario",
+      },
+    ];
+    const opportunities: IdRow[] = [];
+    for (const definition of opportunityDefinitions) {
+      const opportunity = await seedOpportunity(
+        client,
+        company.id,
+        definition.ownerId,
+        definition.lead.id,
+        definition.customer,
+        definition.title,
+      );
+      opportunities.push(opportunity);
+      const members = [
+        [definition.ownerId, "owner"],
         [adminId, "viewer"],
-      ] as const) {
+        [managerId, "sales"],
+      ] as const;
+      for (const [userId, role] of members) {
         await client.query(
           `
           insert into opportunity_members (company_id, opportunity_id, user_id, role)
           values ($1, $2, $3, $4)
           on conflict (opportunity_id, user_id) do nothing
         `,
-          [company.id, opportunityId, userId, role],
+          [company.id, opportunity.id, userId, role],
         );
       }
     }
-    await client.query(
-      `
-      insert into design_jobs (
-        company_id, lead_id, opportunity_id, title, designer_user_id, design_head_user_id,
-        survey_requested, authorization_notes, authorized_by_user_id
-      ) values ($1, $2, $3, 'Demo Acme suppression free design', $4, $5, true,
-        'Synthetic authorized design handoff for P2 testing.', $6)
-      on conflict (company_id, lead_id) do nothing
-    `,
-      [
-        company.id,
-        leads[3]!.id,
-        authorizedOpportunity.id,
-        designerId,
-        designHeadId,
-        managerId,
-      ],
-    );
+    const designScenarioDefinitions = [
+      {
+        lead: leads[3]!, opportunity: opportunities[1]!,
+        title: "Demo approved BOQ ready for quotation",
+        authorizedById: managerId,
+      },
+      {
+        lead: leads[5]!, opportunity: opportunities[2]!,
+        title: "Demo fresh design package workflow",
+        authorizedById: managerId,
+      },
+      {
+        lead: leads[6]!, opportunity: opportunities[3]!,
+        title: "Demo approved design ready for BOQ",
+        authorizedById: managerId,
+      },
+      {
+        lead: leads[7]!, opportunity: opportunities[4]!,
+        title: "Demo submitted quotation workflow",
+        authorizedById: managerId,
+      },
+      {
+        lead: leads[8]!, opportunity: opportunities[5]!,
+        title: "Demo approved quotation workflow",
+        authorizedById: managerId,
+      },
+    ];
+    const designJobs: IdRow[] = [];
+    for (const definition of designScenarioDefinitions) {
+      designJobs.push(
+        await seedDesignJob(client, {
+          companyId: company.id,
+          leadId: definition.lead.id,
+          opportunityId: definition.opportunity.id,
+          title: definition.title,
+          designerId,
+          designHeadId,
+          authorizedById: definition.authorizedById,
+        }),
+      );
+    }
+
+    stage = "employee notifications";
+    for (const notification of [
+      {
+        recipientId: designerId,
+        type: "engineering.design_assigned",
+        severity: "info",
+        title: "Demo design task assigned",
+        message: "A design task is due tomorrow. Open it to test the live timer and buffer request.",
+        jobId: designJobs[2]!.id,
+        dedupKey: `demo-design-assigned:${designJobs[2]!.id}`,
+      },
+      {
+        recipientId: designHeadId,
+        type: "engineering.design_submitted",
+        severity: "info",
+        title: "Demo design ready for review",
+        message: "A submitted design package is waiting for design-head review.",
+        jobId: designJobs[0]!.id,
+        dedupKey: `demo-design-review:${designJobs[0]!.id}`,
+      },
+      {
+        recipientId: purchaseManagerId,
+        type: "engineering.boq_ready_for_purchase_review",
+        severity: "warning",
+        title: "Demo BOQ needs purchase review",
+        message: "Costing is complete and the BOQ is ready for purchase-head review.",
+        jobId: designJobs[1]!.id,
+        dedupKey: `demo-boq-review:${designJobs[1]!.id}`,
+      },
+    ]) {
+      await client.query(`
+        insert into notifications (
+          company_id, recipient_user_id, type, severity, title, message,
+          link, target_type, target_id, dedup_key
+        ) values ($1, $2, $3, $4::notification_severity, $5, $6, $7, 'design_job', $8, $9)
+        on conflict (company_id, recipient_user_id, dedup_key) do nothing
+      `, [company.id, notification.recipientId, notification.type, notification.severity, notification.title,
+        notification.message, `/engineering/design-jobs/${notification.jobId}`, notification.jobId, notification.dedupKey]);
+    }
 
     stage = "reminders and due jobs";
     const reminderDefinitions = [
@@ -920,6 +1554,73 @@ async function seed() {
 
     stage = "vendor and item masters";
     await seedMasterData(client, company.id, adminId);
+    stage = "sector BOQ templates";
+    await seedBoqTemplates(
+      client,
+      company.id,
+      adminId,
+      purchaseExecutiveId,
+      purchaseManagerId,
+      adminId,
+    );
+    stage = "independent P3 workflow scenarios";
+    const downstreamDesigns: Array<IdRow | undefined> = [];
+    for (const [jobIndex, scenario] of [
+      [0, "Demo approved design for quotation creation"],
+      [2, "Demo approved design for BOQ creation"],
+      [3, "Demo approved design for quotation review"],
+      [4, "Demo approved design for quotation issue"],
+    ] as const) {
+      downstreamDesigns[jobIndex] = await ensureCustomerApprovedDesign(client, {
+        companyId: company.id,
+        jobId: designJobs[jobIndex]!.id,
+        designerId,
+        designHeadId,
+        salesUserId: managerId,
+        scenario,
+      });
+    }
+    const downstreamBoqs: Array<IdRow | undefined> = [];
+    for (const [jobIndex, scenario] of [
+      [0, "Demo approved BOQ ready for quotation"],
+      [3, "Demo approved BOQ for quotation review"],
+      [4, "Demo approved BOQ for quotation issue"],
+    ] as const) {
+      downstreamBoqs[jobIndex] = await ensureApprovedBoq(client, {
+        companyId: company.id,
+        jobId: designJobs[jobIndex]!.id,
+        designRevisionId: downstreamDesigns[jobIndex]!.id,
+        designerId,
+        designHeadId,
+        scenario,
+      });
+    }
+    await ensureQuotationScenario(client, {
+      companyId: company.id,
+      jobId: designJobs[3]!.id,
+      opportunityId: opportunities[4]!.id,
+      boqRevisionId: downstreamBoqs[3]!.id,
+      quotationNumber: "DEMO-QUO-REVIEW",
+      customerName: "Demo Acme Industrial Systems",
+      title: "Demo quotation awaiting independent approval",
+      status: "submitted",
+      salesExecutiveId: executiveId,
+      salesManagerId: managerId,
+      approverId: adminId,
+    });
+    await ensureQuotationScenario(client, {
+      companyId: company.id,
+      jobId: designJobs[4]!.id,
+      opportunityId: opportunities[5]!.id,
+      boqRevisionId: downstreamBoqs[4]!.id,
+      quotationNumber: "DEMO-QUO-ISSUE",
+      customerName: "Demo Sunrise Hospital",
+      title: "Demo approved quotation ready to issue",
+      status: "approved",
+      salesExecutiveId: executiveId,
+      salesManagerId: managerId,
+      approverId: adminId,
+    });
     stage = "seed audit event";
     await client.query(
       `
@@ -935,6 +1636,8 @@ async function seed() {
       [
         `Demo seed complete for ${company.name}.`,
         `Created/refreshed ${userDefinitions.length} demo users, ${customers.length} customers and ${leads.length} leads.`,
+        `Ensured ${opportunities.length} assigned opportunities, ${designJobs.length} design jobs and 2 quotation checkpoints.`,
+        "Workflow starts: DEMO-LEAD-003 authorize design; 006 upload/review design; 007 build BOQ; 004 build quotation; 008 approve quotation; 009 issue and record decision.",
         "Login: demo.admin@example.test",
         `Password: ${demoPassword}`,
         "All demo user emails are printed in README.md.",

@@ -26,7 +26,9 @@ import {
   designJobs,
   leadAttachments,
   leadMembers,
+  leadPurposes,
   leads,
+  marketSectors,
   opportunities,
   opportunityMembers,
   outboxJobs,
@@ -128,6 +130,74 @@ export function createCrmRepository(executor: DatabaseExecutor) {
     async createServiceCategory(input: typeof serviceCategories.$inferInsert) {
       const [category] = await executor.insert(serviceCategories).values(input).returning();
       return category;
+    },
+
+    listLeadPurposes(companyId: string, includeInactive = false) {
+      return executor.select().from(leadPurposes).where(and(
+        eq(leadPurposes.companyId, companyId),
+        includeInactive ? undefined : eq(leadPurposes.status, 'active'),
+      )).orderBy(asc(leadPurposes.name));
+    },
+
+    listMarketSectors(companyId: string, includeInactive = false) {
+      return executor.select().from(marketSectors).where(and(
+        eq(marketSectors.companyId, companyId),
+        includeInactive ? undefined : eq(marketSectors.status, 'active'),
+      )).orderBy(asc(marketSectors.name));
+    },
+
+    async findLeadPurpose(companyId: string, id: string) {
+      const [row] = await executor.select().from(leadPurposes).where(and(
+        eq(leadPurposes.companyId, companyId), eq(leadPurposes.id, id),
+      )).limit(1);
+      return row;
+    },
+
+    async findMarketSector(companyId: string, id: string) {
+      const [row] = await executor.select().from(marketSectors).where(and(
+        eq(marketSectors.companyId, companyId), eq(marketSectors.id, id),
+      )).limit(1);
+      return row;
+    },
+
+    async findLeadPurposeByCode(companyId: string, code: string) {
+      const [row] = await executor.select().from(leadPurposes).where(and(
+        eq(leadPurposes.companyId, companyId), eq(leadPurposes.code, code), eq(leadPurposes.status, 'active'),
+      )).limit(1);
+      return row;
+    },
+
+    async findMarketSectorByCode(companyId: string, code: string) {
+      const [row] = await executor.select().from(marketSectors).where(and(
+        eq(marketSectors.companyId, companyId), eq(marketSectors.code, code), eq(marketSectors.status, 'active'),
+      )).limit(1);
+      return row;
+    },
+
+    async createLeadPurpose(input: typeof leadPurposes.$inferInsert) {
+      const [row] = await executor.insert(leadPurposes).values(input).returning();
+      return row!;
+    },
+
+    async createMarketSector(input: typeof marketSectors.$inferInsert) {
+      const [row] = await executor.insert(marketSectors).values(input).returning();
+      return row!;
+    },
+
+    async deactivateLeadPurpose(companyId: string, id: string, expectedVersion: number, now: Date) {
+      const [row] = await executor.update(leadPurposes).set({
+        status: 'inactive', rowVersion: sql`${leadPurposes.rowVersion} + 1`, updatedAt: now,
+      }).where(and(eq(leadPurposes.companyId, companyId), eq(leadPurposes.id, id),
+        eq(leadPurposes.rowVersion, expectedVersion), eq(leadPurposes.status, 'active'))).returning();
+      return row;
+    },
+
+    async deactivateMarketSector(companyId: string, id: string, expectedVersion: number, now: Date) {
+      const [row] = await executor.update(marketSectors).set({
+        status: 'inactive', rowVersion: sql`${marketSectors.rowVersion} + 1`, updatedAt: now,
+      }).where(and(eq(marketSectors.companyId, companyId), eq(marketSectors.id, id),
+        eq(marketSectors.rowVersion, expectedVersion), eq(marketSectors.status, 'active'))).returning();
+      return row;
     },
 
     async deactivateServiceCategory(companyId: string, id: string, expectedVersion: number, now: Date) {
@@ -541,6 +611,10 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         rowVersion: leads.rowVersion,
         updatedAt: leads.updatedAt,
         serviceCategoryName: serviceCategories.name,
+        purposeId: leads.purposeId,
+        purposeName: leadPurposes.name,
+        sectorId: leads.sectorId,
+        sectorName: marketSectors.name,
       };
       const sortColumn = {
         leadNumber: leads.leadNumber,
@@ -552,6 +626,8 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       const [items, totals] = await Promise.all([
         executor.select(selection).from(leads)
           .innerJoin(serviceCategories, eq(serviceCategories.id, leads.serviceCategoryId))
+          .innerJoin(leadPurposes, eq(leadPurposes.id, leads.purposeId))
+          .innerJoin(marketSectors, eq(marketSectors.id, leads.sectorId))
           .where(where).orderBy(order(sortColumn), order(leads.id)).limit(input.limit).offset(input.offset),
         executor.select({ count: count() }).from(leads).where(where),
       ]);
@@ -570,6 +646,10 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         address: leads.address,
         source: leads.source,
         serviceCategoryId: leads.serviceCategoryId,
+        purposeId: leads.purposeId,
+        sectorId: leads.sectorId,
+        purposeName: leadPurposes.name,
+        sectorName: marketSectors.name,
         ownerUserId: leads.ownerUserId,
         customerId: leads.customerId,
         primaryContactId: leads.primaryContactId,
@@ -580,7 +660,10 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         rowVersion: leads.rowVersion,
         createdAt: leads.createdAt,
         updatedAt: leads.updatedAt,
-      }).from(leads).where(and(
+      }).from(leads)
+        .innerJoin(leadPurposes, eq(leadPurposes.id, leads.purposeId))
+        .innerJoin(marketSectors, eq(marketSectors.id, leads.sectorId))
+        .where(and(
         eq(leads.companyId, access.companyId),
         eq(leads.id, leadId),
         leadAccessCondition(executor, access),

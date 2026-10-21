@@ -118,9 +118,12 @@ Implemented P2 master directories reuse the shared shadcn `ServerDataTable` and 
 | Screen | Main content | Primary actions / safeguards |
 | --- | --- | --- |
 | My work | Due follow-ups, assigned design requests, approval queue, open deliveries | Scope-filtered counts; empty states explain actual next action |
-| Lead list/detail | Name/contact/source/owner/stage, customer/site, notes/files/timeline | Assign, follow up, authorize free design; Lost requires reason |
-| Design workspace | Revision list, original CAD/PDF, request, reviewer/customer decisions | Submit, return, approve internally, record customer response; exact version label |
-| BOQ editor | Section/item/spec/unit/full quantity, drawing link | Separate cost columns by permission; save draft/conflict review |
+| Notifications | Personal assignment, deadline, return and approval events | Header unread badge; server-paginated/searchable list; read/all-read actions; links recheck destination access |
+| Design job | Assignment, live first-submission timer, buffer history and package revisions | Designer-only reasoned 3-day buffer action; show 0–3 used; overdue and completed states remain visible |
+| Lead list/detail | Name/contact/source/owner/stage, purpose/sector, customer/site, notes/files/timeline | Assign, follow up, authorize free design; configurable purpose/sector; Lost requires reason |
+| Design workspace | Revision list, multiple original CAD/PDF files, request, reviewer/customer decisions | Design-head engineer assignment; submit, return, approve internally, record customer response; exact version label |
+| BOQ templates | Sector, ordered items, costing employee, purchase head, final approver | Distinct assignees, active-master validation, optimistic edit |
+| BOQ editor | Template item/spec/unit and full quantity; separate costing table | Designer edits quantity only; purchase costs; purchase head then admin approves; cost fields permission-redacted |
 | Quotation editor | Revision/scope/rates/terms, full total and planned payment split | Submit, issue/preview, record acceptance; no receipts inferred from percentage |
 | Project hub | Approved design baseline, site/team/dates, commercial state | Start after approved design; no compulsory customer PO field |
 | Vendor comparison | Equivalent line offers, totals/freight/lead time/spec differences | Select + reason; single-source exception requires authorized approval |

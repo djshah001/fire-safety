@@ -7,6 +7,8 @@ import { removePrivateFile } from '../../infrastructure/storage/localFileStorage
 import { createAuthRepository } from '../auth/auth.repository.js';
 import { hasPermission } from '../auth/auth.middleware.js';
 import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
+import { createCrmRepository } from '../crm/crm.repository.js';
+import { createNotificationRepository } from '../notifications/notification.repository.js';
 import { createEngineeringRepository } from './engineering.repository.js';
 
 type ListInput = { search?: string; status?: string; page: number; pageSize: number; sort: 'title' | 'status' | 'updatedAt'; direction: 'asc' | 'desc' };
@@ -24,8 +26,12 @@ function safeName(value: string) {
   }).join('').slice(0, 255);
 }
 
+function addCalendarDays(value: Date, days: number) {
+  return new Date(value.getTime() + days * 24 * 60 * 60 * 1_000);
+}
+
 function canOpenEngineering(principal: AuthenticatedPrincipal) {
-  return ['engineering.design.write', 'engineering.design.review', 'engineering.design.customer_decision', 'engineering.estimate.read']
+  return ['engineering.design.write', 'engineering.design.assign_engineer', 'engineering.design.review', 'engineering.design.customer_decision', 'engineering.estimate.read', 'engineering.boq.purchase_review', 'engineering.boq.final_review', 'engineering.quotation.read']
     .some((permission) => hasPermission(principal, permission));
 }
 
@@ -70,6 +76,7 @@ export class EngineeringService {
     const revisions = await repository.listRevisions(principal.companyId, jobId);
     return {
       job,
+      deadlineExtensions: await repository.listDeadlineExtensions(principal.companyId, jobId),
       revisions: await Promise.all(revisions.map(async (revision) => ({
         ...revision,
         files: (await repository.listFiles(principal.companyId, revision.id)).map(designFileDto),
@@ -77,6 +84,119 @@ export class EngineeringService {
         customerDecision: await repository.findCustomerDecision(principal.companyId, revision.id) ?? null,
       }))),
     };
+  }
+
+  async listEligibleDesigners(principal: AuthenticatedPrincipal, jobId: string) {
+    const job = await this.job(principal, jobId);
+    if (!hasPermission(principal, 'engineering.design.assign_engineer') || job.designHeadUserId !== principal.userId) {
+      throw new ForbiddenError('Only the assigned design head can choose the design engineer.');
+    }
+    return createCrmRepository(this.database).listEligibleUsers(principal.companyId, 'engineering.design.write');
+  }
+
+  async assignDesigner(
+    principal: AuthenticatedPrincipal,
+    jobId: string,
+    input: { designerUserId: string; expectedVersion: number },
+    requestId: string,
+  ) {
+    const job = await this.job(principal, jobId);
+    if (!hasPermission(principal, 'engineering.design.assign_engineer') || job.designHeadUserId !== principal.userId) {
+      throw new ForbiddenError('Only the assigned design head can choose the design engineer.');
+    }
+    if (input.designerUserId === principal.userId) {
+      throw new AppError('VALIDATION_ERROR', 'The design engineer must be different from the design head.', 422);
+    }
+    const designer = await createCrmRepository(this.database).findEligibleUser(
+      principal.companyId, input.designerUserId, 'engineering.design.write',
+    );
+    if (!designer) throw new AppError('VALIDATION_ERROR', 'Choose an active employee eligible for design work.', 422);
+    return this.database.transaction(async (transaction) => {
+      const now = new Date();
+      const dueAt = addCalendarDays(now, 2);
+      const updated = await createEngineeringRepository(transaction).assignDesigner(
+        principal.companyId, jobId, input.expectedVersion, input.designerUserId, now, dueAt,
+      );
+      if (!updated) throw new ConflictError('The design job changed or already has a design engineer.');
+      await createEngineeringRepository(transaction).enqueueDeadline(principal.companyId, jobId, dueAt);
+      await createNotificationRepository(transaction).create({
+        companyId: principal.companyId,
+        recipientUserId: input.designerUserId,
+        type: 'engineering.design_assigned',
+        severity: 'info',
+        title: 'Design task assigned',
+        message: `${job.title} is due in 2 calendar days.`,
+        link: `/engineering/design-jobs/${jobId}`,
+        targetType: 'design_job',
+        targetId: jobId,
+        dedupKey: `design-assigned:${jobId}`,
+      });
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'engineering.design_engineer_assigned',
+        targetType: 'design_job',
+        targetId: jobId,
+        requestId,
+        metadata: { designerUserId: input.designerUserId },
+      });
+      return updated;
+    });
+  }
+
+  async useDeadlineBuffer(
+    principal: AuthenticatedPrincipal,
+    jobId: string,
+    input: { reason: string; expectedVersion: number },
+    requestId: string,
+  ) {
+    if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
+    const job = await this.job(principal, jobId);
+    if (job.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can use this buffer.');
+    if (job.designerCompletedAt) throw new ConflictError('The design completion clock stopped when the first revision was submitted.');
+    if (!job.designDueAt || job.bufferExtensionsUsed >= 3) throw new ConflictError('No design buffer extensions remain.');
+    const currentDueAt = job.designDueAt;
+
+    return this.database.transaction(async (transaction) => {
+      const repository = createEngineeringRepository(transaction);
+      const updated = await repository.useDeadlineBuffer(
+        principal.companyId, jobId, principal.userId, input.expectedVersion, new Date(),
+      );
+      if (!updated || !updated.designDueAt) throw new ConflictError('The design job changed or no buffer extensions remain.');
+      const sequenceNumber = updated.bufferExtensionsUsed;
+      await repository.createDeadlineExtension({
+        companyId: principal.companyId,
+        designJobId: jobId,
+        sequenceNumber,
+        previousDueAt: currentDueAt,
+        newDueAt: updated.designDueAt,
+        reason: input.reason,
+        requestedByUserId: principal.userId,
+      });
+      await repository.enqueueDeadline(principal.companyId, jobId, updated.designDueAt);
+      await createNotificationRepository(transaction).create({
+        companyId: principal.companyId,
+        recipientUserId: job.designHeadUserId,
+        type: 'engineering.design_buffer_used',
+        severity: 'warning',
+        title: 'Designer used a 3-day buffer',
+        message: `${job.title}: extension ${sequenceNumber} of 3. Reason: ${input.reason}`,
+        link: `/engineering/design-jobs/${jobId}`,
+        targetType: 'design_job',
+        targetId: jobId,
+        dedupKey: `design-buffer:${jobId}:${sequenceNumber}`,
+      });
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'engineering.design_deadline_extended',
+        targetType: 'design_job',
+        targetId: jobId,
+        requestId,
+        metadata: { sequenceNumber, previousDueAt: currentDueAt.toISOString(), newDueAt: updated.designDueAt.toISOString(), reason: input.reason },
+      });
+      return updated;
+    });
   }
 
   async createRevision(principal: AuthenticatedPrincipal, jobId: string, input: { title: string; changeSummary: string; expectedJobVersion: number }, requestId: string) {
@@ -155,7 +275,13 @@ export class EngineeringService {
       const now = new Date();
       const updated = await tx.transitionRevision(principal.companyId, revisionId, expectedVersion, 'draft', { status: 'submitted', submittedByUserId: principal.userId, submittedAt: now });
       if (!updated) throw new ConflictError('The revision changed or is no longer a draft.');
-      if (!await tx.updateJobStatus(principal.companyId, jobId, job.rowVersion, 'under_review', now)) throw new ConflictError('The design job changed. Refresh and try again.');
+      if (!await tx.submitJobForReview(principal.companyId, jobId, job.rowVersion, now)) throw new ConflictError('The design job changed. Refresh and try again.');
+      await createNotificationRepository(transaction).create({
+        companyId: principal.companyId, recipientUserId: job.designHeadUserId,
+        type: 'engineering.design_submitted', severity: 'info', title: 'Design ready for review',
+        message: `${job.title} revision R${revision.revisionNumber} was submitted.`, link: `/engineering/design-jobs/${jobId}`,
+        targetType: 'design_job', targetId: jobId, dedupKey: `design-submitted:${revisionId}`,
+      });
       await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.revision_submitted', targetType: 'design_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, revisionNumber: revision.revisionNumber } });
       return updated;
     });
@@ -176,6 +302,14 @@ export class EngineeringService {
       if (!updated) throw new ConflictError('The revision changed or is no longer awaiting review.');
       if (!await tx.updateJobStatus(principal.companyId, jobId, job.rowVersion, target, new Date())) throw new ConflictError('The design job changed. Refresh and try again.');
       await tx.createReviewAction({ companyId: principal.companyId, revisionId, decision: input.decision, reason: input.reason, actorUserId: principal.userId });
+      if (job.designerUserId) await createNotificationRepository(transaction).create({
+        companyId: principal.companyId, recipientUserId: job.designerUserId,
+        type: `engineering.design_${input.decision}`, severity: input.decision === 'approved' ? 'success' : 'warning',
+        title: input.decision === 'approved' ? 'Design approved internally' : 'Design returned for changes',
+        message: input.decision === 'approved' ? `${job.title} passed design-head review.` : `${job.title}: ${input.reason}`,
+        link: `/engineering/design-jobs/${jobId}`, targetType: 'design_job', targetId: jobId,
+        dedupKey: `design-review:${revisionId}:${input.decision}`,
+      });
       await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: `engineering.revision_${input.decision}`, targetType: 'design_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, reason: input.reason } });
       return updated;
     });
@@ -208,6 +342,15 @@ export class EngineeringService {
       if (!updated) throw new ConflictError('The customer decision was already recorded or the revision changed.');
       if (!await tx.updateJobStatus(principal.companyId, jobId, job.rowVersion, target, new Date())) throw new ConflictError('The design job changed. Refresh and try again.');
       await tx.createCustomerDecision({ companyId: principal.companyId, revisionId, decision: input.decision, evidenceReference: input.evidenceReference, notes: input.notes, recordedByUserId: principal.userId });
+      const recipients = [...new Set([job.designerUserId, job.designHeadUserId].filter((id): id is string => Boolean(id) && id !== principal.userId))];
+      await createNotificationRepository(transaction).createMany(recipients.map((recipientUserId) => ({
+        companyId: principal.companyId, recipientUserId,
+        type: `engineering.customer_${input.decision}`, severity: input.decision === 'approved' ? 'success' as const : 'warning' as const,
+        title: input.decision === 'approved' ? 'Customer approved design' : 'Customer requested design changes',
+        message: `${job.title} customer decision: ${input.decision.replace('_', ' ')}.`,
+        link: `/engineering/design-jobs/${jobId}`, targetType: 'design_job', targetId: jobId,
+        dedupKey: `design-customer:${revisionId}:${input.decision}`,
+      })));
       await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: `engineering.customer_${input.decision}`, targetType: 'design_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, evidenceReference: input.evidenceReference } });
       return updated;
     });

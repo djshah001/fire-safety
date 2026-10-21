@@ -69,6 +69,10 @@ const DesignJobsPage = lazy(() => import('@/features/engineering/DesignJobsPage'
 const DesignJobPage = lazy(() => import('@/features/engineering/DesignJobPage').then((module) => ({ default: module.DesignJobPage })));
 const BoqWorkspacePage = lazy(() => import('@/features/engineering/BoqWorkspacePage').then((module) => ({ default: module.BoqWorkspacePage })));
 const BoqQueuePage = lazy(() => import('@/features/engineering/BoqQueuePage').then((module) => ({ default: module.BoqQueuePage })));
+const BoqTemplatesPage = lazy(() => import('@/features/engineering/BoqTemplatesPage').then((module) => ({ default: module.BoqTemplatesPage })));
+const QuotationQueuePage = lazy(() => import('@/features/engineering/QuotationQueuePage').then((module) => ({ default: module.QuotationQueuePage })));
+const QuotationWorkspacePage = lazy(() => import('@/features/engineering/QuotationWorkspacePage').then((module) => ({ default: module.QuotationWorkspacePage })));
+const NotificationsPage = lazy(() => import('@/features/notifications/NotificationsPage').then((module) => ({ default: module.NotificationsPage })));
 
 function NotFoundPage() {
   return (
@@ -106,11 +110,15 @@ const router = createBrowserRouter([
       { path: "/engineering/design-jobs/:jobId", element: <DesignJobPage /> },
       { path: "/engineering/design-jobs/:jobId/boq", element: <BoqWorkspacePage /> },
       { path: "/engineering/boqs", element: <BoqQueuePage /> },
+      { path: "/masters/boq-templates", element: <BoqTemplatesPage /> },
+      { path: "/engineering/quotations", element: <QuotationQueuePage /> },
+      { path: "/engineering/design-jobs/:jobId/quotations", element: <QuotationWorkspacePage /> },
       { path: "/masters/vendors", element: <MasterDataPage /> },
       { path: "/masters/items", element: <MasterDataPage /> },
       { path: "/masters/item-categories", element: <MasterDataPage /> },
       { path: "/masters/units", element: <MasterDataPage /> },
       { path: "/account", element: <AccountPage /> },
+      { path: "/notifications", element: <NotificationsPage /> },
     ],
   },
   { path: "*", element: <NotFoundPage /> },

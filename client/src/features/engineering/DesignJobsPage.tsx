@@ -9,8 +9,9 @@ import { StatusBadge } from '@/components/data-table/StatusBadge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { DesignDeadline } from './DesignDeadline';
 
-const statuses: DesignStatus[] = ['authorized', 'draft', 'under_review', 'returned', 'internally_approved', 'sent_to_customer', 'customer_approved', 'changes_requested'];
+const statuses: DesignStatus[] = ['awaiting_designer', 'authorized', 'draft', 'under_review', 'returned', 'internally_approved', 'sent_to_customer', 'customer_approved', 'changes_requested'];
 type Sort = 'title' | 'status' | 'updatedAt';
 
 export function DesignJobsPage() {
@@ -27,6 +28,7 @@ export function DesignJobsPage() {
   const columns: Array<ServerColumn<DesignJob, Sort>> = [
     { key: 'title', label: 'Design job', sort: 'title', className: 'min-w-64', cell: (job) => <div><p className="font-medium">{job.title}</p><p className="text-xs text-muted-foreground">{job.leadNumber}</p></div> },
     { key: 'status', label: 'Technical state', sort: 'status', cell: (job) => <StatusBadge status={job.status} /> },
+    { key: 'deadline', label: 'Design timer', cell: (job) => <DesignDeadline job={job} compact /> },
     { key: 'survey', label: 'Survey', cell: (job) => job.surveyRequested ? 'Requested' : 'Optional / not requested' },
     { key: 'updated', label: 'Updated', sort: 'updatedAt', className: 'tabular-nums', cell: (job) => new Date(job.updatedAt).toLocaleDateString() },
   ];

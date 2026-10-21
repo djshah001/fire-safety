@@ -33,6 +33,11 @@ Before changing an existing repository, inspect its instructions, lockfiles, scr
 | B-15 | Daily reports support the user's specified fields. A report is not mandatory for every calendar day. Material consumption later links to one posting operation, never a repeated subtraction on report save. |
 | B-16 | Tally remains the current accounting system during pilot. Full accounting is a future provisional scope decision, not a reason to rush an unvalidated financial ledger. |
 | B-17 | Actual services, staff identities, statutory values, valuation, templates and hosting details are unknown; examples/defaults must not be represented as confirmed company facts. |
+| B-18 | Every lead has a configurable purpose and market sector. The sector selects a versioned BOQ template; creating a BOQ snapshots its item scope and assigned costing/review chain. |
+| B-19 | Sales management assigns only the design head. That assigned design head selects the design engineer. A design package may contain multiple CAD originals and multiple PDF previews. |
+| B-20 | Assigning a design engineer starts a 2-calendar-day first-submission clock. The assigned engineer may record at most three reasoned extensions of exactly 3 calendar days each. The clock stops on the first submitted design revision; review/return cycles do not restart it. |
+| B-21 | In-app notifications are private to their explicit recipient. Assignment, deadline, design-review and BOQ handoff events are transactional and deduplicated; a hidden UI item never substitutes for recipient scoping in the API or worker. |
+| B-20 | Design engineering owns BOQ quantities only. An explicitly assigned purchase employee owns costing; a different purchase head reviews it; a different explicitly assigned administrative approver gives final approval before quotation. System administration alone does not grant this commercial approval. |
 
 ## 3. Authorization and privacy
 

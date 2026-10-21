@@ -6,6 +6,7 @@ import { createPrivateUpload, resolvePrivateFile } from '../../infrastructure/st
 import { requireAuthentication, requireCsrf, requirePermission } from '../auth/auth.middleware.js';
 import { getPrincipal } from '../auth/auth.types.js';
 import {
+  assignDesignerSchema,
   createRevisionSchema,
   customerDecisionSchema,
   designFileParamsSchema,
@@ -15,6 +16,7 @@ import {
   reviewRevisionSchema,
   sendToCustomerSchema,
   submitRevisionSchema,
+  useDesignBufferSchema,
 } from './engineering.schemas.js';
 import { engineeringService } from './engineering.service.js';
 
@@ -35,6 +37,27 @@ export function createEngineeringRouter() {
   router.get('/design-jobs/:jobId', async (request, response) => {
     const { jobId } = designJobParamsSchema.parse(request.params);
     sendData(request, response, await engineeringService.getJob(getPrincipal(request), jobId));
+  });
+
+  router.get('/design-jobs/:jobId/eligible-designers', requirePermission('engineering.design.assign_engineer'), async (request, response) => {
+    const { jobId } = designJobParamsSchema.parse(request.params);
+    sendData(request, response, { items: await engineeringService.listEligibleDesigners(getPrincipal(request), jobId) });
+  });
+
+  router.post('/design-jobs/:jobId/assign-designer', requireCsrf, requirePermission('engineering.design.assign_engineer'), async (request, response) => {
+    const { jobId } = designJobParamsSchema.parse(request.params);
+    const job = await engineeringService.assignDesigner(
+      getPrincipal(request), jobId, assignDesignerSchema.parse(request.body), getRequestId(request),
+    );
+    sendData(request, response, { job });
+  });
+
+  router.post('/design-jobs/:jobId/use-buffer', requireCsrf, requirePermission('engineering.design.write'), async (request, response) => {
+    const { jobId } = designJobParamsSchema.parse(request.params);
+    const job = await engineeringService.useDeadlineBuffer(
+      getPrincipal(request), jobId, useDesignBufferSchema.parse(request.body), getRequestId(request),
+    );
+    sendData(request, response, { job });
   });
 
   router.post('/design-jobs/:jobId/revisions', requireCsrf, requirePermission('engineering.design.write'), async (request, response) => {

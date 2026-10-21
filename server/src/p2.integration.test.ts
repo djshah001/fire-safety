@@ -37,13 +37,23 @@ async function resetP2Fixtures() {
   await pool.query('delete from reminder_rules');
   await pool.query('delete from lead_attachments');
   await pool.query('delete from crm_activities');
+  await pool.query('delete from quotation_customer_decisions');
+  await pool.query('delete from quotation_issue_documents');
+  await pool.query('delete from quotation_review_actions');
+  await pool.query('delete from quotation_revision_contributors');
+  await pool.query('delete from quotation_lines');
+  await pool.query('delete from quotation_revisions');
+  await pool.query('delete from quotations');
   await pool.query('delete from design_customer_decisions');
   await pool.query('delete from design_review_actions');
   await pool.query('delete from design_revision_files');
   await pool.query('delete from boq_review_actions');
+  await pool.query('delete from boq_revision_contributors');
   await pool.query('delete from estimate_cost_lines');
   await pool.query('delete from boq_lines');
   await pool.query('delete from boq_revisions');
+  await pool.query('delete from boq_template_items');
+  await pool.query('delete from boq_templates');
   await pool.query('delete from design_package_revisions');
   await pool.query('delete from design_jobs');
   await pool.query('delete from opportunity_members');
@@ -56,7 +66,7 @@ async function resetP2Fixtures() {
   await pool.query('delete from sites');
   await pool.query('delete from customers');
   await pool.query('delete from service_categories');
-  await pool.query("delete from document_counters where document_type = 'LEAD'");
+  await pool.query("delete from document_counters where document_type in ('LEAD', 'QUOTATION')");
   await pool.query('delete from auth_sessions');
   await pool.query('delete from audit_events');
   await pool.query('delete from users where email_normalized = any($1)', [[
@@ -100,13 +110,23 @@ async function cleanP2Fixtures() {
   await pool.query('delete from reminder_rules');
   await pool.query('delete from lead_attachments');
   await pool.query('delete from crm_activities');
+  await pool.query('delete from quotation_customer_decisions');
+  await pool.query('delete from quotation_issue_documents');
+  await pool.query('delete from quotation_review_actions');
+  await pool.query('delete from quotation_revision_contributors');
+  await pool.query('delete from quotation_lines');
+  await pool.query('delete from quotation_revisions');
+  await pool.query('delete from quotations');
   await pool.query('delete from design_customer_decisions');
   await pool.query('delete from design_review_actions');
   await pool.query('delete from design_revision_files');
   await pool.query('delete from boq_review_actions');
+  await pool.query('delete from boq_revision_contributors');
   await pool.query('delete from estimate_cost_lines');
   await pool.query('delete from boq_lines');
   await pool.query('delete from boq_revisions');
+  await pool.query('delete from boq_template_items');
+  await pool.query('delete from boq_templates');
   await pool.query('delete from design_package_revisions');
   await pool.query('delete from design_jobs');
   await pool.query('delete from opportunity_members');
@@ -119,7 +139,7 @@ async function cleanP2Fixtures() {
   await pool.query('delete from sites');
   await pool.query('delete from customers');
   await pool.query('delete from service_categories');
-  await pool.query("delete from document_counters where document_type = 'LEAD'");
+  await pool.query("delete from document_counters where document_type in ('LEAD', 'QUOTATION')");
   await pool.query('delete from auth_sessions');
   await pool.query('delete from audit_events');
   await pool.query('delete from users where email_normalized = any($1)', [[
@@ -169,6 +189,10 @@ describe('P2 scoped CRM lifecycle', () => {
       .set('X-Request-Id', 'p2-category').send({ code: 'FIRE_ALARM', name: 'Fire alarm system' });
     expect(categoryResponse.status).toBe(201);
     const categoryId = categoryResponse.body.data.category.id as string;
+    const purposeId = (await manager.agent.get('/api/v1/crm/classifications/lead-purposes')).body.data.items
+      .find((item: { code: string }) => item.code === 'NEW_PROJECT').id as string;
+    const sectorId = (await manager.agent.get('/api/v1/crm/classifications/market-sectors')).body.data.items
+      .find((item: { code: string }) => item.code === 'INDUSTRIAL').id as string;
 
     expect((await administrator.agent.get('/api/v1/crm/service-categories')).status).toBe(403);
 
@@ -205,6 +229,7 @@ describe('P2 scoped CRM lifecycle', () => {
         email: 'asha@acme.example',
         source: 'Referral',
         serviceCategoryId: categoryId,
+        purposeId, sectorId,
       });
     expect(managerLead.status).toBe(201);
     expect(managerLead.body.data.lead.leadNumber).toMatch(/^FS-LEAD-\d{4}-000001$/);
@@ -238,6 +263,7 @@ describe('P2 scoped CRM lifecycle', () => {
         phone: '9825019999',
         source: 'Campaign',
         serviceCategoryId: categoryId,
+        purposeId, sectorId,
       });
     expect(bulkCandidate.status).toBe(201);
     const bulkCandidateId = bulkCandidate.body.data.lead.id as string;
@@ -274,6 +300,7 @@ describe('P2 scoped CRM lifecycle', () => {
         phone: '98250 10000',
         source: 'Website',
         serviceCategoryId: categoryId,
+        purposeId, sectorId,
         ownerUserId: executiveId,
       });
     expect(delegatedLead.status).toBe(201);
@@ -389,7 +416,7 @@ describe('P2 scoped CRM lifecycle', () => {
       .set('Origin', origin).set('X-CSRF-Token', executive.csrf)
       .set('X-Request-Id', 'p2-unauthorized-assignment').send({
         inquiryName: 'Gamma enquiry', contactName: 'Gita Shah', phone: '98980 11111',
-        source: 'Walk-in', serviceCategoryId: categoryId, ownerUserId: managerId,
+        source: 'Walk-in', serviceCategoryId: categoryId, purposeId, sectorId, ownerUserId: managerId,
       });
     expect(unauthorizedAssignment.status).toBe(403);
 
@@ -459,8 +486,8 @@ describe('P2 scoped CRM lifecycle', () => {
       .send({ expectedVersion: stagedCustomers.body.data.batch.rowVersion })).status).toBe(409);
 
     const leadWorkbook = await workbookBuffer(
-      ['inquiry_name', 'company_name', 'contact_name', 'phone', 'email', 'address', 'source', 'service_category_code', 'owner_email'],
-      ['Imported open lead', 'Imported Customer', 'Isha Patel', '9876501234', '', 'Station Road, Surat', 'Excel import', 'FIRE_ALARM', managerEmail],
+      ['inquiry_name', 'company_name', 'contact_name', 'phone', 'email', 'address', 'source', 'service_category_code', 'purpose_code', 'sector_code', 'owner_email'],
+      ['Imported open lead', 'Imported Customer', 'Isha Patel', '9876501234', '', 'Station Road, Surat', 'Excel import', 'FIRE_ALARM', 'NEW_PROJECT', 'INDUSTRIAL', managerEmail],
     );
     const stagedLeads = await manager.agent.post('/api/v1/crm/imports/open_leads/stage')
       .set('Origin', origin).set('X-CSRF-Token', manager.csrf)

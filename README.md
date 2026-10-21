@@ -37,28 +37,44 @@ Bootstrap refuses to run if a company already exists. The initial administrator 
 
 ### Local demo data
 
-After migrations and the initial company bootstrap, populate the configured local database with synthetic P2 test data:
+After migrations and the initial company bootstrap, populate the configured local database with synthetic P1–P3 test data:
 
 ```powershell
 npm run seed:demo
 ```
 
-The command refuses production and non-loopback database hosts. It is repeatable: records use `DEMO-*` identifiers, existing demo accounts receive a fresh password and active status, their sessions are revoked, and business records are reused instead of duplicated. Override the default password for a run with `DEMO_SEED_PASSWORD` (minimum 12 characters).
+The command refuses production and non-loopback database hosts. It is repeatable: records use `DEMO-*` identifiers, existing demo accounts receive a fresh password and active status, their sessions are revoked, and business records are reused instead of duplicated. It does not rewind immutable workflow history after you test a scenario; use an isolated database when you need a completely fresh run. Override the default password for a run with `DEMO_SEED_PASSWORD` (minimum 12 characters).
 
 Default local credentials use password `FireSafetyDemo123!`:
 
 | Account | Email | Role/access |
 | --- | --- | --- |
-| Demo administrator | `demo.admin@example.test` | Admin, sales manager, design head and purchase manager |
+| Demo administrator | `demo.admin@example.test` | System admin plus explicit BOQ final approver; also seeded sales/design/purchase management access |
 | Sales manager | `demo.sales.manager@example.test` | CRM management and assignment |
 | Sales executive | `demo.sales.executive@example.test` | Assigned CRM records |
 | Design engineer | `demo.designer@example.test` | Assigned design work |
-| Design head | `demo.design.head@example.test` | Design work and review permission |
-| Purchase manager | `demo.purchase.manager@example.test` | Vendor and item masters |
-| Purchase executive | `demo.purchase.executive@example.test` | Vendor and item masters |
+| Design head | `demo.design.head@example.test` | Engineer assignment, design work and review |
+| Purchase manager | `demo.purchase.manager@example.test` | Masters, BOQ templates and purchase review |
+| Purchase executive | `demo.purchase.executive@example.test` | Masters and assigned BOQ costing |
 | Receiver | `demo.receiver@example.test` | Read-only vendor and item access |
 
-The dataset includes three customers, contacts/sites, five leads across multiple stages, CRM activities, two opportunities, one authorized design handoff, two follow-ups, three vendors, three units, three item categories and five items. Attachments and import workbooks are intentionally not faked: upload a real PDF/image or download an import template through the UI to test those paths.
+The dataset includes three customers with contacts/sites, twelve leads across multiple stages and purposes/sectors, eight lead purposes, ten market sectors, BOQ templates for every default sector, CRM activities, six opportunities, five design jobs with active timers, employee-specific workflow notifications, two follow-ups, three vendors, three units, three item categories and five items. Select 10 rows per page in the leads or notifications table to exercise server pagination. Attachments and import workbooks are intentionally not faked: upload real files or download an import template through the UI to test those paths.
+
+Use these independent records as workflow starting points:
+
+| Start record | Initial state | Suggested test |
+| --- | --- | --- |
+| `DEMO-LEAD-001` | New assigned lead | Edit the lead, add activity/attachment, schedule a follow-up and test scope isolation. |
+| `DEMO-LEAD-003` | Qualified lead, no design job | As sales manager assign the design head; then sign in as that head and assign the engineer. |
+| `DEMO-LEAD-006` | Authorized design job, no package revision | As the designer create a revision, select and upload multiple CAD/PDF files, submit, review as design head, then record the customer decision as sales. |
+| Notification center | Seeded personal alerts plus live workflow events | Sign in as designer, design head, or purchase manager; use the header bell and `/notifications`, then filter/read an item. The designer can open an unfinished design and record a 3-day buffer with a reason. |
+| `DEMO-LEAD-007` | Customer-approved design, no BOQ | Create from its sector template; enter quantities as designer, costs as purchase executive, approve as purchase manager, then final-approve as demo administrator. |
+| `DEMO-LEAD-004` | Approved design and BOQ, no quotation | Create and price a quotation, configure its cash/non-cash plan, submit it and test contributor self-approval denial. |
+| `DEMO-LEAD-008` | Submitted quotation | Sign in as the demo administrator to perform independent approval or return; the seeded sales manager and executive are contributors. |
+| `DEMO-LEAD-009` | Approved quotation | Issue the demo-labelled immutable PDF as assigned sales, download it and record accepted/declined customer evidence. |
+| `DEMO-LEAD-010`–`012` | Additional new/contacted/lost leads | Exercise search, sorting, filters, selection and 10-row pagination. |
+
+All downstream prerequisite revisions and evidence labels are explicitly synthetic and file-free. The seed does not fabricate upload metadata or claim real customer evidence. `DEMO-LEAD-006` is the clean path for testing real design files, while issued quotation files are generated only through the application action.
 
 Run `db:migrate` again whenever committed migrations are added. A PostgreSQL `relation ... does not exist` error from an otherwise valid endpoint usually means the database named by `server/.env` is behind the application schema.
 
@@ -82,7 +98,7 @@ The client runs at `http://localhost:5173` and proxies `/api` to the Express API
 | `npm run db:migrate --workspace @fire-safety/server` | Apply committed migrations |
 | `npm run db:check --workspace @fire-safety/server` | Validate committed migration metadata |
 | `npm run bootstrap:admin --workspace @fire-safety/server` | Create the first company, branch, roles, and administrator |
-| `npm run seed:demo` | Add or refresh synthetic P2 records in a loopback development database |
+| `npm run seed:demo` | Add or refresh synthetic P1–P3 records in a loopback development database |
 | `npm run db:local:start` / `db:local:stop` | Start or stop the isolated Windows development database |
 
 There is intentionally no schema-push or destructive reset script.
@@ -107,7 +123,7 @@ Local disk is the confirmed initial storage choice. Production deployment must m
 
 Sales roles now expose assignment-scoped Customers, Leads, and Opportunities navigation. A sales manager can configure service categories and assign a lead only to an active employee with current lead-write capability. Bootstrap does not invent company service categories; the optional local demo seed creates clearly marked `DEMO-*` examples only.
 
-Lead qualification requires an in-scope customer and contact, accepts an optional site, and creates an `unawarded` opportunity. An assigned salesperson can then authorize free design by selecting different active design-engineer and design-head assignees; this creates one auditable design-job handoff without changing commercial award.
+Lead creation requires a configurable purpose and market sector as well as service. The sector later chooses the BOQ template. Qualification requires an in-scope customer and contact, accepts an optional site, and creates an `unawarded` opportunity. An assigned sales manager authorizes free design by selecting an active design head; only that assigned head can then select the design engineer. Commercial award remains unchanged.
 
 Leads support immutable call/meeting/note activity, recurring assigned follow-ups, private PDF/JPEG/PNG attachments up to 20 MiB, versioned bulk assignment/reminder scheduling, and staged customer/open-lead `.xlsx` imports. Imports retain the original file privately, reject formulas, preview row errors/warnings, and commit valid rows with restart-safe results. Downloads and mutations recheck assignment scope; storage names never enter API DTOs. CRM and purchasing-master directories use server-side search/filter/sort/pagination through shared shadcn controls. Permission-aware Vendors, Items, Item categories, and Units pages support audited create/update/deactivate workflows; no inventory balance, purchasing transaction, or financial policy is implied.
 
@@ -115,9 +131,11 @@ Leads support immutable call/meeting/note activity, recurring assigned follow-up
 
 Employees with a relevant engineering or customer-decision permission see **Engineering → Design jobs**. Visibility remains assignment based: the named designer and design head can access their job, while sales access requires membership inherited from the linked lead/opportunity. A company-wide role alone does not expose every job.
 
-The assigned designer creates numbered revisions and uploads at least one original `.dwg`/`.dxf` file (100 MiB maximum) plus a separate PDF preview (20 MiB maximum). Submission freezes the revision. The different assigned design head can approve or return it; corrections always use a new revision. Linked sales users mark an internally approved revision as sent and record the customer's decision with a traceable evidence reference bound to that exact revision. CAD remains download-only, PDF opens through an authorized sandboxed preview route, and generated storage names never enter API responses.
+The assigned designer creates numbered revisions and uploads one or more original `.dwg`/`.dxf` files (100 MiB maximum each) plus one or more PDF previews (20 MiB maximum each). Submission freezes the revision. The different assigned design head can approve or return it; corrections always use a new revision. Linked sales users mark an internally approved revision as sent and record the customer's decision with a traceable evidence reference bound to that exact revision. CAD remains download-only, PDF opens through an authorized sandboxed preview route, and generated storage names never enter API responses.
 
-After customer approval, **BOQ & estimate** binds a numbered BOQ to that exact design revision. Technical lines snapshot item/unit/specification fields and always preserve the complete physical quantity, independent of future payment methods. Material, labour, transport, subcontracting, overhead, wastage and margin lines form a separate INR estimate calculated with backend decimal arithmetic. Estimate data is omitted—not visually masked—for roles without `engineering.estimate.read`. Submitted BOQs and estimates are immutable; returns or a newer approved design create a new copied revision. Quotations and project start are the next P3 checkpoints and are not yet implemented.
+After customer approval, **BOQ & estimates** creates a numbered BOQ from the lead sector's configured template and snapshots its ordered item/unit/specification scope and assigned approval chain. The design engineer can edit quantities only. The assigned purchase executive prepares exact-decimal costing, the different assigned purchase manager reviews it, and the different explicitly assigned BOQ administrative approver gives final approval before quotation. Estimate data is omitted—not visually masked—for unauthorized roles. Contributors cannot approve their own work; submitted stages are immutable and returns create a copied revision.
+
+**Quotations** copy every technical line from an approved BOQ into a numbered commercial revision. Assigned sales users set selling rates, discounts and terms; an explicitly authorized sales manager configures the full-value cash/non-cash plan, and every contributor is excluded from approving that revision. Submitted/issued revisions are immutable. Approval, issue and customer acceptance/decline are exact-revision transitions with audit and required evidence. Issued PDFs are private immutable snapshots and currently carry `DEMO / NOT FOR PRODUCTION` because company tax, rounding, numbering and template policies remain unconfirmed. Payment-plan fields are omitted from unauthorized API responses, and a plan never implies a receipt. The local demo seed now provides an approved design and BOQ baseline so this flow can be tested immediately. Minimal project start is the next P3 checkpoint.
 
 ## Project documentation
 
