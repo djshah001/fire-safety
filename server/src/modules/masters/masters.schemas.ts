@@ -39,12 +39,20 @@ export const itemCategoryCreateSchema = z.object({
 });
 export const itemCategoryUpdateSchema = itemCategoryCreateSchema.extend(versionedMasterSchema.shape);
 
+export const brandCreateSchema = z.object({
+  code: codeSchema(40),
+  name: z.string().trim().min(2).max(120),
+});
+export const brandUpdateSchema = brandCreateSchema.extend(versionedMasterSchema.shape);
+
 export const itemCreateSchema = z.object({
   code: codeSchema(50),
   name: z.string().trim().min(2).max(160),
   specification: optionalText(2_000),
   categoryId: z.uuid(),
   unitId: z.uuid(),
+  brandIds: z.array(z.uuid()).min(1, 'Assign at least one active brand/make.').max(50)
+    .refine((values) => new Set(values).size === values.length, 'Choose each brand/make only once.'),
 });
 export const itemUpdateSchema = itemCreateSchema.extend(versionedMasterSchema.shape);
 
@@ -78,6 +86,8 @@ export type UnitCreateInput = z.infer<typeof unitCreateSchema>;
 export type UnitUpdateInput = z.infer<typeof unitUpdateSchema>;
 export type ItemCategoryCreateInput = z.infer<typeof itemCategoryCreateSchema>;
 export type ItemCategoryUpdateInput = z.infer<typeof itemCategoryUpdateSchema>;
+export type BrandCreateInput = z.infer<typeof brandCreateSchema>;
+export type BrandUpdateInput = z.infer<typeof brandUpdateSchema>;
 export type ItemCreateInput = z.infer<typeof itemCreateSchema>;
 export type ItemUpdateInput = z.infer<typeof itemUpdateSchema>;
 export type VendorCreateInput = z.infer<typeof vendorCreateSchema>;

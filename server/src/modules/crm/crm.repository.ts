@@ -219,7 +219,12 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       sort: 'name' | 'status' | 'updatedAt'; direction: 'asc' | 'desc';
     }) {
       const scope = customerAccessCondition(executor, access);
-      const search = input.search ? ilike(customers.displayName, `%${input.search}%`) : undefined;
+      const search = input.search ? or(
+        ilike(customers.displayName, `%${input.search}%`),
+        ilike(customers.legalName, `%${input.search}%`),
+        ilike(customers.gstin, `%${input.search.toUpperCase()}%`),
+        ilike(customers.pan, `%${input.search.toUpperCase()}%`),
+      ) : undefined;
       const where = and(
         eq(customers.companyId, access.companyId),
         input.status ? eq(customers.status, input.status) : undefined,
@@ -230,6 +235,9 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         id: customers.id,
         displayName: customers.displayName,
         legalName: customers.legalName,
+        customerType: customers.customerType,
+        gstin: customers.gstin,
+        pan: customers.pan,
         status: customers.status,
         rowVersion: customers.rowVersion,
         updatedAt: customers.updatedAt,
@@ -249,6 +257,9 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         id: customers.id,
         displayName: customers.displayName,
         legalName: customers.legalName,
+        customerType: customers.customerType,
+        gstin: customers.gstin,
+        pan: customers.pan,
         status: customers.status,
         rowVersion: customers.rowVersion,
         createdAt: customers.createdAt,

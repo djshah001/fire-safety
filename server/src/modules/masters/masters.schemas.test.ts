@@ -8,6 +8,7 @@ describe('master request validation', () => {
       name: 'Smoke detector',
       categoryId: '00000000-0000-4000-8000-000000000001',
       unitId: '00000000-0000-4000-8000-000000000002',
+      brandIds: ['00000000-0000-4000-8000-000000000003'],
     }).code).toBe('SD-001');
     expect(() => masterListQuerySchema.parse({ pageSize: 101 })).toThrow();
     expect(() => masterListQuerySchema.parse({ sort: 'taxIdentifier' })).toThrow();

@@ -20,6 +20,7 @@ type PdfQuotation = {
     itemCode: string;
     itemName: string;
     specification: string;
+    brandName: string;
     quantity: string;
     unitSymbol: string;
     unitRate: string;
@@ -62,7 +63,7 @@ export function renderDemoQuotationPdf(quotation: PdfQuotation) {
     'SCOPE AND PRICING',
   ];
   for (const line of quotation.lines) {
-    content.push(...wrap(`${line.lineNumber}. ${line.itemCode} - ${line.itemName} | ${line.quantity} ${line.unitSymbol} x ${quotation.currency} ${line.unitRate} | discount ${line.discountAmount} | total ${line.lineTotal}`));
+    content.push(...wrap(`${line.lineNumber}. ${line.itemCode} - ${line.itemName} | Make: ${line.brandName} | ${line.quantity} ${line.unitSymbol} x ${quotation.currency} ${line.unitRate} | discount ${line.discountAmount} | total ${line.lineTotal}`));
     content.push(...wrap(`   ${line.specification}`));
   }
   content.push(

@@ -34,7 +34,7 @@ async function cleanup() {
     'boq_revision_contributors', 'estimate_cost_lines', 'boq_lines', 'boq_revisions', 'boq_template_items', 'boq_templates', 'design_package_revisions', 'design_jobs',
     'opportunity_members', 'opportunities', 'lead_members', 'leads', 'customer_members',
     'customer_addresses', 'sites', 'customer_contacts', 'customers', 'service_categories',
-    'items', 'item_categories', 'units',
+    'items', 'brands', 'item_categories', 'units',
   ]) await pool.query(`delete from ${table}`);
   await pool.query("delete from document_counters where document_type in ('LEAD', 'QUOTATION')");
   await pool.query('delete from auth_sessions');
@@ -97,6 +97,8 @@ async function setup() {
   const unit = (await pool.query<{ id: string }>(`insert into units (company_id, code, name, name_normalized, symbol, created_by_user_id) values ($1, 'P3NOS', 'P3 Numbers', 'p3 numbers', 'No.', $2) returning id`, [company.id, salesId])).rows[0]!;
   const category = (await pool.query<{ id: string }>(`insert into item_categories (company_id, code, name, name_normalized, created_by_user_id) values ($1, 'P3CAT', 'P3 Category', 'p3 category', $2) returning id`, [company.id, salesId])).rows[0]!;
   const item = (await pool.query<{ id: string }>(`insert into items (company_id, code, name, name_normalized, specification, category_id, unit_id, created_by_user_id) values ($1, 'P3ITEM', 'P3 Smoke Detector', 'p3 smoke detector', 'Addressable smoke detector', $2, $3, $4) returning id`, [company.id, category.id, unit.id, salesId])).rows[0]!;
+  const brand = (await pool.query<{ id: string }>(`insert into brands (company_id, code, name, name_normalized, created_by_user_id) values ($1, 'P3MAKE', 'P3 Detector Make', 'p3 detector make', $2) returning id`, [company.id, salesId])).rows[0]!;
+  await pool.query(`insert into item_brands (company_id, item_id, brand_id, created_by_user_id) values ($1, $2, $3, $4)`, [company.id, item.id, brand.id, salesId]);
   const boq = (await pool.query<{ id: string }>(`
     insert into boq_revisions (company_id, design_job_id, design_revision_id, revision_number, title, change_summary, status, created_by_user_id, submitted_by_user_id, submitted_at)
     values ($1, $2, $3, 1, 'Approved BOQ', 'Initial BOQ', 'approved', $4, $4, now()) returning id
@@ -141,7 +143,7 @@ describe('P3 quotation revisions and commercial evidence', () => {
     const line = revision.lines[0];
     const priced = await sales.agent.patch(`/api/v1/engineering/design-jobs/${fixture.jobId}/quotations/${revisionId}/lines/${line.id}`)
       .set('Origin', origin).set('X-CSRF-Token', sales.csrf)
-      .send({ unitRate: '1234.56', discountAmount: '34.56', expectedRevisionVersion: revision.rowVersion, expectedLineVersion: line.rowVersion });
+      .send({ brandId: line.brandOptions[0].id, unitRate: '1234.56', discountAmount: '34.56', expectedRevisionVersion: revision.rowVersion, expectedLineVersion: line.rowVersion });
     expect(priced.status).toBe(200);
 
     let managerWorkspace = (await paymentManager.agent.get(`/api/v1/engineering/design-jobs/${fixture.jobId}/quotations`)).body.data;
@@ -174,7 +176,7 @@ describe('P3 quotation revisions and commercial evidence', () => {
     expect(approved.status).toBe(200);
     const immutable = await sales.agent.patch(`/api/v1/engineering/design-jobs/${fixture.jobId}/quotations/${revisionId}/lines/${line.id}`)
       .set('Origin', origin).set('X-CSRF-Token', sales.csrf)
-      .send({ unitRate: '1.00', discountAmount: '0.00', expectedRevisionVersion: approved.body.data.revision.rowVersion, expectedLineVersion: line.rowVersion + 1 });
+      .send({ brandId: line.brandOptions[0].id, unitRate: '1.00', discountAmount: '0.00', expectedRevisionVersion: approved.body.data.revision.rowVersion, expectedLineVersion: line.rowVersion + 1 });
     expect(immutable.status).toBe(409);
 
     salesWorkspace = (await sales.agent.get(`/api/v1/engineering/design-jobs/${fixture.jobId}/quotations`)).body.data;

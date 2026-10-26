@@ -56,6 +56,7 @@ async function cleanFixtures() {
   await pool.query('delete from vendor_contacts');
   await pool.query('delete from vendors');
   await pool.query('delete from items');
+  await pool.query('delete from brands');
   await pool.query('delete from item_categories');
   await pool.query('delete from units');
   await pool.query("delete from document_counters where document_type in ('LEAD', 'QUOTATION')");
@@ -119,9 +120,15 @@ describe('P2 purchasing masters and free-design authorization', () => {
     expect(categoryResponse.status).toBe(201);
     const category = categoryResponse.body.data.category;
 
+    const brandResponse = await purchaser.agent.post('/api/v1/masters/brands')
+      .set('Origin', origin).set('X-CSRF-Token', purchaser.csrf)
+      .send({ code: 'NOTIFIER', name: 'Notifier' });
+    expect(brandResponse.status).toBe(201);
+    const brand = brandResponse.body.data.brand;
+
     const itemResponse = await purchaser.agent.post('/api/v1/masters/items')
       .set('Origin', origin).set('X-CSRF-Token', purchaser.csrf)
-      .send({ code: 'SD-001', name: 'Smoke detector', specification: 'Addressable optical detector', categoryId: category.id, unitId: unit.id });
+      .send({ code: 'SD-001', name: 'Smoke detector', specification: 'Addressable optical detector', categoryId: category.id, unitId: unit.id, brandIds: [brand.id] });
     expect(itemResponse.status).toBe(201);
     const item = itemResponse.body.data.item;
 

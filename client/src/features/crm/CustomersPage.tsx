@@ -4,6 +4,7 @@ import { Building2, FileUp, LoaderCircle, Plus } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { Link, useOutletContext, useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
 import { z } from "zod";
 import type { CurrentUser } from "@/api/auth";
 import { createCustomer, customersQuery, type CustomerSummary, type DuplicateHint, type MasterStatus } from "@/api/crm";
@@ -23,13 +24,22 @@ const schema = z
   .object({
     displayName: z.string().trim().min(2, "Enter the customer name.").max(160),
     legalName: z.string().trim().max(200),
+    customerType: z.enum(["business", "individual", "government", "other"]),
+    gstin: z.string().trim().toUpperCase().refine((value) => !value || /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(value), "Enter a valid 15-character GSTIN."),
+    pan: z.string().trim().toUpperCase().refine((value) => !value || /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(value), "Enter a valid PAN."),
     contactName: z
       .string()
       .trim()
       .min(2, "Enter the primary contact.")
       .max(120),
+    jobTitle: z.string().trim().max(100),
     phone: z.string().trim().max(30),
     email: z.union([z.email("Enter a valid email."), z.literal("")]),
+    billingAddress: z.string().trim().max(200),
+    billingCity: z.string().trim().max(100),
+    billingState: z.string().trim().max(100),
+    billingPostalCode: z.string().trim().max(20),
+    billingCountry: z.string().trim().max(100),
     siteName: z.string().trim().max(120),
     siteAddress: z.string().trim().max(200),
     siteCity: z.string().trim().max(100),
@@ -41,6 +51,10 @@ const schema = z
   .refine((value) => !value.siteName || (value.siteAddress && value.siteCity), {
     message: "Address and city are required when adding a site.",
     path: ["siteAddress"],
+  })
+  .refine((value) => !value.billingAddress || value.billingCity, {
+    message: "City is required when adding a billing address.",
+    path: ["billingCity"],
   });
 type Fields = z.infer<typeof schema>;
 
@@ -66,9 +80,18 @@ export function CustomersPage() {
     defaultValues: {
       displayName: "",
       legalName: "",
+      customerType: "business",
+      gstin: "",
+      pan: "",
       contactName: "",
+      jobTitle: "",
       phone: "",
       email: "",
+      billingAddress: "",
+      billingCity: "",
+      billingState: "",
+      billingPostalCode: "",
+      billingCountry: "India",
       siteName: "",
       siteAddress: "",
       siteCity: "",
@@ -79,15 +102,26 @@ export function CustomersPage() {
       createCustomer({
         displayName: values.displayName,
         legalName: values.legalName || undefined,
+        customerType: values.customerType,
+        gstin: values.gstin || undefined,
+        pan: values.pan || undefined,
         contacts: [
           {
             name: values.contactName,
+            jobTitle: values.jobTitle || undefined,
             phone: values.phone || undefined,
             email: values.email || undefined,
             isPrimary: true,
           },
         ],
-        addresses: [],
+        addresses: values.billingAddress ? [{
+          label: "Billing",
+          addressLine1: values.billingAddress,
+          city: values.billingCity,
+          state: values.billingState || undefined,
+          postalCode: values.billingPostalCode || undefined,
+          country: values.billingCountry || undefined,
+        }] : [],
         sites: values.siteName
           ? [
               {
@@ -101,6 +135,7 @@ export function CustomersPage() {
     async onSuccess(result) {
       setDuplicates(result.duplicateHints);
       await queryClient.invalidateQueries({ queryKey: ["crm", "customers"] });
+      toast.success("Customer created.");
       form.reset();
       if (result.duplicateHints.length === 0) setShowCreate(false);
     },
@@ -115,7 +150,7 @@ export function CustomersPage() {
   }
 
   const columns: Array<ServerColumn<CustomerSummary, typeof sort>> = [
-    { key: "name", label: "Customer", sort: "name", className: "min-w-64", cell: (customer) => <Link className="font-medium hover:underline" to={`/crm/customers/${customer.id}`}>{customer.displayName}<span className="mt-1 block text-sm font-normal text-muted-foreground">{customer.legalName || "No separate legal name"}</span></Link> },
+    { key: "name", label: "Customer", sort: "name", className: "min-w-64", cell: (customer) => <Link className="font-medium hover:underline" to={`/crm/customers/${customer.id}`}>{customer.displayName}<span className="mt-1 block text-sm font-normal text-muted-foreground">{customer.legalName || "No separate legal name"}{customer.gstin ? ` | GSTIN ${customer.gstin}` : ""}</span></Link> },
     { key: "status", label: "Status", sort: "status", cell: (customer) => <StatusBadge status={customer.status} /> },
     { key: "updated", label: "Updated", sort: "updatedAt", className: "tabular-nums", cell: (customer) => new Date(customer.updatedAt).toLocaleDateString() },
   ];
@@ -156,7 +191,7 @@ export function CustomersPage() {
           <form
             onSubmit={form.handleSubmit((values) => creation.mutate(values))}
           >
-            <DialogHeader><DialogTitle>New customer</DialogTitle><DialogDescription>Create the customer master, primary contact, and optional first site.</DialogDescription></DialogHeader>
+            <DialogHeader><DialogTitle>New customer</DialogTitle><DialogDescription>Create billing/tax identity, a primary contact, and an optional first project site.</DialogDescription></DialogHeader>
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <Label className="space-y-2">
                 <span>Display name</span>
@@ -171,6 +206,9 @@ export function CustomersPage() {
                 )}
               </Label>
               <Label className="space-y-2"><span>Legal name (optional)</span><Input className="min-h-11" {...form.register("legalName")} /></Label>
+              <div className="space-y-2"><Label>Customer type</Label><Select value={form.watch("customerType")} onValueChange={(value) => form.setValue("customerType", value as Fields["customerType"], { shouldValidate: true })}><SelectTrigger className="min-h-11"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="business">Business</SelectItem><SelectItem value="individual">Individual</SelectItem><SelectItem value="government">Government</SelectItem><SelectItem value="other">Other</SelectItem></SelectContent></Select></div>
+              <Label className="space-y-2"><span>GSTIN (optional)</span><Input className="min-h-11 uppercase" maxLength={15} placeholder="24ABCDE1234F1Z5" {...form.register("gstin")} />{form.formState.errors.gstin && <span className="mt-1 block text-sm text-destructive">{form.formState.errors.gstin.message}</span>}</Label>
+              <Label className="space-y-2"><span>PAN (optional)</span><Input className="min-h-11 uppercase" maxLength={10} placeholder="ABCDE1234F" {...form.register("pan")} />{form.formState.errors.pan && <span className="mt-1 block text-sm text-destructive">{form.formState.errors.pan.message}</span>}</Label>
               <Label className="space-y-2 sm:col-span-2">
                 <span>Primary contact</span>
                 <Input
@@ -183,6 +221,7 @@ export function CustomersPage() {
                   </span>
                 )}
               </Label>
+              <Label className="space-y-2"><span>Job title (optional)</span><Input className="min-h-11" {...form.register("jobTitle")} /></Label>
               <Label className="space-y-2">
                 <span>Phone</span>
                 <Input
@@ -210,6 +249,10 @@ export function CustomersPage() {
                 )}
               </Label>
             </div>
+            <fieldset className="mt-6 rounded-xl border border-border p-4">
+              <legend className="px-1 text-sm font-semibold">Billing address (optional)</legend>
+              <div className="grid gap-4 sm:grid-cols-2"><Label className="space-y-2 sm:col-span-2"><span>Address</span><Input className="min-h-11" {...form.register("billingAddress")} /></Label><Label className="space-y-2"><span>City</span><Input className="min-h-11" {...form.register("billingCity")} />{form.formState.errors.billingCity && <span className="mt-1 block text-sm text-destructive">{form.formState.errors.billingCity.message}</span>}</Label><Label className="space-y-2"><span>State</span><Input className="min-h-11" {...form.register("billingState")} /></Label><Label className="space-y-2"><span>Postal code</span><Input className="min-h-11" {...form.register("billingPostalCode")} /></Label><Label className="space-y-2"><span>Country</span><Input className="min-h-11" {...form.register("billingCountry")} /></Label></div>
+            </fieldset>
             <fieldset className="mt-6 rounded-xl border border-border p-4">
               <legend className="px-1 text-sm font-semibold">
                 First site (optional)

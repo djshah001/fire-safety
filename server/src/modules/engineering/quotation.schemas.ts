@@ -47,6 +47,7 @@ export const quotationHeaderSchema = z.object({
 });
 
 export const quotationLineSchema = z.object({
+  brandId: uuid,
   unitRate: money,
   discountAmount: money,
   notes: z.string().trim().max(1_000).optional(),

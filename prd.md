@@ -85,6 +85,7 @@ Default initial cardinality: one opportunity → one active design package → o
 | CRM-02 | Default stages: New, Contacted, Qualified, Design authorized, Commercial negotiation, Won, Lost, On hold. Changes record actor/time; Lost requires reason. Design authorization is not Won. Won requires recorded customer commercial evidence under the configured policy. |
 | CRM-03 | Qualification creates/links customer, contact and optional site without losing the original lead history. Site is required before project start, not before initial lead entry. |
 | CRM-04 | Normalize email/phone and show possible duplicates; never auto-merge different sites/customers. Explicit merge permission, preview and audit are required for merges. |
+| CRM-05 | Customer creation captures customer type, legal/display identity, optional validated GSTIN/PAN, primary contact, billing address and optional first project site. GSTIN is unique per company when supplied. |
 | CRM-05 | Record calls/meetings/notes and recurring follow-up tasks with assignee, timezone, due date and completion. Each recurrence is a distinct deduplicated occurrence. |
 | CRM-06 | Customer record supports multiple contacts/addresses/sites; capture optional tax identifiers and distinguish legal company name from display/contact names. |
 
@@ -97,11 +98,12 @@ Service categories are editable masters. Example labels such as supply, design, 
 | ENG-01 | Sales head/management requests free CAD design and assigns only an eligible design head. That assigned head selects an eligible design engineer. Optional survey does not block the flow. |
 | ENG-02 | Preserve one or more original DWG/DXF files and one or more separately uploaded PDF previews per revision. Pilot offers download plus safe PDF preview, not browser CAD editing/conversion. |
 | ENG-03 | Draft → Submitted → Internally approved/Returned → Sent to customer → Customer approved/Changes requested. Submission freezes a revision. Customer change requests create another revision; evidence identifies exact package/drawing versions. |
-| ENG-04 | A configurable market-sector template supplies the initial BOQ item/specification/unit scope. Design engineering can enter full quantities only. The explicitly assigned purchase coster separately records material, labour, transport, subcontracting, overhead/wastage and margin; the assigned purchase head and then the assigned administrative approver approve before quotation. |
+| ENG-04 | A configurable market-sector template supplies the initial BOQ item/specification/unit scope. Each item can have multiple approved brands/makes. Design engineering can enter full quantities only. The explicitly assigned purchase coster separately records material, labour, transport, subcontracting, overhead/wastage and margin; the assigned purchase head and then the assigned administrative approver approve before quotation. |
 | ENG-05 | Project start requires approved design revision/package and recorded customer design evidence. It does not require accepted quotation/PO. Authorized manager records start reason, site, assignments and initial target dates; UI shows commercial exposure separately. |
 | ENG-06 | Quotations include exact revision, full scope, item/service lines, currency, rates, discounts, configured taxes/rounding, validity, exclusions, delivery/payment terms and linked design/BOQ. Defaults: INR, 30-day validity, backend decimal calculations. Production taxes/template details require company confirmation. |
 | ENG-07 | Default sales manager approval for every quotation before external issue; no invented amount thresholds. Negotiation creates revisions; customer evidence and order link reference the accepted revision. |
 | ENG-08 | Starting work does not mark quotation Accepted or lead Won. Later acceptance records the commercial baseline without rewriting the design baseline already used by the project. |
+| ENG-09 | Sales selects an active item-assigned brand/make for every quotation line before submission. The exact selected name is snapshotted into the immutable quotation revision and issued document. |
 
 ### Cash/non-cash clarification
 

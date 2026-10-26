@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 const optionalText = (maximum: number) => z.string().trim().max(maximum).optional()
   .transform((value) => value || undefined);
+const optionalUppercase = (maximum: number) => z.string().trim().max(maximum).optional()
+  .transform((value) => value ? value.toUpperCase() : undefined);
 
 const timezoneSchema = z.string().trim().min(1).max(80).refine((value) => {
   try {
@@ -44,6 +46,9 @@ export const siteInputSchema = addressInputSchema.omit({ label: true }).extend({
 export const customerInputSchema = z.object({
   displayName: z.string().trim().min(2).max(160),
   legalName: optionalText(200),
+  customerType: z.enum(['business', 'individual', 'government', 'other']).default('business'),
+  gstin: optionalUppercase(15).refine((value) => !value || /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(value), 'Enter a valid 15-character GSTIN.'),
+  pan: optionalUppercase(10).refine((value) => !value || /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(value), 'Enter a valid PAN.'),
   contacts: z.array(contactInputSchema).min(1).max(20),
   addresses: z.array(addressInputSchema).max(20).default([]),
   sites: z.array(siteInputSchema).max(50).default([]),

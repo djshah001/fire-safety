@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { activityInputSchema, authorizeDesignInputSchema, bulkLeadAssignmentSchema, bulkReminderInputSchema, customerListQuerySchema, leadListQuerySchema, reminderInputSchema } from './crm.schemas.js';
+import { activityInputSchema, authorizeDesignInputSchema, bulkLeadAssignmentSchema, bulkReminderInputSchema, customerInputSchema, customerListQuerySchema, leadListQuerySchema, reminderInputSchema } from './crm.schemas.js';
 
 describe('CRM request validation', () => {
+  it('normalizes and validates optional Indian customer tax identifiers', () => {
+    const customer = customerInputSchema.parse({
+      displayName: 'Example Industries', customerType: 'business', gstin: '24abcde1234f1z5', pan: 'abcde1234f',
+      contacts: [{ name: 'Anita Shah', email: 'anita@example.test', isPrimary: true }],
+    });
+    expect(customer).toMatchObject({ gstin: '24ABCDE1234F1Z5', pan: 'ABCDE1234F' });
+    expect(() => customerInputSchema.parse({ displayName: 'Example Industries', gstin: 'invalid', contacts: [{ name: 'Anita Shah', email: 'anita@example.test' }] })).toThrow();
+  });
   it('accepts only allowlisted server-side sort fields and bounded page sizes', () => {
     expect(customerListQuerySchema.parse({ sort: 'name', direction: 'desc', pageSize: '100' }))
       .toMatchObject({ sort: 'name', direction: 'desc', pageSize: 100 });

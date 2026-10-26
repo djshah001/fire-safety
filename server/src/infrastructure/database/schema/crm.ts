@@ -102,7 +102,10 @@ export const customers = pgTable('customers', {
   displayName: varchar('display_name', { length: 160 }).notNull(),
   displayNameNormalized: varchar('display_name_normalized', { length: 160 }).notNull(),
   legalName: varchar('legal_name', { length: 200 }),
+  customerType: varchar('customer_type', { length: 30 }).notNull().default('business'),
   taxIdentifier: varchar('tax_identifier', { length: 40 }),
+  gstin: varchar('gstin', { length: 15 }),
+  pan: varchar('pan', { length: 10 }),
   status: masterStatusEnum('status').notNull().default('active'),
   rowVersion: integer('row_version').notNull().default(1),
   createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
@@ -110,7 +113,11 @@ export const customers = pgTable('customers', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   index('customers_company_name_idx').on(table.companyId, table.displayNameNormalized),
+  uniqueIndex('customers_company_gstin_uidx').on(table.companyId, table.gstin).where(sql`${table.gstin} is not null`),
   index('customers_company_status_idx').on(table.companyId, table.status),
+  check('customers_type_valid', sql`${table.customerType} in ('business', 'individual', 'government', 'other')`),
+  check('customers_gstin_valid', sql`${table.gstin} is null or ${table.gstin} ~ '^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$'`),
+  check('customers_pan_valid', sql`${table.pan} is null or ${table.pan} ~ '^[A-Z]{5}[0-9]{4}[A-Z]$'`),
   check('customers_row_version_positive', sql`${table.rowVersion} > 0`),
 ]);
 

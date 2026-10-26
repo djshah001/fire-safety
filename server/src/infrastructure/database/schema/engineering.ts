@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { boolean, check, index, integer, numeric, pgEnum, pgTable, primaryKey, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { leads, marketSectors, opportunities } from './crm.js';
-import { items, units } from './masters.js';
+import { brands, items, units } from './masters.js';
 import { users } from './identity.js';
 import { companies } from './organizations.js';
 
@@ -378,6 +378,8 @@ export const quotationLines = pgTable('quotation_lines', {
   itemCodeSnapshot: varchar('item_code_snapshot', { length: 50 }).notNull(),
   itemNameSnapshot: varchar('item_name_snapshot', { length: 160 }).notNull(),
   specificationSnapshot: varchar('specification_snapshot', { length: 2_000 }).notNull(),
+  brandId: uuid('brand_id').references(() => brands.id, { onDelete: 'restrict' }),
+  brandNameSnapshot: varchar('brand_name_snapshot', { length: 120 }),
   unitSymbolSnapshot: varchar('unit_symbol_snapshot', { length: 20 }).notNull(),
   quantity: numeric('quantity', { precision: 18, scale: 4 }).notNull(),
   unitRate: numeric('unit_rate', { precision: 18, scale: 2 }).notNull().default('0'),
@@ -394,6 +396,7 @@ export const quotationLines = pgTable('quotation_lines', {
   check('quotation_lines_number_positive', sql`${table.lineNumber} > 0`),
   check('quotation_lines_quantity_positive', sql`${table.quantity} > 0`),
   check('quotation_lines_amounts_valid', sql`${table.unitRate} >= 0 and ${table.discountAmount} >= 0 and ${table.lineSubtotal} >= 0 and ${table.lineTotal} >= 0 and ${table.discountAmount} <= ${table.lineSubtotal}`),
+  check('quotation_lines_brand_consistent', sql`(${table.brandId} is null and ${table.brandNameSnapshot} is null) or (${table.brandId} is not null and ${table.brandNameSnapshot} is not null)`),
   check('quotation_lines_row_version_positive', sql`${table.rowVersion} > 0`),
 ]);
 

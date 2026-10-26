@@ -12,6 +12,7 @@ export type ServiceCategory = {
 export type LeadClassification = ServiceCategory;
 export type CustomerSummary = {
   id: string; displayName: string; legalName: string | null; status: MasterStatus;
+  customerType: 'business' | 'individual' | 'government' | 'other'; gstin: string | null; pan: string | null;
   rowVersion: number; createdAt?: string; updatedAt: string;
 };
 export type CustomerContact = {
@@ -235,8 +236,11 @@ export async function createLeadClassification(type: 'purposes' | 'sectors', inp
 export type CreateCustomerInput = {
   displayName: string;
   legalName?: string;
+  customerType: 'business' | 'individual' | 'government' | 'other';
+  gstin?: string;
+  pan?: string;
   contacts: Array<{ name: string; jobTitle?: string; phone?: string; email?: string; isPrimary: boolean }>;
-  addresses: Array<never>;
+  addresses: Array<{ label: string; addressLine1: string; addressLine2?: string; city: string; state?: string; postalCode?: string; country?: string }>;
   sites: Array<{ name: string; addressLine1: string; city: string; state?: string; postalCode?: string; country?: string }>;
 };
 

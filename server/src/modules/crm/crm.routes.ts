@@ -88,12 +88,16 @@ function siteDto(site: {
 
 function customerSummaryDto(customer: {
   id: string; displayName: string; legalName: string | null; status: 'active' | 'inactive';
+  customerType: string; gstin: string | null; pan: string | null;
   rowVersion: number; createdAt?: Date; updatedAt: Date;
 }) {
   return {
     id: customer.id,
     displayName: customer.displayName,
     legalName: customer.legalName,
+    customerType: customer.customerType,
+    gstin: customer.gstin,
+    pan: customer.pan,
     status: customer.status,
     rowVersion: customer.rowVersion,
     ...('createdAt' in customer ? { createdAt: customer.createdAt } : {}),

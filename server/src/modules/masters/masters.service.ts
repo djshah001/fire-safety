@@ -5,6 +5,8 @@ import { createAuthRepository } from '../auth/auth.repository.js';
 import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
 import { createMastersRepository } from './masters.repository.js';
 import type {
+  BrandCreateInput,
+  BrandUpdateInput,
   ItemCategoryCreateInput,
   ItemCategoryUpdateInput,
   ItemCreateInput,
@@ -45,6 +47,9 @@ export class MastersService {
   }
   async listItemCategories(principal: AuthenticatedPrincipal, input: MasterListQuery) {
     return page(await createMastersRepository(this.database).listItemCategories(principal.companyId, input), input);
+  }
+  async listBrands(principal: AuthenticatedPrincipal, input: MasterListQuery) {
+    return page(await createMastersRepository(this.database).listBrands(principal.companyId, input), input);
   }
   async listItems(principal: AuthenticatedPrincipal, input: MasterListQuery) {
     return page(await createMastersRepository(this.database).listItems(principal.companyId, input), input);
@@ -135,6 +140,32 @@ export class MastersService {
     });
   }
 
+  async createBrand(principal: AuthenticatedPrincipal, input: BrandCreateInput, requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const brand = await createMastersRepository(transaction).createBrand({ companyId: principal.companyId, code: input.code, name: input.name, nameNormalized: normalizeName(input.name), createdByUserId: principal.userId });
+      await this.audit(transaction, principal, requestId, 'master.brand_created', 'brand', brand!.id);
+      return brand!;
+    });
+  }
+
+  async updateBrand(principal: AuthenticatedPrincipal, id: string, input: BrandUpdateInput, requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const brand = await createMastersRepository(transaction).updateBrand(principal.companyId, id, input.expectedVersion, { code: input.code, name: input.name, nameNormalized: normalizeName(input.name) }, new Date());
+      if (!brand) throw new ConflictError('The brand/make changed before this update. Refresh and try again.');
+      await this.audit(transaction, principal, requestId, 'master.brand_updated', 'brand', id);
+      return brand;
+    });
+  }
+
+  async deactivateBrand(principal: AuthenticatedPrincipal, id: string, expectedVersion: number, reason: string, requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const brand = await createMastersRepository(transaction).deactivateBrand(principal.companyId, id, expectedVersion, new Date());
+      if (!brand) throw new ConflictError('The brand/make changed or is already inactive. Refresh and try again.');
+      await this.audit(transaction, principal, requestId, 'master.brand_deactivated', 'brand', id, { reason });
+      return brand;
+    });
+  }
+
   private async assertActiveItemReferences(repository: ReturnType<typeof createMastersRepository>, companyId: string, categoryId: string, unitId: string) {
     const [category, unit] = await Promise.all([
       repository.findItemCategory(companyId, categoryId),
@@ -144,10 +175,18 @@ export class MastersService {
     if (!unit || unit.status !== 'active') throw new NotFoundError('Active unit not found.');
   }
 
+  private async assertActiveBrands(repository: ReturnType<typeof createMastersRepository>, companyId: string, brandIds: string[]) {
+    const selected = await repository.findBrands(companyId, brandIds);
+    if (selected.length !== brandIds.length || selected.some((brand) => brand.status !== 'active')) {
+      throw new NotFoundError('One or more active brands/makes were not found.');
+    }
+  }
+
   async createItem(principal: AuthenticatedPrincipal, input: ItemCreateInput, requestId: string) {
     return this.database.transaction(async (transaction) => {
       const repository = createMastersRepository(transaction);
       await this.assertActiveItemReferences(repository, principal.companyId, input.categoryId, input.unitId);
+      await this.assertActiveBrands(repository, principal.companyId, input.brandIds);
       const item = await repository.createItem({
         companyId: principal.companyId,
         code: input.code,
@@ -158,6 +197,7 @@ export class MastersService {
         unitId: input.unitId,
         createdByUserId: principal.userId,
       });
+      await repository.replaceItemBrands(principal.companyId, item!.id, input.brandIds, principal.userId);
       await this.audit(transaction, principal, requestId, 'master.item_created', 'item', item!.id);
       return item!;
     });
@@ -167,6 +207,7 @@ export class MastersService {
     return this.database.transaction(async (transaction) => {
       const repository = createMastersRepository(transaction);
       await this.assertActiveItemReferences(repository, principal.companyId, input.categoryId, input.unitId);
+      await this.assertActiveBrands(repository, principal.companyId, input.brandIds);
       const item = await repository.updateItem(principal.companyId, id, input.expectedVersion, {
         code: input.code,
         name: input.name,
@@ -176,6 +217,7 @@ export class MastersService {
         unitId: input.unitId,
       }, new Date());
       if (!item) throw new ConflictError('The item changed before this update. Refresh and try again.');
+      await repository.replaceItemBrands(principal.companyId, id, input.brandIds, principal.userId);
       await this.audit(transaction, principal, requestId, 'master.item_updated', 'item', id);
       return item;
     });

@@ -4,6 +4,8 @@ import { sendData } from '../../core/http/response.js';
 import { requireAuthentication, requireCsrf, requirePermission } from '../auth/auth.middleware.js';
 import { getPrincipal } from '../auth/auth.types.js';
 import {
+  brandCreateSchema,
+  brandUpdateSchema,
   deactivateMasterSchema,
   itemCategoryCreateSchema,
   itemCategoryUpdateSchema,
@@ -58,6 +60,25 @@ export function createMastersRouter() {
     const input = deactivateMasterSchema.parse(request.body);
     const category = await mastersService.deactivateItemCategory(getPrincipal(request), id, input.expectedVersion, input.reason, getRequestId(request));
     sendData(request, response, { category });
+  });
+
+  router.get('/brands', requirePermission('procurement.item.read'), async (request, response) => {
+    sendData(request, response, await mastersService.listBrands(getPrincipal(request), masterListQuerySchema.parse(request.query)));
+  });
+  router.post('/brands', requireCsrf, requirePermission('procurement.item.manage'), async (request, response) => {
+    const brand = await mastersService.createBrand(getPrincipal(request), brandCreateSchema.parse(request.body), getRequestId(request));
+    sendData(request, response, { brand }, 201);
+  });
+  router.put('/brands/:id', requireCsrf, requirePermission('procurement.item.manage'), async (request, response) => {
+    const { id } = masterIdParamsSchema.parse(request.params);
+    const brand = await mastersService.updateBrand(getPrincipal(request), id, brandUpdateSchema.parse(request.body), getRequestId(request));
+    sendData(request, response, { brand });
+  });
+  router.post('/brands/:id/deactivate', requireCsrf, requirePermission('procurement.item.manage'), async (request, response) => {
+    const { id } = masterIdParamsSchema.parse(request.params);
+    const input = deactivateMasterSchema.parse(request.body);
+    const brand = await mastersService.deactivateBrand(getPrincipal(request), id, input.expectedVersion, input.reason, getRequestId(request));
+    sendData(request, response, { brand });
   });
 
   router.get('/items', requirePermission('procurement.item.read'), async (request, response) => {

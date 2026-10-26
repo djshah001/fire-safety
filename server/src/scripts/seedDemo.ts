@@ -128,7 +128,8 @@ async function seedCustomer(
   input: {
     name: string;
     legalName: string;
-    taxIdentifier: string;
+    gstin: string;
+    pan: string;
     contact: string;
     email: string;
     phone: string;
@@ -139,9 +140,9 @@ async function seedCustomer(
   await client.query(
     `
     insert into customers (
-      company_id, display_name, display_name_normalized, legal_name, tax_identifier, created_by_user_id
+      company_id, display_name, display_name_normalized, legal_name, customer_type, gstin, pan, created_by_user_id
     )
-    select $1, $2, $3::text, $4, $5, $6
+    select $1, $2, $3::text, $4, 'business', $5, $6, $7
     where not exists (
       select 1 from customers where company_id = $1 and display_name_normalized = $3::text
     )
@@ -151,7 +152,8 @@ async function seedCustomer(
       input.name,
       normalizedName,
       input.legalName,
-      input.taxIdentifier,
+      input.gstin,
+      input.pan,
       actorId,
     ],
   );
@@ -161,6 +163,10 @@ async function seedCustomer(
     select id from customers where company_id = $1 and display_name_normalized = $2 order by created_at limit 1
   `,
     [companyId, normalizedName],
+  );
+  await client.query(
+    `update customers set customer_type = 'business', gstin = $2, pan = $3, updated_at = now() where id = $1`,
+    [customer.id, input.gstin, input.pan],
   );
   const normalizedEmail = input.email.toLowerCase();
   await client.query(
@@ -395,6 +401,22 @@ async function seedMasterData(
     categoryIds.set(code, category.id);
   }
 
+  const brandDefinitions = [
+    ["DEMO-AGNI", "Demo Agni Safety"],
+    ["DEMO-SENTINEL", "Demo Sentinel Systems"],
+    ["DEMO-VELOCITY", "Demo Velocity Fire"],
+  ] as const;
+  const brandIds = new Map<string, string>();
+  for (const [code, name] of brandDefinitions) {
+    const brand = await one<IdRow>(client, `
+      insert into brands (company_id, code, name, name_normalized, created_by_user_id)
+      values ($1, $2, $3::text, lower($3::text), $4)
+      on conflict (company_id, code) do update set name = excluded.name, name_normalized = excluded.name_normalized, status = 'active', updated_at = now()
+      returning id
+    `, [companyId, code, name, actorId]);
+    brandIds.set(code, brand.id);
+  }
+
   const items = [
     [
       "DEMO-CO2-45",
@@ -402,6 +424,7 @@ async function seedMasterData(
       "4.5 kg CO2 extinguisher",
       "DEMO-EXT",
       "DEMO-NOS",
+      ["DEMO-AGNI", "DEMO-SENTINEL"],
     ],
     [
       "DEMO-ABC-06",
@@ -409,6 +432,7 @@ async function seedMasterData(
       "6 kg ABC dry powder extinguisher",
       "DEMO-EXT",
       "DEMO-NOS",
+      ["DEMO-AGNI", "DEMO-VELOCITY"],
     ],
     [
       "DEMO-SMOKE",
@@ -416,6 +440,7 @@ async function seedMasterData(
       "Addressable optical smoke detector",
       "DEMO-DET",
       "DEMO-NOS",
+      ["DEMO-SENTINEL", "DEMO-VELOCITY"],
     ],
     [
       "DEMO-MS-P65",
@@ -423,6 +448,7 @@ async function seedMasterData(
       "C-class heavy MS pipe",
       "DEMO-PIP",
       "DEMO-MTR",
+      ["DEMO-AGNI", "DEMO-VELOCITY"],
     ],
     [
       "DEMO-INSTALL",
@@ -430,10 +456,12 @@ async function seedMasterData(
       "Complete demo installation lot",
       "DEMO-PIP",
       "DEMO-LOT",
+      ["DEMO-AGNI"],
     ],
   ] as const;
-  for (const [code, name, specification, categoryCode, unitCode] of items) {
-    await client.query(
+  for (const [code, name, specification, categoryCode, unitCode, allowedBrandCodes] of items) {
+    const item = await one<IdRow>(
+      client,
       `
       insert into items (
         company_id, code, name, name_normalized, specification, category_id, unit_id, created_by_user_id
@@ -442,6 +470,7 @@ async function seedMasterData(
         set name = excluded.name, name_normalized = excluded.name_normalized,
             specification = excluded.specification, category_id = excluded.category_id,
             unit_id = excluded.unit_id, status = 'active', updated_at = now()
+      returning id
     `,
       [
         companyId,
@@ -453,6 +482,12 @@ async function seedMasterData(
         actorId,
       ],
     );
+    for (const brandCode of allowedBrandCodes) {
+      await client.query(`
+        insert into item_brands (company_id, item_id, brand_id, created_by_user_id)
+        values ($1, $2, $3, $4) on conflict do nothing
+      `, [companyId, item.id, brandIds.get(brandCode), actorId]);
+    }
   }
 
   const vendors = [
@@ -817,7 +852,21 @@ async function ensureQuotationScenario(
       [quotation.id],
     )
   ).rows[0];
-  if (revision) return revision;
+  if (revision) {
+    await client.query(`
+      update quotation_lines quote_line
+      set brand_id = chosen.id, brand_name_snapshot = chosen.name, updated_at = now()
+      from boq_lines boq_line
+      join lateral (
+        select brand.id, brand.name from item_brands assignment
+        join brands brand on brand.id = assignment.brand_id and brand.status = 'active'
+        where assignment.item_id = boq_line.item_id
+        order by brand.name limit 1
+      ) chosen on true
+      where quote_line.quotation_revision_id = $1 and quote_line.boq_line_id = boq_line.id
+    `, [revision.id]);
+    return revision;
+  }
 
   revision = await one<IdRow>(
     client,
@@ -855,13 +904,20 @@ async function ensureQuotationScenario(
     insert into quotation_lines (
       company_id, quotation_revision_id, boq_line_id, line_number, section_snapshot,
       item_code_snapshot, item_name_snapshot, specification_snapshot, unit_symbol_snapshot,
-      quantity, unit_rate, discount_amount, line_subtotal, line_total, notes
+      brand_id, brand_name_snapshot, quantity, unit_rate, discount_amount, line_subtotal, line_total, notes
     )
     select $1, $2, line.id, line.line_number, line.section, line.item_code_snapshot,
       line.item_name_snapshot, line.specification_snapshot, line.unit_symbol_snapshot,
-      line.quantity, '1200.00', '600.00', '14400.00', '13800.00',
+      chosen.id, chosen.name, line.quantity, '1200.00', '600.00', '14400.00', '13800.00',
       'Synthetic selling price for workflow testing.'
-    from boq_lines line where line.boq_revision_id = $3
+    from boq_lines line
+    join lateral (
+      select brand.id, brand.name from item_brands assignment
+      join brands brand on brand.id = assignment.brand_id and brand.status = 'active'
+      where assignment.item_id = line.item_id
+      order by brand.name limit 1
+    ) chosen on true
+    where line.boq_revision_id = $3
     order by line.line_number
   `,
     [input.companyId, revision.id, input.boqRevisionId],
@@ -1075,7 +1131,8 @@ async function seed() {
       await seedCustomer(client, company.id, adminId, {
         name: "Demo Acme Industrial Systems",
         legalName: "Demo Acme Industrial Systems Private Limited",
-        taxIdentifier: "24DEMO0001A1Z1",
+        gstin: "24ABCDE1234F1Z5",
+        pan: "ABCDE1234F",
         contact: "Asha Mehta",
         email: "asha@demo-acme.example",
         phone: "+91 98765 40001",
@@ -1084,7 +1141,8 @@ async function seed() {
       await seedCustomer(client, company.id, adminId, {
         name: "Demo Sunrise Hospital",
         legalName: "Demo Sunrise Hospital Trust",
-        taxIdentifier: "24DEMO0002A1Z2",
+        gstin: "24BCDEF2345G1Z6",
+        pan: "BCDEF2345G",
         contact: "Kunal Shah",
         email: "kunal@demo-sunrise.example",
         phone: "+91 98765 40002",
@@ -1093,7 +1151,8 @@ async function seed() {
       await seedCustomer(client, company.id, adminId, {
         name: "Demo Orion Warehousing",
         legalName: "Demo Orion Warehousing LLP",
-        taxIdentifier: "24DEMO0003A1Z3",
+        gstin: "24CDEFG3456H1Z7",
+        pan: "CDEFG3456H",
         contact: "Priya Desai",
         email: "priya@demo-orion.example",
         phone: "+91 98765 40003",

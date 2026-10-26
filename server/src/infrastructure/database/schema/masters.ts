@@ -5,6 +5,7 @@ import {
   index,
   integer,
   pgTable,
+  primaryKey,
   timestamp,
   uniqueIndex,
   uuid,
@@ -51,6 +52,24 @@ export const itemCategories = pgTable('item_categories', {
   check('item_categories_row_version_positive', sql`${table.rowVersion} > 0`),
 ]);
 
+export const brands = pgTable('brands', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  code: varchar('code', { length: 40 }).notNull(),
+  name: varchar('name', { length: 120 }).notNull(),
+  nameNormalized: varchar('name_normalized', { length: 120 }).notNull(),
+  status: masterStatusEnum('status').notNull().default('active'),
+  rowVersion: integer('row_version').notNull().default(1),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('brands_company_code_uidx').on(table.companyId, table.code),
+  uniqueIndex('brands_company_name_uidx').on(table.companyId, table.nameNormalized),
+  index('brands_company_status_idx').on(table.companyId, table.status),
+  check('brands_row_version_positive', sql`${table.rowVersion} > 0`),
+]);
+
 export const items = pgTable('items', {
   id: uuid('id').primaryKey().defaultRandom(),
   companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
@@ -72,6 +91,17 @@ export const items = pgTable('items', {
   index('items_company_unit_idx').on(table.companyId, table.unitId),
   index('items_company_status_idx').on(table.companyId, table.status),
   check('items_row_version_positive', sql`${table.rowVersion} > 0`),
+]);
+
+export const itemBrands = pgTable('item_brands', {
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'cascade' }),
+  itemId: uuid('item_id').notNull().references(() => items.id, { onDelete: 'cascade' }),
+  brandId: uuid('brand_id').notNull().references(() => brands.id, { onDelete: 'restrict' }),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  primaryKey({ name: 'item_brands_pk', columns: [table.itemId, table.brandId] }),
+  index('item_brands_company_brand_idx').on(table.companyId, table.brandId),
 ]);
 
 export const vendors = pgTable('vendors', {
@@ -129,6 +159,7 @@ export const vendorContacts = pgTable('vendor_contacts', {
 
 export type Unit = typeof units.$inferSelect;
 export type ItemCategory = typeof itemCategories.$inferSelect;
+export type Brand = typeof brands.$inferSelect;
 export type Item = typeof items.$inferSelect;
 export type Vendor = typeof vendors.$inferSelect;
 export type VendorContact = typeof vendorContacts.$inferSelect;

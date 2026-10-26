@@ -14,9 +14,13 @@ export type Unit = {
 export type ItemCategory = {
   id: string; code: string; name: string; status: MasterStatus; rowVersion: number; updatedAt: string;
 };
+export type Brand = {
+  id: string; code: string; name: string; status: MasterStatus; rowVersion: number; updatedAt: string;
+};
 export type Item = {
   id: string; code: string; name: string; specification: string | null;
   categoryId: string; categoryName: string; unitId: string; unitName: string; unitSymbol: string;
+  brands: Array<{ id: string; code: string; name: string; status: MasterStatus }>;
   status: MasterStatus; rowVersion: number; updatedAt: string;
 };
 export type Vendor = {
@@ -26,7 +30,7 @@ export type Vendor = {
   primaryContact: { id: string; name: string; jobTitle: string | null; phone: string | null; email: string | null } | null;
 };
 export type MasterPage<T> = { items: T[]; total: number; page: number; pageSize: number };
-export type MasterResource = 'vendors' | 'items' | 'item-categories' | 'units';
+export type MasterResource = 'vendors' | 'items' | 'item-categories' | 'brands' | 'units';
 
 const compact = (input: MasterFilters) => Object.fromEntries(
   Object.entries(input).filter(([, value]) => value !== undefined && value !== ''),
@@ -42,7 +46,7 @@ export const masterListQuery = <T>(resource: MasterResource, filters: MasterFilt
   },
 });
 
-export const masterLookupsQuery = (resource: 'units' | 'item-categories') => masterListQuery<Unit | ItemCategory>(resource, {
+export const masterLookupsQuery = (resource: 'units' | 'item-categories' | 'brands') => masterListQuery<Unit | ItemCategory | Brand>(resource, {
   status: 'active', page: 1, pageSize: 100, sort: 'name', direction: 'asc',
 });
 

@@ -44,6 +44,9 @@ export type QuotationLine = {
   itemCode: string;
   itemName: string;
   specification: string;
+  brandId: string | null;
+  brandName: string | null;
+  brandOptions: Array<{ id: string; code: string; name: string }>;
   unitSymbol: string;
   quantity: string;
   unitRate: string;
@@ -119,7 +122,7 @@ export async function updateQuotationHeader(jobId: string, revisionId: string, i
   await apiClient.patch(`/engineering/design-jobs/${jobId}/quotations/${revisionId}`, input);
 }
 
-export async function updateQuotationLine(jobId: string, revisionId: string, lineId: string, input: { unitRate: string; discountAmount: string; notes?: string; expectedRevisionVersion: number; expectedLineVersion: number }) {
+export async function updateQuotationLine(jobId: string, revisionId: string, lineId: string, input: { brandId: string; unitRate: string; discountAmount: string; notes?: string; expectedRevisionVersion: number; expectedLineVersion: number }) {
   await apiClient.patch(`/engineering/design-jobs/${jobId}/quotations/${revisionId}/lines/${lineId}`, input);
 }
 

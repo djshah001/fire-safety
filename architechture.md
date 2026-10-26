@@ -110,7 +110,7 @@ Engineering decides specification approval; purchasing cannot silently substitut
 | --- | --- |
 | Foundation | companies, branches, users, employees, auth_sessions, roles, permissions, role_permissions, user_role_assignments, scoped_grants, document_counters |
 | Foundation shared | documents, document_versions, explicit_document_links, approval_policy_versions, approval_requests, approval_steps, approval_actions, audit_logs, outbox_jobs, notifications, notification_deliveries, idempotency_records, import_runs, import_rows |
-| Masters / CRM | customers, customer_contacts, customer_addresses, sites, vendors, vendor_contacts, items, item_categories, units, leads, opportunities, opportunity_members, activities, reminder_rules, reminder_occurrences |
+| Masters / CRM | customers, customer_contacts, customer_addresses, sites, vendors, vendor_contacts, items, item_categories, brands, item_brands, units, leads, opportunities, opportunity_members, activities, reminder_rules, reminder_occurrences |
 | Engineering | design_jobs, design_job_members, design_packages, design_package_revisions, drawings, drawing_revisions, design_customer_decisions, boq_revisions, boq_lines, estimate_revisions, estimate_lines, quotations, quotation_revisions, quotation_lines, customer_orders |
 | Project pilot | projects, project_members, project_design_baselines, project_commercial_baselines, project_payment_plans |
 | Purchasing | requisitions, requisition_lines, rfqs, rfq_lines, vendor_offers, vendor_offer_lines, purchase_comparisons, selection_decisions, purchase_orders, purchase_order_revisions, purchase_order_lines, goods_receipts, goods_receipt_lines, receipt_inspections, supplier_returns |
@@ -120,6 +120,8 @@ Engineering decides specification approval; purchasing cannot silently substitut
 | Finance later | invoices, invoice_lines, receipts, receipt_allocations, vendor_bills, vendor_payments, credit_notes, accounting_export_runs; ledger tables only after accounting scope approval |
 
 Pilot project creation has nullable customer order/accepted quotation. A required immutable design baseline references exact customer-approved package/BOQ. Commercial baseline is recorded independently when accepted later. A design authorization date, actual start date and commercial acceptance date are separate fields.
+
+Customer tax identity keeps the legacy generic tax identifier separate from optional validated GSTIN/PAN. Items and brands/makes are company-scoped many-to-many masters. Quotation lines accept only a currently active make assigned to their BOQ item, then preserve both its ID and immutable name snapshot; submission rejects missing or withdrawn selections.
 
 Use UUID IDs and separate human-readable counters, unique per company/type/period. Default display format `FS-<TYPE>-<YYYY>-<000001>`; provisional calendar-year numbering, official production format remains open. Revisions append `R02`; atomic sequence/counter allocation, never `MAX()+1`. Cancelled numbers are retained.
 

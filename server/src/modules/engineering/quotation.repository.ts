@@ -4,12 +4,14 @@ import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
 import {
   boqLines,
   boqRevisions,
+  brands,
   customers,
   designJobs,
   documentCounters,
   leads,
   leadMembers,
   opportunities,
+  itemBrands,
   opportunityMembers,
   quotationCustomerDecisions,
   quotationIssueDocuments,
@@ -127,6 +129,20 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
       return executor.select().from(boqLines).where(and(
         eq(boqLines.companyId, companyId), eq(boqLines.boqRevisionId, boqRevisionId),
       )).orderBy(asc(boqLines.lineNumber));
+    },
+
+    listBrandOptionsForBoqLines(companyId: string, boqLineIds: string[]) {
+      if (boqLineIds.length === 0) return Promise.resolve([]);
+      return executor.select({
+        boqLineId: boqLines.id,
+        brandId: brands.id,
+        code: brands.code,
+        name: brands.name,
+      }).from(boqLines)
+        .innerJoin(itemBrands, and(eq(itemBrands.itemId, boqLines.itemId), eq(itemBrands.companyId, companyId)))
+        .innerJoin(brands, and(eq(brands.id, itemBrands.brandId), eq(brands.companyId, companyId), eq(brands.status, 'active')))
+        .where(and(eq(boqLines.companyId, companyId), inArray(boqLines.id, boqLineIds)))
+        .orderBy(asc(brands.name));
     },
 
     async allocateQuotationNumber(companyId: string, now: Date) {

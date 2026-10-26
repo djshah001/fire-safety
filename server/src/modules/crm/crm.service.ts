@@ -65,6 +65,9 @@ function customerInputFromImport(payload: Record<string, string | null>) {
   return {
     displayName: importValue(payload, 'display_name') ?? '',
     legalName: importValue(payload, 'legal_name'),
+    customerType: importValue(payload, 'customer_type') ?? 'business',
+    gstin: importValue(payload, 'gstin'),
+    pan: importValue(payload, 'pan'),
     contacts: [{
       name: importValue(payload, 'contact_name') ?? '',
       jobTitle: importValue(payload, 'job_title'),
@@ -72,7 +75,14 @@ function customerInputFromImport(payload: Record<string, string | null>) {
       email: importValue(payload, 'email'),
       isPrimary: true,
     }],
-    addresses: [],
+    addresses: importValue(payload, 'billing_address') ? [{
+      label: 'Billing',
+      addressLine1: importValue(payload, 'billing_address') ?? '',
+      city: importValue(payload, 'billing_city') ?? '',
+      state: importValue(payload, 'billing_state'),
+      postalCode: importValue(payload, 'billing_postal_code'),
+      country: importValue(payload, 'billing_country'),
+    }] : [],
     sites: hasSite ? [{
       name: importValue(payload, 'site_name') ?? '',
       addressLine1: importValue(payload, 'site_address') ?? '',
@@ -286,6 +296,9 @@ export class CrmService {
         displayName: input.displayName,
         displayNameNormalized: normalizeName(input.displayName),
         legalName: input.legalName,
+        customerType: input.customerType,
+        gstin: input.gstin,
+        pan: input.pan,
         createdByUserId: principal.userId,
       });
       await repository.addCustomerMember(principal.companyId, customer!.id, principal.userId, 'owner');
@@ -644,6 +657,9 @@ export class CrmService {
         displayName: input.displayName,
         displayNameNormalized: normalizeName(input.displayName),
         legalName: input.legalName,
+        customerType: input.customerType,
+        gstin: input.gstin,
+        pan: input.pan,
         createdByUserId: principal.userId,
       });
       await repository.addCustomerMember(principal.companyId, customer!.id, principal.userId, 'owner');
@@ -657,6 +673,12 @@ export class CrmService {
         email: contact.email,
         emailNormalized: contact.emailNormalized,
         isPrimary: contact.isPrimary,
+        createdByUserId: principal.userId,
+      })));
+      await repository.createAddresses(input.addresses.map((address: AddressInput) => ({
+        ...address,
+        companyId: principal.companyId,
+        customerId: customer!.id,
         createdByUserId: principal.userId,
       })));
       await repository.createSites(input.sites.map((site) => ({
