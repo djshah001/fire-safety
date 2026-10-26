@@ -113,6 +113,8 @@ Later groups: inventory, execution, quality/handover and finance when implemente
 
 Implemented P2 master directories reuse the shared shadcn `ServerDataTable` and `ListToolbar`, with URL search/status/sort/page state, a Sheet filter, Dialog create/edit/deactivate forms, semantic status badges and Sonner feedback. Vendor operational contacts are shown without bank fields; item rows show category and unit context. Deactivation preserves referenced history.
 
+Implemented P4 sourcing uses permission-visible **Procurement → Requisitions & sourcing** and **Technical reviews** submenus. Both directories keep URL-backed search/status/sort/pagination in the shared table/toolbar. The commercial workspace separates approved demand, internal RFQ metadata, comparable offer cards/tables, exact-line engineering decisions and the durable manager decision. The design-head workspace shows only approved/offered technical specifications, makes and deviation notes—never rates, totals, taxes, freight or payment terms. Dialogs capture exact-line approve/reject reasons, states remain prominently badged, persistent Alerts explain authority boundaries/external delivery status, and Sonner reports mutations.
+
 ## 4. Screens and workflows
 
 | Screen | Main content | Primary actions / safeguards |

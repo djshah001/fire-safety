@@ -104,6 +104,8 @@ Within a nontrivial module use `*.routes.ts`, `*.controller.ts`, `*.service.ts`,
 
 Engineering decides specification approval; purchasing cannot silently substitute approved items. Procurement owns receipt quantities. Later inventory posting references a stable receipt line and posts exactly once; purchasing does not directly edit arbitrary stock balances. Finance does not change technical BOQ quantities to match payment methods.
 
+Implemented P4 checkpoints 1–2 store `procurement_requisitions` and immutable approved-BOQ snapshots in `procurement_requisition_lines`; `procurement_rfqs`, invited vendors and RFQ-line snapshots; submitted `vendor_offers`/`vendor_offer_lines`; versioned `purchase_comparisons` with one `procurement_selection_decisions` record; and one immutable `procurement_substitution_reviews` decision per non-equivalent offer line. Commercial directory/detail reads require the named buyer or purchase manager. Creation additionally checks explicit project membership and exact approved BOQ/design-baseline alignment. Buyer and manager must differ. Only the buyer creates the internal RFQ and records complete offers; only the manager selects. A separate technical DTO is available only to the exact baseline design head who is also a project member; it omits all commercial values. Pending/rejected technical lines block supplier selection. No external send, PO, receipt or stock record is implied.
+
 ## 5. Persistence model
 
 | Phase | Tables (logical names; finalize in ERD) |
@@ -111,7 +113,7 @@ Engineering decides specification approval; purchasing cannot silently substitut
 | Foundation | companies, branches, users, employees, auth_sessions, roles, permissions, role_permissions, user_role_assignments, scoped_grants, document_counters |
 | Foundation shared | documents, document_versions, explicit_document_links, approval_policy_versions, approval_requests, approval_steps, approval_actions, audit_logs, outbox_jobs, notifications, notification_deliveries, idempotency_records, import_runs, import_rows |
 | Masters / CRM | customers, customer_contacts, customer_addresses, sites, vendors, vendor_contacts, items, item_categories, brands, item_brands, units, leads, opportunities, opportunity_members, activities, reminder_rules, reminder_occurrences |
-| Engineering | design_jobs, design_job_members, design_packages, design_package_revisions, drawings, drawing_revisions, design_customer_decisions, boq_revisions, boq_lines, estimate_revisions, estimate_lines, quotations, quotation_revisions, quotation_lines, customer_orders |
+| Engineering | design_jobs, design_job_members, survey_revisions, survey_revision_files, design_packages, design_package_revisions, drawings, drawing_revisions, design_customer_decisions, boq_revisions, boq_lines, estimate_revisions, estimate_lines, quotations, quotation_revisions, quotation_lines, customer_orders |
 | Project pilot | projects, project_members, project_design_baselines, project_commercial_baselines, project_payment_plans |
 | Purchasing | requisitions, requisition_lines, rfqs, rfq_lines, vendor_offers, vendor_offer_lines, purchase_comparisons, selection_decisions, purchase_orders, purchase_order_revisions, purchase_order_lines, goods_receipts, goods_receipt_lines, receipt_inspections, supplier_returns |
 | Inventory later | warehouses, stock_locations, stock_documents, stock_document_lines, stock_ledger_entries, stock_balances, stock_reservations, reservation_allocations, stock_transfers, item_batches, item_serials |
@@ -122,6 +124,8 @@ Engineering decides specification approval; purchasing cannot silently substitut
 Pilot project creation has nullable customer order/accepted quotation. A required immutable design baseline references exact customer-approved package/BOQ. Commercial baseline is recorded independently when accepted later. A design authorization date, actual start date and commercial acceptance date are separate fields.
 
 Customer tax identity keeps the legacy generic tax identifier separate from optional validated GSTIN/PAN. Items and brands/makes are company-scoped many-to-many masters. Quotation lines accept only a currently active make assigned to their BOQ item, then preserve both its ID and immutable name snapshot; submission rejects missing or withdrawn selections.
+
+Optional site surveys are separate from CAD package approval state. `survey_revisions` provides a per-job numbered draft/finalized chain; each revision records its survey date and change summary and owns private checksummed PDF/image files. Only the assigned designer creates, uploads and finalizes, while every read/download repeats normal design-job scope. Finalization requires at least one file and freezes the revision; it does not advance or block the design job.
 
 Use UUID IDs and separate human-readable counters, unique per company/type/period. Default display format `FS-<TYPE>-<YYYY>-<000001>`; provisional calendar-year numbering, official production format remains open. Revisions append `R02`; atomic sequence/counter allocation, never `MAX()+1`. Cancelled numbers are retained.
 
@@ -162,6 +166,10 @@ REST `/api/v1` remains the default; no new query protocol is necessary. Represen
 | POST /design-package-revisions/:id/customer-decisions | Sales records evidence and customer decision |
 | GET /projects; GET /projects/:id | Membership-scoped project register and immutable baseline detail |
 | GET /projects/start-options/:jobId; POST /projects/from-design/:jobId | Idempotent project creation from approved design; commercial award optional |
+| GET/POST /procurement/requisitions; GET /procurement/requisitions/:id | Assigned sourcing directory, approved-BOQ demand creation and normalized workspace |
+| POST /procurement/requisitions/:id/rfq, /offers, /select | Internal RFQ creation, complete offer capture and reasoned manager selection |
+| GET /procurement/substitution-reviews; GET /procurement/substitution-reviews/:id | Assigned design-head queue and commercial-redacted technical comparison |
+| POST /procurement/substitution-reviews/:id/lines/:lineId/decision | Immutable exact-line engineering approve/reject reason |
 | POST /quotation-revisions/:id/submit, /issue, /accept | Explicit commercial transitions |
 | POST /approval-requests/:id/approve, /return, /reject | Authorized revision-bound decisions |
 | POST /purchase-comparisons/:id/select | Supplier choice + justified exceptions |

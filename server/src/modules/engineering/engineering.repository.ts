@@ -12,6 +12,8 @@ import {
   leads,
   opportunityMembers,
   outboxJobs,
+  surveyRevisionFiles,
+  surveyRevisions,
   users,
 } from '../../infrastructure/database/schema/index.js';
 
@@ -98,6 +100,95 @@ export function createEngineeringRepository(executor: DatabaseExecutor) {
       return executor.select().from(designDeadlineExtensions).where(and(
         eq(designDeadlineExtensions.companyId, companyId), eq(designDeadlineExtensions.designJobId, jobId),
       )).orderBy(desc(designDeadlineExtensions.sequenceNumber));
+    },
+
+    async listSurveyRevisions(companyId: string, jobId: string) {
+      return executor.select().from(surveyRevisions).where(and(
+        eq(surveyRevisions.companyId, companyId), eq(surveyRevisions.designJobId, jobId),
+      )).orderBy(desc(surveyRevisions.revisionNumber));
+    },
+
+    async findSurveyRevision(companyId: string, jobId: string, surveyRevisionId: string) {
+      const [revision] = await executor.select().from(surveyRevisions).where(and(
+        eq(surveyRevisions.companyId, companyId),
+        eq(surveyRevisions.designJobId, jobId),
+        eq(surveyRevisions.id, surveyRevisionId),
+      )).limit(1);
+      return revision;
+    },
+
+    async findDraftSurveyRevision(companyId: string, jobId: string) {
+      const [revision] = await executor.select().from(surveyRevisions).where(and(
+        eq(surveyRevisions.companyId, companyId),
+        eq(surveyRevisions.designJobId, jobId),
+        eq(surveyRevisions.status, 'draft'),
+      )).limit(1);
+      return revision;
+    },
+
+    async lockJob(companyId: string, jobId: string) {
+      const [job] = await executor.select({ id: designJobs.id }).from(designJobs).where(and(
+        eq(designJobs.companyId, companyId), eq(designJobs.id, jobId),
+      )).for('update');
+      return job;
+    },
+
+    async lockSurveyRevision(companyId: string, jobId: string, surveyRevisionId: string) {
+      const [revision] = await executor.select().from(surveyRevisions).where(and(
+        eq(surveyRevisions.companyId, companyId),
+        eq(surveyRevisions.designJobId, jobId),
+        eq(surveyRevisions.id, surveyRevisionId),
+      )).for('update');
+      return revision;
+    },
+
+    async nextSurveyRevisionNumber(companyId: string, jobId: string) {
+      const [row] = await executor.select({ value: max(surveyRevisions.revisionNumber) }).from(surveyRevisions).where(and(
+        eq(surveyRevisions.companyId, companyId), eq(surveyRevisions.designJobId, jobId),
+      ));
+      return Number(row?.value ?? 0) + 1;
+    },
+
+    async createSurveyRevision(input: typeof surveyRevisions.$inferInsert) {
+      const [revision] = await executor.insert(surveyRevisions).values(input).onConflictDoNothing().returning();
+      return revision;
+    },
+
+    async listSurveyFiles(companyId: string, surveyRevisionId: string) {
+      return executor.select().from(surveyRevisionFiles).where(and(
+        eq(surveyRevisionFiles.companyId, companyId),
+        eq(surveyRevisionFiles.surveyRevisionId, surveyRevisionId),
+      )).orderBy(asc(surveyRevisionFiles.createdAt), asc(surveyRevisionFiles.id));
+    },
+
+    async createSurveyFile(input: typeof surveyRevisionFiles.$inferInsert) {
+      const [file] = await executor.insert(surveyRevisionFiles).values(input).returning();
+      return file;
+    },
+
+    async findSurveyFile(companyId: string, surveyRevisionId: string, fileId: string) {
+      const [file] = await executor.select().from(surveyRevisionFiles).where(and(
+        eq(surveyRevisionFiles.companyId, companyId),
+        eq(surveyRevisionFiles.surveyRevisionId, surveyRevisionId),
+        eq(surveyRevisionFiles.id, fileId),
+      )).limit(1);
+      return file;
+    },
+
+    async finalizeSurveyRevision(companyId: string, surveyRevisionId: string, expectedVersion: number, userId: string, now: Date) {
+      const [revision] = await executor.update(surveyRevisions).set({
+        status: 'finalized',
+        finalizedByUserId: userId,
+        finalizedAt: now,
+        rowVersion: sql`${surveyRevisions.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(surveyRevisions.companyId, companyId),
+        eq(surveyRevisions.id, surveyRevisionId),
+        eq(surveyRevisions.status, 'draft'),
+        eq(surveyRevisions.rowVersion, expectedVersion),
+      )).returning();
+      return revision;
     },
 
     async nextRevisionNumber(companyId: string, jobId: string) {

@@ -6,3 +6,4 @@ export * from './crm.js';
 export * from './masters.js';
 export * from './engineering.js';
 export * from './projects.js';
+export * from './procurement.js';

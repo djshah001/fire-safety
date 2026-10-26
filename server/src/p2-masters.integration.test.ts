@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import { hashPassword } from './core/security/password.js';
 import { closeDatabase, pool } from './infrastructure/database/db.js';
+import { ensureUploadRoot, removePrivateFile } from './infrastructure/storage/localFileStorage.js';
 
 const origin = 'http://localhost:5173';
 const password = 'P2MastersPassword123!';
@@ -24,6 +25,14 @@ function csrfFrom(response: request.Response) {
 }
 
 async function cleanFixtures() {
+  for (const table of [
+    'procurement_selection_decisions', 'procurement_substitution_reviews', 'vendor_offer_lines', 'vendor_offers', 'purchase_comparisons',
+    'procurement_rfq_vendors', 'procurement_rfq_lines', 'procurement_rfqs',
+    'procurement_requisition_lines', 'procurement_requisitions',
+    'project_commercial_baselines', 'project_design_baselines', 'project_members', 'projects',
+  ]) await pool.query(`delete from ${table}`);
+  const files = await pool.query<{ storageName: string }>('select storage_name as "storageName" from survey_revision_files');
+  await Promise.all(files.rows.map((file) => removePrivateFile(file.storageName)));
   await pool.query('delete from quotation_customer_decisions');
   await pool.query('delete from quotation_issue_documents');
   await pool.query('delete from quotation_review_actions');
@@ -34,6 +43,8 @@ async function cleanFixtures() {
   await pool.query('delete from design_customer_decisions');
   await pool.query('delete from design_review_actions');
   await pool.query('delete from design_revision_files');
+  await pool.query('delete from survey_revision_files');
+  await pool.query('delete from survey_revisions');
   await pool.query('delete from boq_review_actions');
   await pool.query('delete from boq_revision_contributors');
   await pool.query('delete from estimate_cost_lines');
@@ -98,7 +109,7 @@ async function login(app: ReturnType<typeof createApp>, email: string) {
 }
 
 describe('P2 purchasing masters and free-design authorization', () => {
-  beforeAll(resetFixtures);
+  beforeAll(async () => { await ensureUploadRoot(); await resetFixtures(); });
   afterAll(async () => { await cleanFixtures(); await closeDatabase(); });
 
   it('manages versioned vendor/item/unit masters without destructive deletion', async () => {
@@ -182,6 +193,7 @@ describe('P2 purchasing masters and free-design authorization', () => {
     const sales = await login(app, emails.sales);
     const outsider = await login(app, emails.outsider);
     const head = await login(app, emails.head);
+    const designer = await login(app, emails.designer);
 
     const service = await sales.agent.post('/api/v1/crm/service-categories')
       .set('Origin', origin).set('X-CSRF-Token', sales.csrf)
@@ -227,6 +239,46 @@ describe('P2 purchasing masters and free-design authorization', () => {
       .send({ designerUserId: designerId, expectedVersion: authorization.body.data.designJob.rowVersion });
     expect(assigned.status).toBe(200);
     expect(assigned.body.data.job).toMatchObject({ status: 'authorized', designerUserId: designerId });
+
+    const survey = await designer.agent.post(`/api/v1/engineering/design-jobs/${jobId}/surveys`)
+      .set('Origin', origin).set('X-CSRF-Token', designer.csrf)
+      .set('X-Request-Id', 'p3-survey-created')
+      .send({ title: 'Initial warehouse survey', changeSummary: 'Pump room and riser route', surveyedOn: '2026-10-26' });
+    expect(survey.status, JSON.stringify(survey.body)).toBe(201);
+    expect(survey.body.data.revision).toMatchObject({ revisionNumber: 1, status: 'draft', rowVersion: 1 });
+    const surveyRevisionId = survey.body.data.revision.id as string;
+
+    const secondDraft = await designer.agent.post(`/api/v1/engineering/design-jobs/${jobId}/surveys`)
+      .set('Origin', origin).set('X-CSRF-Token', designer.csrf)
+      .send({ title: 'Concurrent draft', changeSummary: 'Must be blocked', surveyedOn: '2026-10-26' });
+    expect(secondDraft.status).toBe(409);
+
+    const surveyFile = await designer.agent.post(`/api/v1/engineering/design-jobs/${jobId}/surveys/${surveyRevisionId}/files`)
+      .set('Origin', origin).set('X-CSRF-Token', designer.csrf)
+      .set('X-Request-Id', 'p3-survey-file')
+      .attach('file', Buffer.from('%PDF-1.4 private survey evidence'), { filename: 'warehouse-survey.pdf', contentType: 'application/pdf' });
+    expect(surveyFile.status, JSON.stringify(surveyFile.body)).toBe(201);
+    expect(surveyFile.body.data.file).not.toHaveProperty('storageName');
+    expect(surveyFile.body.data.file.checksumSha256).toMatch(/^[a-f0-9]{64}$/);
+    const surveyFileId = surveyFile.body.data.file.id as string;
+    expect((await head.agent.get(`/api/v1/engineering/design-jobs/${jobId}/surveys/${surveyRevisionId}/files/${surveyFileId}`)).status).toBe(200);
+    expect((await outsider.agent.get(`/api/v1/engineering/design-jobs/${jobId}/surveys/${surveyRevisionId}/files/${surveyFileId}`)).status).toBe(404);
+
+    const finalizedSurvey = await designer.agent.post(`/api/v1/engineering/design-jobs/${jobId}/surveys/${surveyRevisionId}/finalize`)
+      .set('Origin', origin).set('X-CSRF-Token', designer.csrf)
+      .set('X-Request-Id', 'p3-survey-finalized').send({ expectedVersion: 1 });
+    expect(finalizedSurvey.status, JSON.stringify(finalizedSurvey.body)).toBe(200);
+    expect(finalizedSurvey.body.data.revision).toMatchObject({ status: 'finalized', rowVersion: 2 });
+    const immutableUpload = await designer.agent.post(`/api/v1/engineering/design-jobs/${jobId}/surveys/${surveyRevisionId}/files`)
+      .set('Origin', origin).set('X-CSRF-Token', designer.csrf)
+      .attach('file', Buffer.from('%PDF-1.4 late file'), { filename: 'late.pdf', contentType: 'application/pdf' });
+    expect(immutableUpload.status).toBe(409);
+
+    const nextSurvey = await designer.agent.post(`/api/v1/engineering/design-jobs/${jobId}/surveys`)
+      .set('Origin', origin).set('X-CSRF-Token', designer.csrf)
+      .send({ title: 'Follow-up survey', changeSummary: 'Updated riser route', surveyedOn: '2026-10-27' });
+    expect(nextSurvey.status).toBe(201);
+    expect(nextSurvey.body.data.revision).toMatchObject({ revisionNumber: 2, status: 'draft' });
 
     const replay = await sales.agent.post(`/api/v1/crm/leads/${lead.id}/authorize-design`)
       .set('Origin', origin).set('X-CSRF-Token', sales.csrf).send(payload);

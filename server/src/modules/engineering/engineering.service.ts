@@ -46,6 +46,17 @@ function designFileDto(file: {
   };
 }
 
+function surveyFileDto(file: {
+  id: string; originalName: string; mimeType: string; sizeBytes: number;
+  checksumSha256: string; createdByUserId: string; createdAt: Date;
+}) {
+  return {
+    id: file.id, originalName: file.originalName, mimeType: file.mimeType,
+    sizeBytes: file.sizeBytes, checksumSha256: file.checksumSha256,
+    createdByUserId: file.createdByUserId, createdAt: file.createdAt,
+  };
+}
+
 export class EngineeringService {
   constructor(private readonly database: Database = db) {}
 
@@ -74,9 +85,14 @@ export class EngineeringService {
     const job = await this.job(principal, jobId);
     const repository = createEngineeringRepository(this.database);
     const revisions = await repository.listRevisions(principal.companyId, jobId);
+    const surveyRevisions = await repository.listSurveyRevisions(principal.companyId, jobId);
     return {
       job,
       deadlineExtensions: await repository.listDeadlineExtensions(principal.companyId, jobId),
+      surveyRevisions: await Promise.all(surveyRevisions.map(async (revision) => ({
+        ...revision,
+        files: (await repository.listSurveyFiles(principal.companyId, revision.id)).map(surveyFileDto),
+      }))),
       revisions: await Promise.all(revisions.map(async (revision) => ({
         ...revision,
         files: (await repository.listFiles(principal.companyId, revision.id)).map(designFileDto),
@@ -227,6 +243,158 @@ export class EngineeringService {
     });
   }
 
+  async createSurveyRevision(
+    principal: AuthenticatedPrincipal,
+    jobId: string,
+    input: { title: string; changeSummary: string; surveyedOn: string },
+    requestId: string,
+  ) {
+    if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
+    const job = await this.job(principal, jobId);
+    if (job.designerUserId !== principal.userId) {
+      throw new ForbiddenError('Only the assigned designer can create a survey revision.');
+    }
+
+    return this.database.transaction(async (transaction) => {
+      const repository = createEngineeringRepository(transaction);
+      if (!await repository.lockJob(principal.companyId, jobId)) throw new NotFoundError('Design job not found.');
+      if (await repository.findDraftSurveyRevision(principal.companyId, jobId)) {
+        throw new ConflictError('Finalize the current survey draft before creating another revision.');
+      }
+      const revisionNumber = await repository.nextSurveyRevisionNumber(principal.companyId, jobId);
+      const revision = await repository.createSurveyRevision({
+        companyId: principal.companyId,
+        designJobId: jobId,
+        revisionNumber,
+        title: input.title,
+        changeSummary: input.changeSummary,
+        surveyedOn: input.surveyedOn,
+        createdByUserId: principal.userId,
+      });
+      if (!revision) throw new ConflictError('A survey draft already exists. Refresh and try again.');
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'engineering.survey_revision_created',
+        targetType: 'survey_revision',
+        targetId: revision.id,
+        requestId,
+        metadata: { designJobId: jobId, revisionNumber, surveyedOn: input.surveyedOn },
+      });
+      return revision;
+    });
+  }
+
+  async uploadSurveyFile(
+    principal: AuthenticatedPrincipal,
+    jobId: string,
+    surveyRevisionId: string,
+    file: Express.Multer.File,
+    requestId: string,
+  ) {
+    try {
+      if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
+      const job = await this.job(principal, jobId);
+      if (job.designerUserId !== principal.userId) {
+        throw new ForbiddenError('Only the assigned designer can upload survey files.');
+      }
+      const extension = path.extname(file.originalname).toLowerCase();
+      if (!['.pdf', '.jpg', '.jpeg', '.png', '.webp'].includes(extension)) {
+        throw new AppError('VALIDATION_ERROR', 'Survey files must be PDF, JPG, PNG, or WebP.', 422);
+      }
+      const originalName = safeName(file.originalname);
+      if (!originalName) throw new AppError('VALIDATION_ERROR', 'The uploaded file must have a name.', 422);
+      const checksumSha256 = await sha256File(file.path);
+
+      return await this.database.transaction(async (transaction) => {
+        const repository = createEngineeringRepository(transaction);
+        const revision = await repository.lockSurveyRevision(principal.companyId, jobId, surveyRevisionId);
+        if (!revision) throw new NotFoundError('Survey revision not found.');
+        if (revision.status !== 'draft') {
+          throw new ConflictError('Finalized survey revisions are immutable. Create a new revision to add files.');
+        }
+        const files = await repository.listSurveyFiles(principal.companyId, surveyRevisionId);
+        if (files.length >= 25) throw new AppError('VALIDATION_ERROR', 'A survey revision can contain at most 25 files.', 422);
+        const created = await repository.createSurveyFile({
+          companyId: principal.companyId,
+          surveyRevisionId,
+          originalName,
+          storageName: file.filename,
+          mimeType: file.mimetype,
+          sizeBytes: file.size,
+          checksumSha256,
+          createdByUserId: principal.userId,
+        });
+        await createAuthRepository(transaction).appendAuditEvent({
+          companyId: principal.companyId,
+          actorUserId: principal.userId,
+          action: 'engineering.survey_file_uploaded',
+          targetType: 'survey_revision_file',
+          targetId: created!.id,
+          requestId,
+          metadata: { designJobId: jobId, surveyRevisionId, sizeBytes: file.size },
+        });
+        return surveyFileDto(created!);
+      });
+    } catch (error) {
+      await removePrivateFile(file.filename);
+      throw error;
+    }
+  }
+
+  async finalizeSurveyRevision(
+    principal: AuthenticatedPrincipal,
+    jobId: string,
+    surveyRevisionId: string,
+    expectedVersion: number,
+    requestId: string,
+  ) {
+    if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
+    const job = await this.job(principal, jobId);
+    if (job.designerUserId !== principal.userId) {
+      throw new ForbiddenError('Only the assigned designer can finalize this survey revision.');
+    }
+
+    return this.database.transaction(async (transaction) => {
+      const repository = createEngineeringRepository(transaction);
+      const revision = await repository.lockSurveyRevision(principal.companyId, jobId, surveyRevisionId);
+      if (!revision) throw new NotFoundError('Survey revision not found.');
+      if (revision.status !== 'draft' || revision.rowVersion !== expectedVersion) {
+        throw new ConflictError('The survey revision changed or is already finalized.');
+      }
+      const files = await repository.listSurveyFiles(principal.companyId, surveyRevisionId);
+      if (files.length === 0) {
+        throw new AppError('VALIDATION_ERROR', 'Upload at least one survey file before finalizing the revision.', 422);
+      }
+      const finalized = await repository.finalizeSurveyRevision(
+        principal.companyId, surveyRevisionId, expectedVersion, principal.userId, new Date(),
+      );
+      if (!finalized) throw new ConflictError('The survey revision changed or is already finalized.');
+      await createNotificationRepository(transaction).create({
+        companyId: principal.companyId,
+        recipientUserId: job.designHeadUserId,
+        type: 'engineering.survey_finalized',
+        severity: 'info',
+        title: 'Site survey revision finalized',
+        message: `${job.title} survey S${revision.revisionNumber} is available.`,
+        link: `/engineering/design-jobs/${jobId}`,
+        targetType: 'survey_revision',
+        targetId: surveyRevisionId,
+        dedupKey: `survey-finalized:${surveyRevisionId}`,
+      });
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'engineering.survey_revision_finalized',
+        targetType: 'survey_revision',
+        targetId: surveyRevisionId,
+        requestId,
+        metadata: { designJobId: jobId, revisionNumber: revision.revisionNumber, fileCount: files.length },
+      });
+      return finalized;
+    });
+  }
+
   async uploadFile(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, kind: 'cad' | 'pdf', file: Express.Multer.File, requestId: string) {
     try {
       if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
@@ -362,6 +530,17 @@ export class EngineeringService {
     if (!await repository.findRevision(principal.companyId, jobId, revisionId)) throw new NotFoundError('Design revision not found.');
     const file = await repository.findFile(principal.companyId, revisionId, fileId);
     if (!file) throw new NotFoundError('Design file not found.');
+    return file;
+  }
+
+  async getSurveyFile(principal: AuthenticatedPrincipal, jobId: string, surveyRevisionId: string, fileId: string) {
+    await this.job(principal, jobId);
+    const repository = createEngineeringRepository(this.database);
+    if (!await repository.findSurveyRevision(principal.companyId, jobId, surveyRevisionId)) {
+      throw new NotFoundError('Survey revision not found.');
+    }
+    const file = await repository.findSurveyFile(principal.companyId, surveyRevisionId, fileId);
+    if (!file) throw new NotFoundError('Survey file not found.');
     return file;
   }
 }

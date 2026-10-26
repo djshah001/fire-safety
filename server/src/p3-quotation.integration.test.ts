@@ -28,9 +28,13 @@ async function cleanup() {
   const documents = await pool.query<{ storage_name: string }>('select storage_name from quotation_issue_documents');
   for (const document of documents.rows) await removePrivateFile(document.storage_name);
   for (const table of [
+    'procurement_selection_decisions', 'procurement_substitution_reviews', 'vendor_offer_lines', 'vendor_offers', 'purchase_comparisons',
+    'procurement_rfq_vendors', 'procurement_rfq_lines', 'procurement_rfqs',
+    'procurement_requisition_lines', 'procurement_requisitions',
+    'project_commercial_baselines', 'project_design_baselines', 'project_members', 'projects',
     'quotation_customer_decisions', 'quotation_issue_documents', 'quotation_review_actions',
     'quotation_revision_contributors', 'quotation_lines', 'quotation_revisions', 'quotations',
-    'design_customer_decisions', 'design_review_actions', 'design_revision_files', 'boq_review_actions',
+    'design_customer_decisions', 'design_review_actions', 'design_revision_files', 'survey_revision_files', 'survey_revisions', 'boq_review_actions',
     'boq_revision_contributors', 'estimate_cost_lines', 'boq_lines', 'boq_revisions', 'boq_template_items', 'boq_templates', 'design_package_revisions', 'design_jobs',
     'opportunity_members', 'opportunities', 'lead_members', 'leads', 'customer_members',
     'customer_addresses', 'sites', 'customer_contacts', 'customers', 'service_categories',

@@ -75,6 +75,10 @@ const QuotationWorkspacePage = lazy(() => import('@/features/engineering/Quotati
 const NotificationsPage = lazy(() => import('@/features/notifications/NotificationsPage').then((module) => ({ default: module.NotificationsPage })));
 const ProjectsPage = lazy(() => import('@/features/projects/ProjectsPage').then((module) => ({ default: module.ProjectsPage })));
 const ProjectPage = lazy(() => import('@/features/projects/ProjectPage').then((module) => ({ default: module.ProjectPage })));
+const RequisitionsPage = lazy(() => import('@/features/procurement/RequisitionsPage').then((module) => ({ default: module.RequisitionsPage })));
+const RequisitionWorkspacePage = lazy(() => import('@/features/procurement/RequisitionWorkspacePage').then((module) => ({ default: module.RequisitionWorkspacePage })));
+const SubstitutionReviewsPage = lazy(() => import('@/features/procurement/SubstitutionReviewsPage').then((module) => ({ default: module.SubstitutionReviewsPage })));
+const SubstitutionReviewWorkspacePage = lazy(() => import('@/features/procurement/SubstitutionReviewWorkspacePage').then((module) => ({ default: module.SubstitutionReviewWorkspacePage })));
 
 function NotFoundPage() {
   return (
@@ -124,6 +128,10 @@ const router = createBrowserRouter([
       { path: "/notifications", element: <NotificationsPage /> },
       { path: "/projects", element: <ProjectsPage /> },
       { path: "/projects/:projectId", element: <ProjectPage /> },
+      { path: "/procurement/requisitions", element: <RequisitionsPage /> },
+      { path: "/procurement/requisitions/:requisitionId", element: <RequisitionWorkspacePage /> },
+      { path: "/procurement/substitution-reviews", element: <SubstitutionReviewsPage /> },
+      { path: "/procurement/substitution-reviews/:requisitionId", element: <SubstitutionReviewWorkspacePage /> },
     ],
   },
   { path: "*", element: <NotFoundPage /> },

@@ -18,6 +18,7 @@ import { createBoqRouter } from './modules/engineering/boq.routes.js';
 import { createQuotationRouter } from './modules/engineering/quotation.routes.js';
 import { createNotificationRouter } from './modules/notifications/notification.routes.js';
 import { createProjectRouter } from './modules/projects/project.routes.js';
+import { createProcurementRouter } from './modules/procurement/procurement.routes.js';
 
 export type AppDependencies = {
   checkReadiness?: ReadinessCheck;
@@ -57,6 +58,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   app.use('/api/v1/engineering', createEngineeringRouter());
   app.use('/api/v1/engineering', createBoqRouter());
   app.use('/api/v1/engineering', createQuotationRouter());
+  app.use('/api/v1/procurement', createProcurementRouter());
 
   app.use(notFoundHandler);
   app.use(errorHandler);

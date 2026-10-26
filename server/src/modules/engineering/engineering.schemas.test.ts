@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRevisionSchema, customerDecisionSchema, designJobListQuerySchema, reviewRevisionSchema, useDesignBufferSchema } from './engineering.schemas.js';
+import { createRevisionSchema, createSurveyRevisionSchema, customerDecisionSchema, designJobListQuerySchema, finalizeSurveyRevisionSchema, reviewRevisionSchema, useDesignBufferSchema } from './engineering.schemas.js';
 
 describe('engineering input validation', () => {
   it('bounds server pagination and allowlists sorting', () => {
@@ -12,6 +12,15 @@ describe('engineering input validation', () => {
     expect(createRevisionSchema.parse({ title: ' R1 ', changeSummary: ' Initial layout ', expectedJobVersion: 1 }))
       .toMatchObject({ title: 'R1', changeSummary: 'Initial layout' });
     expect(() => createRevisionSchema.parse({ title: 'R', changeSummary: 'x', expectedJobVersion: 1 })).toThrow();
+  });
+
+  it('validates dated survey revisions and optimistic finalization', () => {
+    expect(createSurveyRevisionSchema.parse({
+      title: ' Initial site survey ', changeSummary: ' Pump room and riser route ', surveyedOn: '2026-10-26',
+    })).toEqual({ title: 'Initial site survey', changeSummary: 'Pump room and riser route', surveyedOn: '2026-10-26' });
+    expect(() => createSurveyRevisionSchema.parse({ title: 'S', changeSummary: 'x', surveyedOn: '26-10-2026' })).toThrow();
+    expect(finalizeSurveyRevisionSchema.parse({ expectedVersion: '2' })).toEqual({ expectedVersion: 2 });
+    expect(() => finalizeSurveyRevisionSchema.parse({ expectedVersion: 0 })).toThrow();
   });
 
   it('requires a reason when a design head returns a revision', () => {

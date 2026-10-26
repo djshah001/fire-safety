@@ -36,6 +36,12 @@ export const permissionCatalog = {
   'procurement.vendor.manage': 'Create, update, and deactivate vendor master records.',
   'procurement.item.read': 'View item, category, and unit master records.',
   'procurement.item.manage': 'Create, update, and deactivate item, category, and unit master records.',
+  'procurement.sourcing.read': 'View explicitly assigned requisitions, RFQs, vendor offers, and comparisons.',
+  'procurement.requisition.create': 'Create immutable project demand from approved BOQ lines in assigned project scope.',
+  'procurement.rfq.manage': 'Create RFQs for explicitly assigned requisitions.',
+  'procurement.offer.manage': 'Record submitted vendor offers for explicitly assigned RFQs.',
+  'procurement.comparison.select': 'Select a technically equivalent vendor offer as the assigned purchase manager.',
+  'procurement.substitution.review': 'Approve or reject technical offer deviations as the assigned project design head.',
 } as const;
 
 export type PermissionCode = keyof typeof permissionCatalog;
@@ -86,6 +92,7 @@ export const designHeadPermissionCodes: PermissionCode[] = [
   'engineering.design.review',
   'engineering.quotation.read',
   'project.read',
+  'procurement.substitution.review',
 ];
 
 export const purchaseExecutivePermissionCodes: PermissionCode[] = [
@@ -96,6 +103,10 @@ export const purchaseExecutivePermissionCodes: PermissionCode[] = [
   'engineering.estimate.read',
   'engineering.estimate.write',
   'project.read',
+  'procurement.sourcing.read',
+  'procurement.requisition.create',
+  'procurement.rfq.manage',
+  'procurement.offer.manage',
 ];
 
 export const purchaseManagerPermissionCodes: PermissionCode[] = [
@@ -107,6 +118,8 @@ export const purchaseManagerPermissionCodes: PermissionCode[] = [
   'engineering.boq.template.manage',
   'engineering.boq.purchase_review',
   'project.read',
+  'procurement.sourcing.read',
+  'procurement.comparison.select',
 ];
 
 export const boqAdminApproverPermissionCodes: PermissionCode[] = [

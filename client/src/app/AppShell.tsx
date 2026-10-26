@@ -22,6 +22,7 @@ import {
   Bell,
   FolderKanban,
   Factory,
+  ShoppingCart,
 } from "lucide-react";
 import type { CSSProperties } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -94,6 +95,8 @@ const pageTitles: Record<string, string> = {
   "/masters/brands": "Brands & makes",
   "/masters/item-categories": "Item categories",
   "/masters/units": "Units",
+  "/procurement/requisitions": "Requisitions & sourcing",
+  "/procurement/substitution-reviews": "Technical substitution reviews",
 };
 
 function initials(name: string) {
@@ -370,6 +373,11 @@ export function AppShell({ user }: { user: CurrentUser }) {
     { to: "/masters/boq-templates", label: "BOQ templates", icon: ClipboardList, visible: user.permissions.includes("engineering.boq.template.manage") },
   ];
 
+  const procurement: NavItem[] = [
+    { to: "/procurement/requisitions", label: "Requisitions & sourcing", icon: ClipboardList, visible: user.permissions.includes("procurement.sourcing.read") },
+    { to: "/procurement/substitution-reviews", label: "Technical reviews", icon: ShieldCheck, visible: user.permissions.includes("procurement.substitution.review") },
+  ];
+
   const overview: NavItem = {
     to: "/",
     label: "Overview",
@@ -447,6 +455,12 @@ export function AppShell({ user }: { user: CurrentUser }) {
                   label="Engineering"
                   icon={DraftingCompass}
                   items={engineering}
+                  openByDefault
+                />
+                <NavigationGroup
+                  label="Procurement"
+                  icon={ShoppingCart}
+                  items={procurement}
                   openByDefault
                 />
                 <NavigationGroup

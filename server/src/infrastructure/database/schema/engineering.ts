@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, integer, numeric, pgEnum, pgTable, primaryKey, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { boolean, check, date, index, integer, numeric, pgEnum, pgTable, primaryKey, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { leads, marketSectors, opportunities } from './crm.js';
 import { brands, items, units } from './masters.js';
 import { users } from './identity.js';
@@ -66,6 +66,7 @@ export const designRevisionStatusEnum = pgEnum('design_revision_status', [
 ]);
 
 export const designFileKindEnum = pgEnum('design_file_kind', ['cad', 'pdf']);
+export const surveyRevisionStatusEnum = pgEnum('survey_revision_status', ['draft', 'finalized']);
 export const designReviewDecisionEnum = pgEnum('design_review_decision', ['approved', 'returned']);
 export const designCustomerDecisionEnum = pgEnum('design_customer_decision', ['approved', 'changes_requested']);
 
@@ -109,6 +110,50 @@ export const designRevisionFiles = pgTable('design_revision_files', {
   index('design_revision_files_revision_idx').on(table.companyId, table.revisionId, table.kind),
   check('design_revision_files_size_positive', sql`${table.sizeBytes} > 0`),
   check('design_revision_files_size_limit', sql`(${table.kind} = 'cad' and ${table.sizeBytes} <= 104857600) or (${table.kind} = 'pdf' and ${table.sizeBytes} <= 20971520)`),
+]);
+
+export const surveyRevisions = pgTable('survey_revisions', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  designJobId: uuid('design_job_id').notNull().references(() => designJobs.id, { onDelete: 'restrict' }),
+  revisionNumber: integer('revision_number').notNull(),
+  title: varchar('title', { length: 200 }).notNull(),
+  changeSummary: varchar('change_summary', { length: 1_000 }).notNull(),
+  surveyedOn: date('surveyed_on').notNull(),
+  status: surveyRevisionStatusEnum('status').notNull().default('draft'),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  finalizedByUserId: uuid('finalized_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  finalizedAt: timestamp('finalized_at', { withTimezone: true }),
+  rowVersion: integer('row_version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('survey_revisions_job_number_uidx').on(table.designJobId, table.revisionNumber),
+  uniqueIndex('survey_revisions_one_draft_uidx').on(table.designJobId).where(sql`${table.status} = 'draft'`),
+  index('survey_revisions_company_job_idx').on(table.companyId, table.designJobId, table.revisionNumber),
+  check('survey_revisions_number_positive', sql`${table.revisionNumber} > 0`),
+  check('survey_revisions_row_version_positive', sql`${table.rowVersion} > 0`),
+  check('survey_revisions_finalization_consistent', sql`(${table.status} = 'draft' and ${table.finalizedAt} is null and ${table.finalizedByUserId} is null) or (${table.status} = 'finalized' and ${table.finalizedAt} is not null and ${table.finalizedByUserId} is not null)`),
+  check('survey_revisions_title_required', sql`length(trim(${table.title})) > 0`),
+  check('survey_revisions_summary_required', sql`length(trim(${table.changeSummary})) > 0`),
+]);
+
+export const surveyRevisionFiles = pgTable('survey_revision_files', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  surveyRevisionId: uuid('survey_revision_id').notNull().references(() => surveyRevisions.id, { onDelete: 'restrict' }),
+  originalName: varchar('original_name', { length: 255 }).notNull(),
+  storageName: varchar('storage_name', { length: 80 }).notNull(),
+  mimeType: varchar('mime_type', { length: 120 }).notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  checksumSha256: varchar('checksum_sha256', { length: 64 }).notNull(),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('survey_revision_files_storage_uidx').on(table.storageName),
+  index('survey_revision_files_revision_idx').on(table.companyId, table.surveyRevisionId, table.createdAt),
+  check('survey_revision_files_size_positive', sql`${table.sizeBytes} > 0`),
+  check('survey_revision_files_size_limit', sql`${table.sizeBytes} <= 20971520`),
 ]);
 
 export const designReviewActions = pgTable('design_review_actions', {

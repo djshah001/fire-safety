@@ -37,7 +37,7 @@ Bootstrap refuses to run if a company already exists. The initial administrator 
 
 ### Local demo data
 
-After migrations and the initial company bootstrap, populate the configured local database with synthetic P1–P3 test data:
+After migrations and the initial company bootstrap, populate the configured local database with synthetic P1–P4 test data:
 
 ```powershell
 npm run seed:demo
@@ -53,12 +53,12 @@ Default local credentials use password `FireSafetyDemo123!`:
 | Sales manager | `demo.sales.manager@example.test` | CRM management and assignment |
 | Sales executive | `demo.sales.executive@example.test` | Assigned CRM records |
 | Design engineer | `demo.designer@example.test` | Assigned design work |
-| Design head | `demo.design.head@example.test` | Engineer assignment, design work and review |
-| Purchase manager | `demo.purchase.manager@example.test` | Masters, BOQ templates and purchase review |
-| Purchase executive | `demo.purchase.executive@example.test` | Masters and assigned BOQ costing |
+| Design head | `demo.design.head@example.test` | Engineer assignment, design work/review and technical sourcing-substitution review |
+| Purchase manager | `demo.purchase.manager@example.test` | Masters, BOQ/purchase review and assigned supplier selection |
+| Purchase executive | `demo.purchase.executive@example.test` | Masters, assigned BOQ costing, requisitions, RFQs and offer capture |
 | Receiver | `demo.receiver@example.test` | Read-only vendor and item access |
 
-The dataset includes three customers with billing/tax profiles and contacts/sites, twelve leads across multiple stages and purposes/sectors, eight lead purposes, ten market sectors, BOQ templates for every default sector, CRM activities, six opportunities, five design jobs with active timers, one assigned project started before commercial award, employee-specific workflow notifications, two follow-ups, three vendors, three units, three item categories, three brands/makes and five items with multiple make assignments. Select 10 rows per page in the leads, projects or notifications table to exercise server pagination. Attachments and import workbooks are intentionally not faked: upload real files or download an import template through the UI to test those paths.
+The dataset includes three customers with billing/tax profiles and contacts/sites, twelve leads across multiple stages and purposes/sectors, eight lead purposes, ten market sectors, BOQ templates for every default sector, CRM activities, six opportunities, five design jobs with active timers, one optional survey draft, two assigned projects (including an unawarded start), two two-offer procurement comparisons (one ready for selection and one awaiting technical deviation review), employee-specific workflow notifications, two follow-ups, three vendors, three units, three item categories, three brands/makes and five items with multiple make assignments. Select 10 rows per page in the leads, projects, requisitions or notifications table to exercise server pagination. Attachments and import workbooks are intentionally not faked: upload real files or download an import template through the UI to test those paths.
 
 Use these independent records as workflow starting points:
 
@@ -69,13 +69,15 @@ Use these independent records as workflow starting points:
 | `DEMO-LEAD-006` | Authorized design job, no package revision | As the designer create a revision, select and upload multiple CAD/PDF files, submit, review as design head, then record the customer decision as sales. |
 | Notification center | Seeded personal alerts plus live workflow events | Sign in as designer, design head, or purchase manager; use the header bell and `/notifications`, then filter/read an item. The designer can open an unfinished design and record a 3-day buffer with a reason. |
 | `DEMO-PRJ-001` | Started project with no commercial award | Sign in as sales manager, designer, design head or sales executive and open Projects. Confirm the immutable design evidence, explicit team and visible `Unawarded` commercial state. |
-| `DEMO-LEAD-007` | Customer-approved design, no BOQ | Create from its sector template; enter quantities as designer, costs as purchase executive, approve as purchase manager, then final-approve as demo administrator. |
+| `DEMO-LEAD-007` | Customer-approved design, optional survey draft, no BOQ | As the designer upload survey PDF/photos and finalize survey S1; create S2 to test immutable history. Independently create the BOQ from its sector template, enter quantities, cost it, and complete both approvals. |
 | `DEMO-LEAD-004` | Approved design and BOQ, no project or quotation | As sales manager, start the project first while it is unawarded. Then create a quotation, select an allowed make and price each line, configure its cash/non-cash plan, submit it and test contributor self-approval denial. |
 | `DEMO-LEAD-008` | Submitted quotation | Sign in as the demo administrator to perform independent approval or return; the seeded sales manager and executive are contributors. |
 | `DEMO-LEAD-009` | Approved quotation | Issue the demo-labelled immutable PDF as assigned sales, download it and record accepted/declined customer evidence. |
+| `DEMO-REQ-001` | Open RFQ with two equivalent submitted offers | Sign in as purchase executive to inspect the normalized capture, then as purchase manager to select either vendor with a reason. The lower price is not automatic. |
+| `DEMO-REQ-SUB-001` | Open RFQ with one pending technical deviation | Sign in as design head and open **Procurement → Technical reviews**. Approve or reject the exact line with a reason; confirm that rates and other commercial terms are absent. Then sign in as purchase manager and verify that only an approved deviation permits supplier selection. |
 | `DEMO-LEAD-010`–`012` | Additional new/contacted/lost leads | Exercise search, sorting, filters, selection and 10-row pagination. |
 
-All downstream prerequisite revisions and evidence labels are explicitly synthetic and file-free. The seed does not fabricate upload metadata or claim real customer evidence. `DEMO-LEAD-006` is the clean path for testing real design files, while issued quotation files are generated only through the application action.
+All downstream prerequisite revisions and evidence labels are explicitly synthetic and file-free. The survey draft contains metadata but no fabricated file row. `DEMO-LEAD-006` is the clean path for testing real design files, `DEMO-LEAD-007` tests real survey uploads, and issued quotation files are generated only through the application action.
 
 Run `db:migrate` again whenever committed migrations are added. A PostgreSQL `relation ... does not exist` error from an otherwise valid endpoint usually means the database named by `server/.env` is behind the application schema.
 
@@ -99,7 +101,7 @@ The client runs at `http://localhost:5173` and proxies `/api` to the Express API
 | `npm run db:migrate --workspace @fire-safety/server` | Apply committed migrations |
 | `npm run db:check --workspace @fire-safety/server` | Validate committed migration metadata |
 | `npm run bootstrap:admin --workspace @fire-safety/server` | Create the first company, branch, roles, and administrator |
-| `npm run seed:demo` | Add or refresh synthetic P1–P3 records in a loopback development database |
+| `npm run seed:demo` | Add or refresh synthetic P1–P4 records in a loopback development database |
 | `npm run db:local:start` / `db:local:stop` | Start or stop the isolated Windows development database |
 
 There is intentionally no schema-push or destructive reset script.

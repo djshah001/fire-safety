@@ -644,6 +644,25 @@ async function seedDesignJob(
   return job;
 }
 
+async function ensureSurveyDraft(
+  client: PoolClient,
+  input: { companyId: string; jobId: string; designerId: string },
+) {
+  await client.query(`
+    insert into survey_revisions (
+      company_id, design_job_id, revision_number, title, change_summary,
+      surveyed_on, status, created_by_user_id
+    )
+    select $1, $2, 1, 'Demo initial site survey',
+      'Upload PDF or image evidence, then finalize this optional survey revision.',
+      current_date - 1, 'draft', $3
+    where not exists (
+      select 1 from survey_revisions where company_id = $1 and design_job_id = $2
+    )
+    on conflict do nothing
+  `, [input.companyId, input.jobId, input.designerId]);
+}
+
 async function ensureCustomerApprovedDesign(
   client: PoolClient,
   input: {
@@ -949,20 +968,118 @@ async function ensureQuotationScenario(
   return revision;
 }
 
+async function ensureProcurementScenario(
+  client: PoolClient,
+  input: { companyId: string; projectId: string; boqRevisionId: string; buyerId: string; managerId: string; scenario?: 'comparison' | 'substitution' },
+) {
+  const substitution = input.scenario === 'substitution';
+  const requisitionNumber = substitution ? 'DEMO-REQ-SUB-001' : 'DEMO-REQ-001';
+  const rfqNumber = substitution ? 'DEMO-RFQ-SUB-001' : 'DEMO-RFQ-001';
+  const requisition = await one<IdRow>(client, `
+    insert into procurement_requisitions (
+      company_id, project_id, boq_revision_id, requisition_number, title, status,
+      buyer_user_id, purchase_manager_user_id, required_by, delivery_location, notes, row_version
+    ) values ($1, $2, $3, $6, $7, 'sourcing',
+      $4, $5, current_date + 21, 'Demo project site, Ahmedabad',
+      'Synthetic demand based on the complete approved project BOQ.', 2)
+    on conflict (company_id, requisition_number) do update
+      set title = procurement_requisitions.title
+    returning id
+  `, [input.companyId, input.projectId, input.boqRevisionId, input.buyerId, input.managerId, requisitionNumber,
+    substitution ? 'Demo technical substitution review' : 'Demo detector procurement']);
+  const requisitionLine = await one<IdRow>(client, `
+    insert into procurement_requisition_lines (
+      company_id, requisition_id, boq_line_id, line_number, item_id, item_code_snapshot,
+      item_name_snapshot, specification_snapshot, unit_id, unit_symbol_snapshot, quantity
+    ) select $1, $2, line.id, line.line_number, line.item_id, line.item_code_snapshot,
+      line.item_name_snapshot, line.specification_snapshot, line.unit_id, line.unit_symbol_snapshot, line.quantity
+    from boq_lines line where line.boq_revision_id = $3 order by line.line_number limit 1
+    on conflict (requisition_id, boq_line_id) do update set quantity = procurement_requisition_lines.quantity
+    returning id
+  `, [input.companyId, requisition.id, input.boqRevisionId]);
+  const rfq = await one<IdRow>(client, `
+    insert into procurement_rfqs (
+      company_id, requisition_id, rfq_number, status, response_due_date,
+      commercial_terms, created_by_user_id, row_version
+    ) values ($1, $2, $4, 'open', current_date + 7,
+      'Quote taxes, freight, lead time, payment terms and warranty separately. Internal demo only; no external message sent.', $3, 1)
+    on conflict (requisition_id) do update set commercial_terms = procurement_rfqs.commercial_terms
+    returning id
+  `, [input.companyId, requisition.id, input.buyerId, rfqNumber]);
+  const rfqLine = await one<IdRow>(client, `
+    insert into procurement_rfq_lines (
+      company_id, rfq_id, requisition_line_id, line_number, item_id, item_code_snapshot,
+      item_name_snapshot, specification_snapshot, unit_id, unit_symbol_snapshot, quantity
+    ) select $1, $2, req.id, req.line_number, req.item_id, req.item_code_snapshot,
+      req.item_name_snapshot, req.specification_snapshot, req.unit_id, req.unit_symbol_snapshot, req.quantity
+    from procurement_requisition_lines req where req.id = $3
+    on conflict (rfq_id, requisition_line_id) do update set quantity = procurement_rfq_lines.quantity
+    returning id
+  `, [input.companyId, rfq.id, requisitionLine.id]);
+  await one<IdRow>(client, `
+    insert into purchase_comparisons (company_id, rfq_id, status, row_version)
+    values ($1, $2, 'open', 1)
+    on conflict (rfq_id) do update set status = purchase_comparisons.status
+    returning id
+  `, [input.companyId, rfq.id]);
+  const vendorRows = await client.query<{ id: string; code: string }>(`
+    select id, code from vendors where company_id = $1 and code in ('DEMO-VEN-001', 'DEMO-VEN-002') order by code
+  `, [input.companyId]);
+  if (vendorRows.rows.length !== 2) throw new Error('Demo procurement scenario requires two active demo vendors.');
+  for (const vendor of vendorRows.rows) {
+    await client.query(`
+      insert into procurement_rfq_vendors (company_id, rfq_id, vendor_id)
+      values ($1, $2, $3) on conflict do nothing
+    `, [input.companyId, rfq.id, vendor.id]);
+    const first = vendor.code === 'DEMO-VEN-001';
+    const rate = first ? '950.00' : '1000.00';
+    const freight = first ? '300.00' : '0.00';
+    const subtotal = first ? '11400.00' : '12000.00';
+    const total = first ? '11700.00' : '12000.00';
+    const offer = await one<IdRow>(client, `
+      insert into vendor_offers (
+        company_id, rfq_id, vendor_id, vendor_reference, currency, tax_basis,
+        freight_amount, lead_time_days, payment_terms, warranty, valid_until,
+        subtotal, total, recorded_by_user_id
+      ) values ($1, $2, $3, $4, 'INR', 'GST extra at the applicable configured invoice rate',
+        $5, $6, $7, $8, current_date + 30, $9, $10, $11)
+      on conflict (rfq_id, vendor_id) do update set vendor_reference = vendor_offers.vendor_reference
+      returning id
+    `, [input.companyId, rfq.id, vendor.id, first ? 'SG-DEMO-101' : 'FC-DEMO-202', freight,
+      first ? 14 : 10, first ? '30 days from supply' : '50% advance, balance before dispatch',
+      first ? '18 months from supply' : '24 months from supply', subtotal, total, input.buyerId]);
+    const technicalDeviation = substitution && first;
+    await client.query(`
+      insert into vendor_offer_lines (
+        company_id, vendor_offer_id, rfq_line_id, line_number, unit_rate, line_total,
+        brand_offered, specification_offered, equivalence, deviation_notes
+      ) values ($1, $2, $3, 1, $4, $5, $6, $7, $8::offer_equivalence, $9)
+      on conflict (vendor_offer_id, rfq_line_id) do update set unit_rate = vendor_offer_lines.unit_rate
+    `, [input.companyId, offer.id, rfqLine.id, rate, subtotal, first ? 'Sentinel' : 'Velocity',
+      technicalDeviation ? 'Alternative addressable detector with a different protocol interface.' : 'Addressable optical smoke detector matching the approved technical BOQ.',
+      technicalDeviation ? 'deviation' : 'equivalent',
+      technicalDeviation ? 'Vendor proposes a different loop protocol; design-head compatibility authorization is required.' : null]);
+  }
+  return requisition;
+}
+
 async function seed() {
   const passwordHash = await hashPassword(demoPassword);
   const client = await pool.connect();
   let stage = "schema validation";
   try {
     await client.query("begin");
-    const schema = await one<{ designJobs: string | null; quotationRevisions: string | null }>(
+    const schema = await one<{ designJobs: string | null; quotationRevisions: string | null; surveyRevisions: string | null; procurementRequisitions: string | null; substitutionReviews: string | null }>(
       client,
       `
       select to_regclass('public.design_jobs')::text as "designJobs",
-        to_regclass('public.quotation_revisions')::text as "quotationRevisions"
+        to_regclass('public.quotation_revisions')::text as "quotationRevisions",
+        to_regclass('public.survey_revisions')::text as "surveyRevisions",
+        to_regclass('public.procurement_requisitions')::text as "procurementRequisitions",
+        to_regclass('public.procurement_substitution_reviews')::text as "substitutionReviews"
     `,
     );
-    if (!schema.designJobs || !schema.quotationRevisions)
+    if (!schema.designJobs || !schema.quotationRevisions || !schema.surveyRevisions || !schema.procurementRequisitions || !schema.substitutionReviews)
       throw new Error(
         "Demo seed requires current migrations. Run db:migrate first.",
       );
@@ -1487,6 +1604,13 @@ async function seed() {
       );
     }
 
+    stage = "optional survey draft";
+    await ensureSurveyDraft(client, {
+      companyId: company.id,
+      jobId: designJobs[2]!.id,
+      designerId,
+    });
+
     stage = "employee notifications";
     for (const notification of [
       {
@@ -1693,6 +1817,48 @@ async function seed() {
         scenario,
       });
     }
+    stage = "P4 procurement comparison scenario";
+    const procurementProject = await one<IdRow>(client, `
+      insert into projects (
+        company_id, project_number, opportunity_id, customer_id, site_id, title,
+        start_date, target_completion_date, start_reason, started_by_user_id
+      ) select $1, 'DEMO-PRJ-PROC-001', opportunity.id, opportunity.customer_id, opportunity.site_id,
+        'Demo project ready for vendor comparison', current_date, current_date + 45,
+        'Synthetic approved-design project for procurement sourcing tests; commercial award is independent.', $3
+      from opportunities opportunity where opportunity.id = $2 and opportunity.site_id is not null
+      on conflict (company_id, opportunity_id) do update set title = excluded.title
+      returning id
+    `, [company.id, opportunities[4]!.id, managerId]);
+    for (const [userId, role] of [[managerId, 'project_manager'], [designerId, 'design'], [designHeadId, 'design'], [purchaseExecutiveId, 'purchase'], [purchaseManagerId, 'purchase']] as const) {
+      await client.query(`
+        insert into project_members (company_id, project_id, user_id, role, assigned_by_user_id)
+        values ($1, $2, $3, $4, $5) on conflict (project_id, user_id) do nothing
+      `, [company.id, procurementProject.id, userId, role, managerId]);
+    }
+    await client.query(`
+      insert into project_design_baselines (
+        company_id, project_id, design_job_id, design_revision_id,
+        design_customer_decision_id, customer_evidence_snapshot, created_by_user_id
+      ) select $1, $2, $3, revision.id, decision.id, decision.evidence_reference, $5
+      from design_package_revisions revision
+      join design_customer_decisions decision on decision.revision_id = revision.id and decision.decision = 'approved'
+      where revision.id = $4 on conflict (project_id) do nothing
+    `, [company.id, procurementProject.id, designJobs[3]!.id, downstreamDesigns[3]!.id, managerId]);
+    await ensureProcurementScenario(client, {
+      companyId: company.id,
+      projectId: procurementProject.id,
+      boqRevisionId: downstreamBoqs[3]!.id,
+      buyerId: purchaseExecutiveId,
+      managerId: purchaseManagerId,
+    });
+    await ensureProcurementScenario(client, {
+      companyId: company.id,
+      projectId: procurementProject.id,
+      boqRevisionId: downstreamBoqs[3]!.id,
+      buyerId: purchaseExecutiveId,
+      managerId: purchaseManagerId,
+      scenario: 'substitution',
+    });
     await ensureQuotationScenario(client, {
       companyId: company.id,
       jobId: designJobs[3]!.id,
@@ -1734,8 +1900,8 @@ async function seed() {
       [
         `Demo seed complete for ${company.name}.`,
         `Created/refreshed ${userDefinitions.length} demo users, ${customers.length} customers and ${leads.length} leads.`,
-        `Ensured ${opportunities.length} assigned opportunities, ${designJobs.length} design jobs, 1 project and 2 quotation checkpoints.`,
-        "Workflow starts: DEMO-LEAD-003 authorize design; 006 upload/review design; 007 build BOQ; 004 build quotation; 008 approve quotation; 009 issue and record decision.",
+        `Ensured ${opportunities.length} assigned opportunities, ${designJobs.length} design jobs, 1 survey draft, 2 projects, 2 quotation checkpoints and 2 sourcing comparisons.`,
+        "Workflow starts: DEMO-LEAD-003 authorize design; 006 upload/review design; 007 finalize the survey draft and build BOQ; 004 build quotation; 008 approve quotation; 009 issue and record decision; DEMO-REQ-001 compare/select a supplier; DEMO-REQ-SUB-001 review a technical deviation as design head.",
         "Login: demo.admin@example.test",
         `Password: ${demoPassword}`,
         "All demo user emails are printed in README.md.",

@@ -17,7 +17,7 @@ The original blueprint's full ERP milestone is replaced by this narrower pilot. 
 | P0 | Validate docs, inspect Prem starter, collect minimal company decisions | 1–2 | Yes | Technical planning and Prem source audit prepared; company validation pending |
 | P1 | Working foundation, employee access and themed shell | 3–5 | Yes | Complete locally 2026-10-09; production company/provider/hosting configuration remains pending |
 | P2 | CRM, masters, private attachments and recurring follow-ups | 4–6 | Yes | In progress; checkpoints 1–5 complete locally 2026-10-11; production email configuration pending |
-| P3 | Free CAD design, approvals, BOQ, quotation and project start | 6–10 | Yes | In progress; checkpoints 1–4 plus workflow/master updates complete locally 2026-10-25; optional survey revisions remain |
+| P3 | Free CAD design, approvals, BOQ, quotation and project start | 6–10 | Yes | Complete locally 2026-10-26; production commercial policy/template confirmation remains a rollout input |
 | P4 | Vendor comparison, PO approval, receipts/inspection | 5–8 | Yes | Not started |
 | P5 | End-to-end pilot hardening and rollout | 3–5 | Yes | Not started |
 | P6 | Inventory ledger and site material control | 6–10 | Later | Not started |
@@ -68,7 +68,7 @@ Exit journey: assigned salesperson enters lead → links customer/site → autho
 
 ## 6. P3 — Engineering and commercial preparation
 
-Current status (2026-10-21): checkpoint 1 is complete locally. Assignment-scoped design queues and workspaces now preserve numbered package revisions, private original DWG/DXF files and separate PDF previews with SHA-256 metadata. Only the assigned designer can create/upload/submit; submission freezes the package. Only the different assigned design head can approve or return it, and a return or customer change requires a new revision. Linked sales members can mark the exact internally approved revision as sent and record the customer's approval or requested changes with a required evidence reference. Lists use allowlisted server sorting, scoped totals/pagination, URL search/filter state and shadcn Table/Sheet controls; the workspace uses repository-owned shadcn cards, dialogs, alerts, badges, inputs and Sonner feedback.
+Current status (2026-10-26): P3 implementation is complete locally. Checkpoint 1 preserves assignment-scoped numbered package revisions, private original DWG/DXF files and separate PDF previews with SHA-256 metadata. Only the assigned designer can create/upload/submit; submission freezes the package. Only the different assigned design head can approve or return it, and a return or customer change requires a new revision. Linked sales members can mark the exact internally approved revision as sent and record the customer's approval or requested changes with a required evidence reference. Lists use allowlisted server sorting, scoped totals/pagination, URL search/filter state and shadcn Table/Sheet controls; the workspace uses repository-owned shadcn cards, dialogs, alerts, badges, inputs and Sonner feedback.
 
 Checkpoint 2 is complete locally and its workflow was superseded on 2026-10-21. A customer-approved design revision receives a numbered BOQ from the lead sector's configured item template. Item/unit/specification snapshots preserve the full scope. The assigned design engineer edits quantities only. The template's explicitly assigned purchase coster records exact-decimal cost lines; a different assigned purchase head approves/returns, then a different explicitly assigned BOQ administrative approver gives final approval/return before quotation. Cost DTOs remain absent for unauthorized roles, contributors cannot approve their own work, and returned/newer-design work creates another immutable revision.
 
@@ -78,7 +78,9 @@ The 2026-10-21 workflow updates also add configurable lead-purpose/sector master
 
 The 2026-10-25 master/commercial update adds customer type, optional validated GSTIN/PAN and billing-address capture, plus reusable brands/makes assigned many-to-many to items. Quotation line editing exposes only active makes assigned to that item, requires one for every line before submission, and snapshots the selected make into immutable revisions and issued PDFs. Migration `0014_sparkling_gauntlet.sql` and the demo seed cover this path.
 
-Checkpoint 4 is complete locally. An assigned authorized manager can start exactly one project from an exact customer-approved design, with active site, actual/target dates, reason, project manager and explicit members. An approved BOQ can be linked but is not a start gate. The immutable design baseline snapshots customer evidence; idempotency and the opportunity uniqueness constraint prevent duplicate start. Project APIs scope every list/detail to explicit membership. The visible commercial state remains independent, and later quotation acceptance adds a separate immutable commercial baseline without rewriting project start. Optional survey-file revisions remain before P3 closure.
+The 2026-10-26 survey update adds a separate optional numbered survey-revision chain with survey date, summary and private checksummed PDF/JPG/PNG/WebP evidence. Only the assigned designer can create, upload and finalize; finalized revisions are immutable, every read/download repeats job scope, and a survey never advances or blocks the CAD state. Migration `0015_graceful_nico_minoru.sql` and a file-free demo survey draft cover this path.
+
+Checkpoint 4 is complete locally. An assigned authorized manager can start exactly one project from an exact customer-approved design, with active site, actual/target dates, reason, project manager and explicit members. An approved BOQ can be linked but is not a start gate. The immutable design baseline snapshots customer evidence; idempotency and the opportunity uniqueness constraint prevent duplicate start. Project APIs scope every list/detail to explicit membership. The visible commercial state remains independent, and later quotation acceptance adds a separate immutable commercial baseline without rewriting project start.
 
 Implement design job assignments, original CAD and PDF previews, exact drawing/package revisions, optional survey attachments, design head review queue and sales-recorded customer decisions/evidence. Add complete technical BOQ and separate cost estimate.
 
@@ -91,6 +93,8 @@ Add approval service/policy snapshots as these reviews need them. Default assign
 Exit journey: lead → free CAD revision → return and revised submission → internal approval → customer approval evidence → full BOQ → project start with pending quote → later quote acceptance. Verify stale edits, exact revision binding, cash split does not alter BOQ, duplicate project start and historical issued PDF snapshot after master changes.
 
 ## 7. P4 — Procurement
+
+Status: **In progress — checkpoints 1–2 complete locally (2026-10-26).** Implemented approved-BOQ project requisitions, internal RFQs, immutable submitted vendor offers, normalized comparison, reasoned purchase-manager selection and assigned-design-head technical substitution review with commercial redaction. PO/amendment, delivery/inspection, vendor/item import and deliberate external RFQ delivery remain in later P4 checkpoints.
 
 Extend vendor/item masters and add project-linked requisition, RFQ, vendor offers and normalized comparison. Default two offers, recorded purchase-manager single-source exception, reasoned non-lowest selection and engineering substitution review.
 

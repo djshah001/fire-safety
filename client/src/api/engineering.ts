@@ -21,6 +21,15 @@ export type DesignRevision = {
   review: null | { decision: 'approved' | 'returned'; reason: string | null; actorUserId: string; actedAt: string };
   customerDecision: null | { decision: 'approved' | 'changes_requested'; evidenceReference: string; notes: string | null; recordedByUserId: string; recordedAt: string };
 };
+export type SurveyFile = {
+  id: string; originalName: string; mimeType: string; sizeBytes: number; checksumSha256: string;
+  createdByUserId: string; createdAt: string;
+};
+export type SurveyRevision = {
+  id: string; revisionNumber: number; title: string; changeSummary: string; surveyedOn: string;
+  status: 'draft' | 'finalized'; createdByUserId: string; finalizedByUserId: string | null;
+  finalizedAt: string | null; rowVersion: number; createdAt: string; updatedAt: string; files: SurveyFile[];
+};
 type Page<T> = { items: T[]; total: number; page: number; pageSize: number };
 
 export const designJobsQuery = (filters: { search?: string; status?: DesignStatus; page: number; pageSize: number; sort: 'title' | 'status' | 'updatedAt'; direction: 'asc' | 'desc' }) => queryOptions({
@@ -35,7 +44,7 @@ export const designJobQuery = (jobId?: string) => queryOptions({
   queryKey: ['engineering', 'design-job', jobId] as const,
   enabled: Boolean(jobId),
   queryFn: async ({ signal }) => {
-    const response = await apiClient.get<ApiEnvelope<{ job: DesignJob; deadlineExtensions: DesignDeadlineExtension[]; revisions: DesignRevision[] }>>(`/engineering/design-jobs/${jobId}`, { signal });
+    const response = await apiClient.get<ApiEnvelope<{ job: DesignJob; deadlineExtensions: DesignDeadlineExtension[]; surveyRevisions: SurveyRevision[]; revisions: DesignRevision[] }>>(`/engineering/design-jobs/${jobId}`, { signal });
     return response.data.data;
   },
 });
@@ -57,6 +66,19 @@ export async function useDesignDeadlineBuffer(jobId: string, input: { reason: st
 
 export async function createDesignRevision(jobId: string, input: { title: string; changeSummary: string; expectedJobVersion: number }) {
   await apiClient.post(`/engineering/design-jobs/${jobId}/revisions`, input);
+}
+export async function createSurveyRevision(jobId: string, input: { title: string; changeSummary: string; surveyedOn: string }) {
+  await apiClient.post(`/engineering/design-jobs/${jobId}/surveys`, input);
+}
+export async function uploadSurveyFile(jobId: string, surveyRevisionId: string, file: File) {
+  const body = new FormData(); body.append('file', file);
+  await apiClient.post(`/engineering/design-jobs/${jobId}/surveys/${surveyRevisionId}/files`, body);
+}
+export async function finalizeSurveyRevision(jobId: string, surveyRevisionId: string, expectedVersion: number) {
+  await apiClient.post(`/engineering/design-jobs/${jobId}/surveys/${surveyRevisionId}/finalize`, { expectedVersion });
+}
+export function surveyFileUrl(jobId: string, surveyRevisionId: string, fileId: string) {
+  return apiClient.getUri({ url: `/engineering/design-jobs/${jobId}/surveys/${surveyRevisionId}/files/${fileId}` });
 }
 export async function uploadDesignFile(jobId: string, revisionId: string, kind: 'cad' | 'pdf', file: File) {
   const body = new FormData(); body.append('file', file);

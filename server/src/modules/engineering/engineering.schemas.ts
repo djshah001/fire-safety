@@ -6,6 +6,8 @@ const expectedVersion = z.coerce.number().int().positive();
 export const designJobParamsSchema = z.object({ jobId: uuid });
 export const revisionParamsSchema = z.object({ jobId: uuid, revisionId: uuid });
 export const designFileParamsSchema = z.object({ jobId: uuid, revisionId: uuid, fileId: uuid });
+export const surveyRevisionParamsSchema = z.object({ jobId: uuid, surveyRevisionId: uuid });
+export const surveyFileParamsSchema = z.object({ jobId: uuid, surveyRevisionId: uuid, fileId: uuid });
 
 export const designJobListQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
@@ -31,6 +33,14 @@ export const createRevisionSchema = z.object({
   changeSummary: z.string().trim().min(2).max(1_000),
   expectedJobVersion: expectedVersion,
 });
+
+export const createSurveyRevisionSchema = z.object({
+  title: z.string().trim().min(2).max(200),
+  changeSummary: z.string().trim().min(2).max(1_000),
+  surveyedOn: z.iso.date(),
+});
+
+export const finalizeSurveyRevisionSchema = z.object({ expectedVersion });
 
 export const submitRevisionSchema = z.object({ expectedVersion });
 
