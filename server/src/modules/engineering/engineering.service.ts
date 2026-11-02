@@ -1,3 +1,4 @@
+import { isAdministrator } from '../../core/security/administrator.js';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
@@ -104,7 +105,7 @@ export class EngineeringService {
 
   async listEligibleDesigners(principal: AuthenticatedPrincipal, jobId: string) {
     const job = await this.job(principal, jobId);
-    if (!hasPermission(principal, 'engineering.design.assign_engineer') || job.designHeadUserId !== principal.userId) {
+    if (!hasPermission(principal, 'engineering.design.assign_engineer') || (!isAdministrator(principal) && job.designHeadUserId !== principal.userId)) {
       throw new ForbiddenError('Only the assigned design head can choose the design engineer.');
     }
     return createCrmRepository(this.database).listEligibleUsers(principal.companyId, 'engineering.design.write');
@@ -117,7 +118,7 @@ export class EngineeringService {
     requestId: string,
   ) {
     const job = await this.job(principal, jobId);
-    if (!hasPermission(principal, 'engineering.design.assign_engineer') || job.designHeadUserId !== principal.userId) {
+    if (!hasPermission(principal, 'engineering.design.assign_engineer') || (!isAdministrator(principal) && job.designHeadUserId !== principal.userId)) {
       throw new ForbiddenError('Only the assigned design head can choose the design engineer.');
     }
     if (input.designerUserId === principal.userId) {
@@ -168,7 +169,7 @@ export class EngineeringService {
   ) {
     if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
-    if (job.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can use this buffer.');
+    if (!isAdministrator(principal) && job.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can use this buffer.');
     if (job.designerCompletedAt) throw new ConflictError('The design completion clock stopped when the first revision was submitted.');
     if (!job.designDueAt || job.bufferExtensionsUsed >= 3) throw new ConflictError('No design buffer extensions remain.');
     const currentDueAt = job.designDueAt;
@@ -218,7 +219,7 @@ export class EngineeringService {
   async createRevision(principal: AuthenticatedPrincipal, jobId: string, input: { title: string; changeSummary: string; expectedJobVersion: number }, requestId: string) {
     if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
     const current = await this.job(principal, jobId);
-    if (current.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can create a revision.');
+    if (!isAdministrator(principal) && current.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can create a revision.');
     if (!['authorized', 'returned', 'changes_requested'].includes(current.status)) throw new ConflictError('A new revision cannot be created in the current design state.');
     if (current.rowVersion !== input.expectedJobVersion) throw new ConflictError('The design job changed. Refresh and try again.');
 
@@ -251,7 +252,7 @@ export class EngineeringService {
   ) {
     if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
-    if (job.designerUserId !== principal.userId) {
+    if (!isAdministrator(principal) && job.designerUserId !== principal.userId) {
       throw new ForbiddenError('Only the assigned designer can create a survey revision.');
     }
 
@@ -295,7 +296,7 @@ export class EngineeringService {
     try {
       if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
       const job = await this.job(principal, jobId);
-      if (job.designerUserId !== principal.userId) {
+      if (!isAdministrator(principal) && job.designerUserId !== principal.userId) {
         throw new ForbiddenError('Only the assigned designer can upload survey files.');
       }
       const extension = path.extname(file.originalname).toLowerCase();
@@ -351,7 +352,7 @@ export class EngineeringService {
   ) {
     if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
-    if (job.designerUserId !== principal.userId) {
+    if (!isAdministrator(principal) && job.designerUserId !== principal.userId) {
       throw new ForbiddenError('Only the assigned designer can finalize this survey revision.');
     }
 
@@ -399,7 +400,7 @@ export class EngineeringService {
     try {
       if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
       const job = await this.job(principal, jobId);
-      if (job.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can upload design files.');
+      if (!isAdministrator(principal) && job.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can upload design files.');
       const extension = path.extname(file.originalname).toLowerCase();
       if (kind === 'cad' && !['.dwg', '.dxf'].includes(extension)) throw new AppError('VALIDATION_ERROR', 'CAD files must use the .dwg or .dxf extension.', 422);
       if (kind === 'pdf' && extension !== '.pdf') throw new AppError('VALIDATION_ERROR', 'Preview files must use the .pdf extension.', 422);
@@ -430,7 +431,7 @@ export class EngineeringService {
   async submitRevision(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, expectedVersion: number, requestId: string) {
     if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
-    if (job.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can submit this revision.');
+    if (!isAdministrator(principal) && job.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can submit this revision.');
     const repository = createEngineeringRepository(this.database);
     const revision = await repository.findRevision(principal.companyId, jobId, revisionId);
     if (!revision) throw new NotFoundError('Design revision not found.');
@@ -458,11 +459,11 @@ export class EngineeringService {
   async reviewRevision(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, input: { decision: 'approved' | 'returned'; reason?: string; expectedVersion: number }, requestId: string) {
     if (!hasPermission(principal, 'engineering.design.review')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
-    if (job.designHeadUserId !== principal.userId) throw new ForbiddenError('Only the assigned design head can review this revision.');
+    if (!isAdministrator(principal) && job.designHeadUserId !== principal.userId) throw new ForbiddenError('Only the assigned design head can review this revision.');
     const repository = createEngineeringRepository(this.database);
     const revision = await repository.findRevision(principal.companyId, jobId, revisionId);
     if (!revision) throw new NotFoundError('Design revision not found.');
-    if (revision.createdByUserId === principal.userId || revision.submittedByUserId === principal.userId) throw new ForbiddenError('You cannot approve or return your own revision.');
+    if (!isAdministrator(principal) && (revision.createdByUserId === principal.userId || revision.submittedByUserId === principal.userId)) throw new ForbiddenError('You cannot approve or return your own revision.');
     const target = input.decision === 'approved' ? 'internally_approved' : 'returned';
     return this.database.transaction(async (transaction) => {
       const tx = createEngineeringRepository(transaction);
@@ -478,7 +479,7 @@ export class EngineeringService {
         link: `/engineering/design-jobs/${jobId}`, targetType: 'design_job', targetId: jobId,
         dedupKey: `design-review:${revisionId}:${input.decision}`,
       });
-      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: `engineering.revision_${input.decision}`, targetType: 'design_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, reason: input.reason } });
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: `engineering.revision_${input.decision}`, targetType: 'design_revision', targetId: revisionId, requestId, metadata: { administratorOverride: isAdministrator(principal), designJobId: jobId, reason: input.reason } });
       return updated;
     });
   }

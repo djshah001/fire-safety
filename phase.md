@@ -1,5 +1,15 @@
 # Fire Safety — Implementation Phases
 
+2026-10-31 focused follow-up: Puppeteer quotation/BOQ PDFs and Excel quotation export follow the corrected eleven-column reference, with separate component prices, dynamic markup, grouped size subrows and complete totals. Includes bounded isolated Chrome and editable tagline/customer contact fields. Grouping is presentational; persisted technical-group work remains pending. Old issued snapshots remain immutable. Catalogue imports/template matching and procurement PO work are not marked complete.
+
+2026-10-30 focused follow-up: responsive shadcn quotation clause editor with fixed header/footer, plus audited administrator self-approval overrides. This updates implemented workflows and does not advance the pending catalogue/procurement phases.
+
+## Quotation workflow checkpoint (2026-10-30)
+
+Follow-up completed: migration 0021, editable per-revision document details, PDF preview, corrected BOQ customer/cost visibility and copied quotation totals. The isolated purchase-to-acceptance/payment-plan PostgreSQL journey now passes, including concurrent plan conflict handling. Remaining catalogue import/template/group/bulk-markup items are still pending and are not included in this checkpoint.
+
+Implemented the purchase quotation preparation, full administrator access, post-customer-acceptance payment plan and workbook-pattern PDF follow-up. Migration 0020 applied locally. This is an update to the existing engineering/commercial workflow; later procurement phases remain unchanged. See memory.md for verification and remaining document-branding/integration work.
+
 Version: 1.0 · 2026-10-08 · Developer: Darshan Shah (solo)
 
 ## 1. Delivery strategy
@@ -18,7 +28,7 @@ The original blueprint's full ERP milestone is replaced by this narrower pilot. 
 | P1 | Working foundation, employee access and themed shell | 3–5 | Yes | Complete locally 2026-10-09; production company/provider/hosting configuration remains pending |
 | P2 | CRM, masters, private attachments and recurring follow-ups | 4–6 | Yes | In progress; checkpoints 1–5 complete locally 2026-10-11; production email configuration pending |
 | P3 | Free CAD design, approvals, BOQ, quotation and project start | 6–10 | Yes | Complete locally 2026-10-26; production commercial policy/template confirmation remains a rollout input |
-| P4 | Vendor comparison, PO approval, receipts/inspection | 5–8 | Yes | Not started |
+| P4 | Vendor comparison, PO approval, receipts/inspection | 5–8 | Yes | In progress; sourcing comparison and engineering substitution checkpoints complete locally 2026-10-26 |
 | P5 | End-to-end pilot hardening and rollout | 3–5 | Yes | Not started |
 | P6 | Inventory ledger and site material control | 6–10 | Later | Not started |
 | P7 | Execution, daily reports, delays and variations | 5–8 | Later | Not started |
@@ -76,7 +86,9 @@ Checkpoint 3 is complete locally. Quotation revisions bind to an approved BOQ an
 
 The 2026-10-21 workflow updates also add configurable lead-purpose/sector masters, sector BOQ-template administration, nullable designer handoff, multi-select CAD/PDF upload, the explicit purchase/final BOQ approval chain, migration `0012_burly_spot.sql` for the design clock/private notification center, and migration `0013_closed_wallflower.sql` for the minimal project register. Engineer assignment starts a 2-calendar-day first-submission deadline; the engineer can add up to three recorded 3-day buffers, and first submission freezes completion time. Durable deadline jobs produce deduplicated overdue notifications, while workflow transitions notify the explicitly assigned employee.
 
-The 2026-10-25 master/commercial update adds customer type, optional validated GSTIN/PAN and billing-address capture, plus reusable brands/makes assigned many-to-many to items. Quotation line editing exposes only active makes assigned to that item, requires one for every line before submission, and snapshots the selected make into immutable revisions and issued PDFs. Migration `0014_sparkling_gauntlet.sql` and the demo seed cover this path.
+The 2026-10-25 master/commercial update added customer type, optional validated GSTIN/PAN and billing-address capture. The 2026-10-30 catalogue checkpoint supersedes the former item-to-brand assignment model: category is inherited from family, and each generic item has explicit branded or unbranded manufacturer-model offerings with independent rates. Quotation selects one approved cost option and preserves its exact commercial snapshot.
+
+The 2026-10-30 catalogue/BOQ hardening checkpoint adds guided family specification fields, stable generic items, brand/model offerings, unit fractional-quantity policy and offering-owned immutable rate versions. Starting costing snapshots every active offering and calculation/rounding versions; purchase edits only markup percentage for every option, with miscellaneous excluded from the markup base. Only the preferred option contributes to the BOQ summary. Approved catalogue-priced BOQs expose those options to quotation, which must select one and disclose the complete breakdown in UI, demo PDF and formula-based Excel. Staged catalogue import, multidimensional/versioned template matching, technical group/specification rows and bulk markup controls remain pending follow-up work and are not included in the P3-complete claim.
 
 The 2026-10-26 survey update adds a separate optional numbered survey-revision chain with survey date, summary and private checksummed PDF/JPG/PNG/WebP evidence. Only the assigned designer can create, upload and finalize; finalized revisions are immutable, every read/download repeats job scope, and a survey never advances or blocks the CAD state. Migration `0015_graceful_nico_minoru.sql` and a file-free demo survey draft cover this path.
 

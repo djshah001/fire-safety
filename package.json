@@ -28,10 +28,13 @@
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "test:integration": "npm run test:integration --workspace @fire-safety/server",
+    "test:quotation:local": "node scripts/verify-quotation.mjs",
+    "test:seed:local": "node scripts/verify-demo-seed.mjs",
     "test:e2e": "npm run test:e2e --workspace @fire-safety/client",
     "db:local:start": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/local-postgres.ps1 start",
     "db:local:stop": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/local-postgres.ps1 stop",
     "seed:demo": "npm run seed:demo --workspace @fire-safety/server",
+    "reset:demo": "npm run reset:demo --workspace @fire-safety/server",
     "check": "npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "devDependencies": {

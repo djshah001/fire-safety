@@ -236,7 +236,7 @@ export function EmployeesPage() {
       password: string;
     }) => {
       if (!canManage) throw new Error("You cannot manage employees.");
-      if (input.action.employee.id === user.id) {
+      if (!user.permissions.includes("system.access.all") && input.action.employee.id === user.id) {
         throw new Error(
           "Use your account settings to change your own account.",
         );
@@ -286,6 +286,7 @@ export function EmployeesPage() {
         throw new Error("Enter a reason between 3 and 500 characters.");
       }
       if (
+        !user.permissions.includes("system.access.all") &&
         input.employee.id === user.id &&
         input.employee.roles.some((role) => !input.roleIds.includes(role.id))
       ) {
@@ -663,7 +664,7 @@ export function EmployeesPage() {
                             />
                             Roles
                           </Button>
-                          {employee.id !== user.id && (
+                          {(employee.id !== user.id || user.permissions.includes("system.access.all")) && (
                             <>
                               <Button
                                 size="sm"
@@ -1118,7 +1119,7 @@ export function EmployeesPage() {
                   roles.data.map((role) => {
                     const checked = selectedRoleIds.includes(role.id);
                     const protectedOwnRole =
-                      roleEmployee.id === user.id &&
+                      !user.permissions.includes("system.access.all") && roleEmployee.id === user.id &&
                       roleEmployee.roles.some(
                         (current) => current.id === role.id,
                       );

@@ -1,3 +1,4 @@
+import { administratorScope } from '../../core/security/administrator.js';
 import { and, asc, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
 import {
@@ -16,7 +17,7 @@ const listFields = {
 export function createProjectRepository(executor: DatabaseExecutor) {
   return {
     async list(companyId: string, userId: string, input: { search?: string; status?: string; commercialState?: string; limit: number; offset: number; sort: 'projectNumber' | 'title' | 'status' | 'startDate' | 'targetCompletionDate'; direction: 'asc' | 'desc' }) {
-      const filters = [eq(projects.companyId, companyId), eq(projectMembers.userId, userId)];
+      const filters = [eq(projects.companyId, companyId), or(eq(projectMembers.userId, userId), administratorScope(companyId, userId))!];
       if (input.status) filters.push(eq(projects.status, input.status));
       if (input.commercialState) filters.push(eq(opportunities.commercialState, input.commercialState as never));
       if (input.search) filters.push(or(ilike(projects.projectNumber, `%${input.search}%`), ilike(projects.title, `%${input.search}%`), ilike(customers.displayName, `%${input.search}%`), ilike(sites.name, `%${input.search}%`))!);
@@ -24,13 +25,13 @@ export function createProjectRepository(executor: DatabaseExecutor) {
       const sortColumn = input.sort === 'projectNumber' ? projects.projectNumber : input.sort === 'title' ? projects.title : input.sort === 'status' ? projects.status : input.sort === 'targetCompletionDate' ? projects.targetCompletionDate : projects.startDate;
       const order = input.direction === 'asc' ? asc(sortColumn) : desc(sortColumn);
       const base = () => executor.select(listFields).from(projects)
-        .innerJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.companyId, companyId)))
+        .leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.companyId, companyId), eq(projectMembers.userId, userId)))
         .innerJoin(opportunities, eq(opportunities.id, projects.opportunityId))
         .innerJoin(customers, eq(customers.id, projects.customerId)).innerJoin(sites, eq(sites.id, projects.siteId));
       const [items, totals] = await Promise.all([
         base().where(where).orderBy(order, asc(projects.id)).limit(input.limit).offset(input.offset),
         executor.select({ value: count() }).from(projects)
-          .innerJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.companyId, companyId)))
+          .leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.companyId, companyId), eq(projectMembers.userId, userId)))
           .innerJoin(opportunities, eq(opportunities.id, projects.opportunityId))
           .innerJoin(customers, eq(customers.id, projects.customerId)).innerJoin(sites, eq(sites.id, projects.siteId)).where(where),
       ]);
@@ -39,9 +40,9 @@ export function createProjectRepository(executor: DatabaseExecutor) {
 
     async find(companyId: string, userId: string, projectId: string) {
       const [row] = await executor.select({ ...listFields, opportunityId: projects.opportunityId, customerId: projects.customerId, siteId: projects.siteId, startReason: projects.startReason, startedByUserId: projects.startedByUserId, createdAt: projects.createdAt })
-        .from(projects).innerJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId)))
+        .from(projects).leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId)))
         .innerJoin(opportunities, eq(opportunities.id, projects.opportunityId)).innerJoin(customers, eq(customers.id, projects.customerId)).innerJoin(sites, eq(sites.id, projects.siteId))
-        .where(and(eq(projects.companyId, companyId), eq(projects.id, projectId))).limit(1);
+        .where(and(eq(projects.companyId, companyId), eq(projects.id, projectId), or(eq(projectMembers.userId, userId), administratorScope(companyId, userId)))).limit(1);
       return row;
     },
 

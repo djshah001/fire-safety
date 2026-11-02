@@ -1,3 +1,10 @@
+import { quotationDefaults } from '../modules/engineering/quotation.defaults.js';
+import { Decimal } from 'decimal.js';
+import { calculateQuotedLine } from '../modules/engineering/boq.calculation.js';
+import { referenceProducts, seedReferenceCatalogue } from './demoCatalogue.js';
+import type { CommercialDocumentDetails } from '../core/documents/commercialDocument.js';
+import { finishDemoQuotations, type DemoQuotationCheckpoint } from './demoQuotationCheckpoints.js';
+import { closePdfBrowser } from '../infrastructure/documents/pdfBrowser.js';
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import { env } from "../config/env.js";
@@ -401,6 +408,35 @@ async function seedMasterData(
     categoryIds.set(code, category.id);
   }
 
+  const familyDefinitions = [
+    ["DEMO-CO2", "CO2 Fire Extinguisher", "Portable CO2 fire extinguisher complete with standard accessories.", "DEMO-EXT", "DEMO-NOS", "capacity", "Capacity", "kg"],
+    ["DEMO-ABC", "ABC Dry Powder Extinguisher", "Portable ABC dry powder fire extinguisher complete with standard accessories.", "DEMO-EXT", "DEMO-NOS", "capacity", "Capacity", "kg"],
+    ["DEMO-SMOKE-FAMILY", "Addressable Smoke Detector", "Addressable optical smoke detection point.", "DEMO-DET", "DEMO-NOS", "protocol", "Protocol", null],
+    ["DEMO-MS-PIPE", "MS Fire Pipe", "C-class heavy mild-steel fire service pipe.", "DEMO-PIP", "DEMO-MTR", "diameter", "Nominal diameter", "mm"],
+    ["DEMO-INSTALL-FAMILY", "Installation and Commissioning", "Installation, testing and commissioning service lot.", "DEMO-PIP", "DEMO-LOT", "scope", "Scope", null],
+  ] as const;
+  const familyIds = new Map<string, string>();
+  for (const [code, name, scope, categoryCode, unitCode, specificationKey, specificationLabel, unitLabel] of familyDefinitions) {
+    const family = await one<IdRow>(client, `
+      insert into item_families (
+        company_id, category_id, code, name, name_normalized, scope_description, default_unit_id, created_by_user_id
+      ) values ($1, $2, $3, $4::text, lower($4::text), $5, $6, $7)
+      on conflict (company_id, code) do update
+        set name = excluded.name, name_normalized = excluded.name_normalized,
+            scope_description = excluded.scope_description, category_id = excluded.category_id,
+            default_unit_id = excluded.default_unit_id, status = 'active', updated_at = now()
+      returning id
+    `, [companyId, categoryIds.get(categoryCode), code, name, scope, unitIds.get(unitCode), actorId]);
+    familyIds.set(code, family.id);
+    await client.query(`
+      insert into item_family_specifications (
+        company_id, family_id, key, label, value_type, unit_label, is_required, sort_order
+      ) values ($1, $2, $3, $4, 'text', $5, true, 1)
+      on conflict (family_id, key) do update
+        set label = excluded.label, unit_label = excluded.unit_label, is_required = excluded.is_required
+    `, [companyId, family.id, specificationKey, specificationLabel, unitLabel]);
+  }
+
   const brandDefinitions = [
     ["DEMO-AGNI", "Demo Agni Safety"],
     ["DEMO-SENTINEL", "Demo Sentinel Systems"],
@@ -424,6 +460,10 @@ async function seedMasterData(
       "4.5 kg CO2 extinguisher",
       "DEMO-EXT",
       "DEMO-NOS",
+      "DEMO-CO2",
+      "CO2-4.5",
+      { capacity: "4.5" },
+      ["1045.0000", "320.0000", "25.0000"],
       ["DEMO-AGNI", "DEMO-SENTINEL"],
     ],
     [
@@ -432,6 +472,10 @@ async function seedMasterData(
       "6 kg ABC dry powder extinguisher",
       "DEMO-EXT",
       "DEMO-NOS",
+      "DEMO-ABC",
+      "ABC-6",
+      { capacity: "6" },
+      ["750.0000", "180.0000", "20.0000"],
       ["DEMO-AGNI", "DEMO-VELOCITY"],
     ],
     [
@@ -440,6 +484,10 @@ async function seedMasterData(
       "Addressable optical smoke detector",
       "DEMO-DET",
       "DEMO-NOS",
+      "DEMO-SMOKE-FAMILY",
+      "ADDR-OPT",
+      { protocol: "Addressable" },
+      ["1200.0000", "250.0000", "15.0000"],
       ["DEMO-SENTINEL", "DEMO-VELOCITY"],
     ],
     [
@@ -448,6 +496,10 @@ async function seedMasterData(
       "C-class heavy MS pipe",
       "DEMO-PIP",
       "DEMO-MTR",
+      "DEMO-MS-PIPE",
+      "MS-C-65",
+      { diameter: "65" },
+      ["680.0000", "140.0000", "10.0000"],
       ["DEMO-AGNI", "DEMO-VELOCITY"],
     ],
     [
@@ -456,20 +508,27 @@ async function seedMasterData(
       "Complete demo installation lot",
       "DEMO-PIP",
       "DEMO-LOT",
+      "DEMO-INSTALL-FAMILY",
+      "SERVICE-LOT",
+      { scope: "Complete system" },
+      ["0.0000", "12500.0000", "2500.0000"],
       ["DEMO-AGNI"],
     ],
   ] as const;
-  for (const [code, name, specification, categoryCode, unitCode, allowedBrandCodes] of items) {
+  for (const [code, name, specification, categoryCode, unitCode, familyCode, model, specificationValues, rates, allowedBrandCodes] of items) {
     const item = await one<IdRow>(
       client,
       `
       insert into items (
-        company_id, code, name, name_normalized, specification, category_id, unit_id, created_by_user_id
-      ) values ($1, $2, $3::text, lower($3::text), $4, $5, $6, $7)
+        company_id, code, name, name_normalized, specification, category_id, unit_id,
+        family_id, costing_brand_id, model, specification_values, created_by_user_id
+      ) values ($1, $2, $3::text, lower($3::text), $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
       on conflict (company_id, code) do update
         set name = excluded.name, name_normalized = excluded.name_normalized,
             specification = excluded.specification, category_id = excluded.category_id,
-            unit_id = excluded.unit_id, status = 'active', updated_at = now()
+            unit_id = excluded.unit_id, family_id = excluded.family_id,
+            costing_brand_id = excluded.costing_brand_id, model = excluded.model,
+            specification_values = excluded.specification_values, status = 'active', updated_at = now()
       returning id
     `,
       [
@@ -479,14 +538,36 @@ async function seedMasterData(
         specification,
         categoryIds.get(categoryCode),
         unitIds.get(unitCode),
+        familyIds.get(familyCode),
+        brandIds.get(allowedBrandCodes[0]),
+        model,
+        JSON.stringify(specificationValues),
         actorId,
       ],
     );
-    for (const brandCode of allowedBrandCodes) {
+    for (const [brandIndex, brandCode] of allowedBrandCodes.entries()) {
       await client.query(`
         insert into item_brands (company_id, item_id, brand_id, created_by_user_id)
         values ($1, $2, $3, $4) on conflict do nothing
       `, [companyId, item.id, brandIds.get(brandCode), actorId]);
+      const offering = await one<IdRow>(client, `
+        insert into item_brand_offerings (
+          company_id, item_id, brand_id, manufacturer_model, manufacturer_sku,
+          is_preferred, created_by_user_id
+        ) values ($1, $2, $3, $4, $5, $6, $7)
+        on conflict (item_id, brand_id, manufacturer_model) do update
+          set manufacturer_sku = excluded.manufacturer_sku, is_preferred = excluded.is_preferred,
+              status = 'active', updated_at = now()
+        returning id
+      `, [companyId, item.id, brandIds.get(brandCode), `${model}-${brandCode.replace('DEMO-', '')}`, `${code}-${brandIndex + 1}`, brandIndex === 0, actorId]);
+      const rateFactor = 1 + (brandIndex * 0.12);
+      await client.query(`
+        insert into item_rate_versions (
+          company_id, item_id, offering_id, currency, effective_from, supply_rate, labour_rate,
+          miscellaneous_rate, miscellaneous_note, created_by_user_id
+        ) values ($1, $2, $3, 'INR', date '2026-01-01', $4, $5, $6, 'Demo offering-specific catalogue rate for workflow testing only.', $7)
+        on conflict (offering_id, currency, effective_from) do nothing
+      `, [companyId, item.id, offering.id, new Decimal(rates[0]).mul(rateFactor).toFixed(4), new Decimal(rates[1]).mul(rateFactor).toFixed(4), new Decimal(rates[2]).mul(rateFactor).toFixed(4), actorId]);
     }
   }
 
@@ -585,13 +666,17 @@ async function seedBoqTemplates(
       returning id
     `, [companyId, sectorCode, name, costingUserId, purchaseHeadUserId, adminApproverUserId, actorId]);
     await client.query(`delete from boq_template_items where template_id = $1`, [template.id]);
-    for (const [index, itemCode] of itemCodes.entries()) {
+    const additionalItems = referenceProducts.filter((product) =>
+      ['INDUSTRIAL', 'WAREHOUSE_LOGISTICS', 'INFRASTRUCTURE_PUBLIC'].includes(sectorCode)
+      || ['DEMO-EXT', 'DEMO-DET', 'DEMO-HYDRANT', 'DEMO-SPRINKLER', 'DEMO-SERVICE'].includes(product.categoryCode));
+    const expandedItemCodes = [...itemCodes, ...additionalItems.map((product) => product.code)];
+    for (const [index, itemCode] of expandedItemCodes.entries()) {
       await client.query(`
         insert into boq_template_items (company_id, template_id, item_id, section, sort_order)
-        select $1, $2, item.id, category.name, $4
+        select $1, $2, item.id, coalesce($5::text, category.name), $4
         from items item inner join item_categories category on category.id = item.category_id
         where item.company_id = $1 and item.code = $3
-      `, [companyId, template.id, itemCode, index + 1]);
+      `, [companyId, template.id, itemCode, index + 1, referenceProducts.find((product) => product.code === itemCode)?.section ?? null]);
     }
   }
 }
@@ -678,12 +763,13 @@ async function ensureCustomerApprovedDesign(
     await client.query<IdRow>(
       `
       select id from design_package_revisions
-      where company_id = $1 and design_job_id = $2 and status = 'customer_approved'
-      order by revision_number desc limit 1
+      where company_id = $1 and design_job_id = $2
+      order by revision_number asc limit 1
     `,
       [input.companyId, input.jobId],
     )
   ).rows[0];
+  if (revision) return revision;
   if (!revision) {
     revision = await one<IdRow>(
       client,
@@ -742,15 +828,20 @@ async function ensureApprovedBoq(
     designRevisionId: string;
     designerId: string;
     designHeadId: string;
+    costingUserId: string;
+    purchaseHeadUserId: string;
+    adminApproverUserId: string;
     scenario: string;
+    referenceScope?: boolean;
+    status?: 'draft' | 'submitted' | 'costing' | 'purchase_review' | 'admin_review' | 'approved';
   },
 ) {
   let revision = (
     await client.query<IdRow>(
       `
       select id from boq_revisions
-      where company_id = $1 and design_job_id = $2 and status = 'approved'
-      order by revision_number desc limit 1
+      where company_id = $1 and design_job_id = $2
+      order by revision_number asc limit 1
     `,
       [input.companyId, input.jobId],
     )
@@ -762,10 +853,14 @@ async function ensureApprovedBoq(
     `
     insert into boq_revisions (
       company_id, design_job_id, design_revision_id, revision_number, title, change_summary,
-      status, created_by_user_id, submitted_by_user_id, submitted_at
+      status, costing_user_id, purchase_head_user_id, admin_approver_user_id,
+      costing_date, calculation_version, rounding_version,
+      created_by_user_id, submitted_by_user_id, submitted_at
     ) select $1, $2, $3, coalesce(max(revision_number), 0) + 1,
       $4, 'Complete synthetic technical scope for downstream local testing.',
-      'approved', $5, $5, now()
+      $9::boq_revision_status, $6, $7, $8, current_date, 'catalogue-markup-v1', 'half-up-line-2-v1', $5,
+      case when $9::text = 'draft' then null else $5::uuid end,
+      case when $9::text = 'draft' then null else now() end
     from boq_revisions where design_job_id = $2 returning id
   `,
     [
@@ -774,9 +869,13 @@ async function ensureApprovedBoq(
       input.designRevisionId,
       input.scenario,
       input.designerId,
+      input.costingUserId,
+      input.purchaseHeadUserId,
+      input.adminApproverUserId,
+      input.status ?? 'approved',
     ],
   );
-  const demoItem = await one<{
+  const demoItems = await client.query<{
     id: string;
     unit_id: string;
     code: string;
@@ -784,51 +883,96 @@ async function ensureApprovedBoq(
     specification: string;
     symbol: string;
   }>(
-    client,
     `
     select item.id, item.unit_id, item.code, item.name, item.specification, unit.symbol
     from items item inner join units unit on unit.id = item.unit_id
-    where item.company_id = $1 and item.code = 'DEMO-SMOKE'
+    where item.company_id = $1 and item.code = any($2::text[])
+    order by array_position($2::text[], item.code)
   `,
-    [input.companyId],
+    [input.companyId, input.referenceScope ? referenceProducts.map((product) => product.code) : ['DEMO-SMOKE']],
   );
-  const line = await one<IdRow>(
-    client,
-    `
-    insert into boq_lines (
-      company_id, boq_revision_id, line_number, section, item_id, item_code_snapshot,
-      item_name_snapshot, specification_snapshot, unit_id, unit_symbol_snapshot, quantity, notes
-    ) values ($1, $2, 1, 'Fire detection', $3, $4, $5, $6, $7, $8,
-      '12.0000', 'Synthetic full-scope BOQ line.') returning id
-  `,
-    [
-      input.companyId,
-      revision.id,
-      demoItem.id,
-      demoItem.code,
-      demoItem.name,
-      demoItem.specification,
-      demoItem.unit_id,
-      demoItem.symbol,
-    ],
-  );
-  await client.query(
-    `
-    insert into estimate_cost_lines (
-      company_id, boq_revision_id, boq_line_id, line_number, category, description,
-      quantity, unit_rate, line_total, notes
-    ) values ($1, $2, $3, 1, 'material', 'Synthetic detector material cost',
-      '12.0000', '850.00', '10200.00', 'Demo cost only.')
-  `,
-    [input.companyId, revision.id, line.id],
-  );
-  await client.query(
-    `
-    insert into boq_review_actions (company_id, boq_revision_id, decision, actor_user_id)
-    values ($1, $2, 'approved', $3) on conflict (boq_revision_id) do nothing
-  `,
-    [input.companyId, revision.id, input.designHeadId],
-  );
+  if (demoItems.rowCount !== (input.referenceScope ? referenceProducts.length : 1)) {
+    throw new Error('Demo BOQ requires every configured catalogue product.');
+  }
+  let costLineNumber = 0;
+  for (const [itemIndex, demoItem] of demoItems.rows.entries()) {
+    const source = input.referenceScope ? referenceProducts.find((product) => product.code === demoItem.code) : undefined;
+    const quantity = source?.quantity ?? '12';
+    const line = await one<IdRow>(
+      client,
+      `
+      insert into boq_lines (
+        company_id, boq_revision_id, line_number, section, item_id, item_code_snapshot,
+        item_name_snapshot, specification_snapshot, unit_id, unit_symbol_snapshot, quantity, notes
+      ) values ($1, $2, $9, $10, $3, $4, $5, $6, $7, $8,
+        $11, 'Synthetic full-scope BOQ line.') returning id
+    `,
+      [
+        input.companyId,
+        revision.id,
+        demoItem.id,
+        demoItem.code,
+        demoItem.name,
+        demoItem.specification,
+        demoItem.unit_id,
+        demoItem.symbol,
+        itemIndex + 1,
+        source?.section ?? 'Fire detection',
+        quantity,
+      ],
+    );
+    if (input.status === 'draft' || input.status === 'submitted') continue;
+    const rates = (await client.query<{ id: string; offering_id: string; brand_id: string | null; brand_name: string | null; manufacturer_model: string; manufacturer_sku: string | null; is_preferred: boolean; supply_rate: string; labour_rate: string; miscellaneous_rate: string }>(`
+      select distinct on (rate.offering_id) rate.id, rate.offering_id, offering.brand_id,
+        brand.name as brand_name, offering.manufacturer_model, offering.manufacturer_sku,
+        offering.is_preferred, rate.supply_rate::text, rate.labour_rate::text, rate.miscellaneous_rate::text
+      from item_rate_versions rate
+      join item_brand_offerings offering on offering.id = rate.offering_id and offering.status = 'active'
+      left join brands brand on brand.id = offering.brand_id
+      where rate.company_id = $1 and rate.item_id = $2 and rate.currency = 'INR' and rate.effective_from <= current_date
+      order by rate.offering_id, rate.effective_from desc, rate.created_at desc
+    `, [input.companyId, demoItem.id])).rows;
+    for (const rate of rates) {
+      const markupPercent = input.status === 'costing' ? null : '20.0000';
+      const calculation = calculateQuotedLine({ quantity, supplyRate: rate.supply_rate, labourRate: rate.labour_rate,
+        miscellaneousRate: rate.miscellaneous_rate, markupPercent: markupPercent ?? '0' });
+      await client.query(`
+        insert into estimate_cost_lines (
+          company_id, boq_revision_id, boq_line_id, line_number, category, description,
+          quantity, unit_rate, line_total, rate_version_id, offering_id, brand_id_snapshot,
+          brand_name_snapshot, manufacturer_model_snapshot, manufacturer_sku_snapshot,
+          is_preferred_offering_snapshot, supply_rate, labour_rate, miscellaneous_rate,
+          markup_percent, markup_amount, quoted_unit_rate, notes
+        ) values ($1, $2, $3, $4, 'material', $20,
+          $19, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18,
+          case when $17::numeric is null then null else $5::numeric end,
+          'Demo offering-specific rate snapshot with purchase-entered markup.')
+      `, [input.companyId, revision.id, line.id, ++costLineNumber, markupPercent ? calculation.quotedUnitRate : '0', markupPercent ? calculation.lineAmount : '0', rate.id,
+        rate.offering_id, rate.brand_id, rate.brand_name, rate.manufacturer_model, rate.manufacturer_sku, rate.is_preferred,
+        rate.supply_rate, rate.labour_rate, rate.miscellaneous_rate, markupPercent, markupPercent ? calculation.markupAmount : null, quantity, demoItem.name]);
+    }
+  }
+  await client.query(`
+    insert into boq_revision_contributors (company_id, boq_revision_id, user_id, contribution)
+    values ($1, $2, $3, 'quantity') on conflict do nothing
+  `, [input.companyId, revision.id, input.designerId]);
+  if (!['draft', 'submitted', 'costing'].includes(input.status ?? 'approved')) {
+    await client.query(`insert into boq_revision_contributors (company_id, boq_revision_id, user_id, contribution) values ($1, $2, $3, 'costing') on conflict do nothing`, [input.companyId, revision.id, input.costingUserId]);
+  }
+  if (input.status === 'admin_review' || !input.status || input.status === 'approved') {
+    await client.query(
+      `
+      insert into boq_review_actions (company_id, boq_revision_id, review_stage, decision, actor_user_id)
+      values ($1, $2, 'purchase', 'approved', $3)
+      on conflict (boq_revision_id, review_stage) do nothing
+    `,
+      [input.companyId, revision.id, input.purchaseHeadUserId],
+    );
+  }
+  if (!input.status || input.status === 'approved') await client.query(`
+    insert into boq_review_actions (company_id, boq_revision_id, review_stage, decision, actor_user_id)
+    values ($1, $2, 'admin', 'approved', $3) on conflict (boq_revision_id, review_stage) do nothing
+  `, [input.companyId, revision.id, input.adminApproverUserId]);
   return revision;
 }
 
@@ -842,10 +986,11 @@ async function ensureQuotationScenario(
     quotationNumber: string;
     customerName: string;
     title: string;
-    status: "submitted" | "approved";
+    status: "draft" | "submitted" | "approved";
     salesExecutiveId: string;
     salesManagerId: string;
     approverId: string;
+    documentDetails?: CommercialDocumentDetails;
   },
 ) {
   const quotation = await one<IdRow>(
@@ -871,21 +1016,7 @@ async function ensureQuotationScenario(
       [quotation.id],
     )
   ).rows[0];
-  if (revision) {
-    await client.query(`
-      update quotation_lines quote_line
-      set brand_id = chosen.id, brand_name_snapshot = chosen.name, updated_at = now()
-      from boq_lines boq_line
-      join lateral (
-        select brand.id, brand.name from item_brands assignment
-        join brands brand on brand.id = assignment.brand_id and brand.status = 'active'
-        where assignment.item_id = boq_line.item_id
-        order by brand.name limit 1
-      ) chosen on true
-      where quote_line.quotation_revision_id = $1 and quote_line.boq_line_id = boq_line.id
-    `, [revision.id]);
-    return revision;
-  }
+  if (revision) return revision;
 
   revision = await one<IdRow>(
     client,
@@ -895,17 +1026,21 @@ async function ensureQuotationScenario(
       customer_name_snapshot, currency, validity_days, exclusions, delivery_terms,
       payment_terms, subtotal, line_discount_total, additional_discount, tax_amount,
       rounding_adjustment, grand_total, cash_percentage, non_cash_percentage,
-      created_by_user_id, submitted_by_user_id, submitted_at, approved_by_user_id, approved_at
-    ) values (
-      $1, $2, $3, 1, $4::quotation_revision_status, $5, $6, 'INR', 30,
-      'Civil works and statutory fees are excluded from this synthetic quotation.',
+      calculation_version, rounding_version,
+      created_by_user_id, submitted_by_user_id, submitted_at, approved_by_user_id, approved_at, document_details
+    ) select
+      $1, $2, $3, 1, $4::quotation_revision_status, $5, $6, 'INR', 7,
+      $9,
       'Delivery within 4 weeks of written release.',
-      '40% cash and 60% non-cash payment plan; this is not proof of receipt.',
-      '14400.00', '600.00', '300.00', '0.00', '0.00', '13500.00',
-      '40.00', '60.00', $7, $7, now(),
+      $10,
+      cost.total, '0.00', '0.00', '0.00', '0.00', cost.total,
+      null, null, 'catalogue-markup-v1', 'half-up-line-2-v1', $7,
+      case when $4::text = 'draft' then null else $7::uuid end,
+      case when $4::text = 'draft' then null else now() end,
       case when $4::text = 'approved' then $8::uuid else null end,
-      case when $4::text = 'approved' then now() else null end
-    ) returning id
+      case when $4::text = 'approved' then now() else null end, $11::jsonb
+    from (select coalesce(sum(line_total), 0)::numeric(20,2) as total from estimate_cost_lines where boq_revision_id = $3 and is_preferred_offering_snapshot = true) cost
+    returning id
   `,
     [
       input.companyId,
@@ -916,6 +1051,9 @@ async function ensureQuotationScenario(
       input.customerName,
       input.salesExecutiveId,
       input.approverId,
+      quotationDefaults.exclusions,
+      quotationDefaults.paymentTerms,
+      JSON.stringify(input.documentDetails ?? {}),
     ],
   );
   await client.query(
@@ -923,19 +1061,22 @@ async function ensureQuotationScenario(
     insert into quotation_lines (
       company_id, quotation_revision_id, boq_line_id, line_number, section_snapshot,
       item_code_snapshot, item_name_snapshot, specification_snapshot, unit_symbol_snapshot,
-      brand_id, brand_name_snapshot, quantity, unit_rate, discount_amount, line_subtotal, line_total, notes
+      brand_id, brand_name_snapshot, offering_id, boq_cost_option_id,
+      manufacturer_model_snapshot, manufacturer_sku_snapshot,
+      quantity, unit_rate, supply_rate, labour_rate,
+      miscellaneous_rate, markup_percent, markup_amount, quoted_unit_rate,
+      discount_amount, line_subtotal, line_total, notes
     )
     select $1, $2, line.id, line.line_number, line.section, line.item_code_snapshot,
       line.item_name_snapshot, line.specification_snapshot, line.unit_symbol_snapshot,
-      chosen.id, chosen.name, line.quantity, '1200.00', '600.00', '14400.00', '13800.00',
-      'Synthetic selling price for workflow testing.'
+      cost.brand_id_snapshot, cost.brand_name_snapshot, cost.offering_id, cost.id,
+      cost.manufacturer_model_snapshot, cost.manufacturer_sku_snapshot,
+      line.quantity, cost.quoted_unit_rate, cost.supply_rate, cost.labour_rate,
+      cost.miscellaneous_rate, cost.markup_percent, cost.markup_amount, cost.quoted_unit_rate,
+      '0.00', cost.line_total, cost.line_total,
+      'Synthetic fixed price copied from the approved catalogue-priced BOQ.'
     from boq_lines line
-    join lateral (
-      select brand.id, brand.name from item_brands assignment
-      join brands brand on brand.id = assignment.brand_id and brand.status = 'active'
-      where assignment.item_id = line.item_id
-      order by brand.name limit 1
-    ) chosen on true
+    join estimate_cost_lines cost on cost.boq_line_id = line.id and cost.boq_revision_id = line.boq_revision_id and cost.is_preferred_offering_snapshot = true
     where line.boq_revision_id = $3
     order by line.line_number
   `,
@@ -1063,12 +1204,136 @@ async function ensureProcurementScenario(
   return requisition;
 }
 
+async function seedCurrentWorkflows(client: PoolClient, input: {
+  companyId: string; companyName: string; adminId: string; managerId: string; executiveId: string;
+  designerId: string; headId: string; purchaseId: string; purchaseManagerId: string; serviceCategoryId: string;
+  customer: { customerId: string; contactId: string; siteId: string };
+}) {
+  const definitions = [
+    { code: 'HEAD', title: 'Design head must assign an engineer', mode: 'head' },
+    { code: 'TIMER', title: 'Active two-day design task', mode: 'timer' },
+    { code: 'BUFFER', title: 'Design task with one three-day buffer', mode: 'buffer' },
+    { code: 'OVERDUE', title: 'Overdue design task with all three buffers used', mode: 'overdue' },
+    { code: 'CUSTOMER', title: 'Design revision awaiting customer decision', mode: 'customer' },
+    { code: 'BOQ-DRAFT', title: 'Full catalogue BOQ quantity entry', mode: 'boq', boqStatus: 'draft' },
+    { code: 'BOQ-SUBMITTED', title: 'Submitted quantities ready to start costing', mode: 'boq', boqStatus: 'submitted' },
+    { code: 'BOQ-COSTING', title: 'Purchase markup entry with frozen make rates', mode: 'boq', boqStatus: 'costing' },
+    { code: 'BOQ-PURCHASE', title: 'Full catalogue BOQ awaiting purchase-head approval', mode: 'boq', boqStatus: 'purchase_review' },
+    { code: 'BOQ-ADMIN', title: 'Full catalogue BOQ awaiting final admin approval', mode: 'boq', boqStatus: 'admin_review' },
+    { code: 'QUOTE-DRAFT', title: 'Purchase quotation with editable terms and document details', mode: 'quote', quoteStatus: 'draft' },
+    { code: 'QUOTE-ISSUED', title: 'Issued full catalogue quotation awaiting customer response', mode: 'quote', target: 'issued' },
+    { code: 'QUOTE-ACCEPTED', title: 'Accepted quotation ready for payment-plan configuration', mode: 'quote', target: 'accepted' },
+    { code: 'QUOTE-PLANNED', title: 'Accepted quotation with full-value cash and non-cash plan', mode: 'quote', target: 'planned' },
+    { code: 'QUOTE-DECLINED', title: 'Declined quotation with exact-revision customer evidence', mode: 'quote', target: 'declined' },
+    { code: 'ADMIN-OVERRIDE', title: 'Administrator-contributed quotation awaiting review', mode: 'quote', quoteStatus: 'submitted' },
+  ] as const;
+  const checkpoints: DemoQuotationCheckpoint[] = [];
+  for (const definition of definitions) {
+    const purposes: Record<string, string> = { head: 'EXPANSION_EXTENSION', timer: 'NEW_PROJECT', buffer: 'UPGRADE_RETROFIT', overdue: 'REPAIR_REPLACEMENT', customer: 'COMPLIANCE_AUDIT', quote: 'RENEWAL' };
+    const sectors: Record<string, string> = { head: 'RESIDENTIAL', timer: 'COMMERCIAL', buffer: 'HEALTHCARE', overdue: 'WAREHOUSE_LOGISTICS', customer: 'HOSPITALITY' };
+    const lead = await seedLead(client, input.companyId, input.adminId, {
+      leadNumber: `DEMO-LATEST-${definition.code}`, inquiryName: `Demo: ${definition.title}`,
+      companyName: 'Demo Acme Industrial Systems', email: `demo.${definition.code.toLowerCase()}@example.test`,
+      stage: 'design_authorized', qualificationNotes: 'Synthetic current-feature checkpoint for local testing.',
+      serviceCategoryId: input.serviceCategoryId, purposeCode: purposes[definition.mode] ?? 'MAINTENANCE_SERVICE',
+      sectorCode: sectors[definition.mode] ?? 'INDUSTRIAL', ownerUserId: input.executiveId, ...input.customer,
+    });
+    for (const [userId, role] of [[input.executiveId, 'owner'], [input.managerId, 'collaborator']] as const) {
+      await addLeadMember(client, input.companyId, lead.id, userId, role);
+    }
+    const opportunity = await seedOpportunity(client, input.companyId, input.executiveId, lead.id, input.customer, `Demo: ${definition.title}`);
+    for (const [userId, role] of [[input.executiveId, 'owner'], [input.managerId, 'sales']] as const) {
+      await client.query(`insert into opportunity_members (company_id, opportunity_id, user_id, role) values ($1, $2, $3, $4) on conflict do nothing`, [input.companyId, opportunity.id, userId, role]);
+    }
+    // INSERT-only checkpoints preserve tested states, due dates, buffers and later revisions on rerun.
+    const inserted = (await client.query<IdRow>(`
+      insert into design_jobs (company_id, lead_id, opportunity_id, title, status, designer_user_id,
+        design_head_user_id, designer_assigned_at, design_due_at, buffer_extensions_used, authorization_notes, authorized_by_user_id)
+      values ($1, $2, $3, $4, case when $5::text = 'head' then 'awaiting_designer' else 'authorized' end,
+        case when $5::text = 'head' then null else $6::uuid end, $7,
+        case when $5::text = 'head' then null when $5::text = 'overdue' then now() - interval '12 days' else now() - interval '1 day' end,
+        case when $5::text = 'head' then null when $5::text = 'overdue' then now() - interval '1 day'
+          when $5::text = 'buffer' then now() + interval '4 days' else now() + interval '1 day' end,
+        case when $5::text = 'buffer' then 1 when $5::text = 'overdue' then 3 else 0 end,
+        'Synthetic demo checkpoint. Downstream baselines contain no fabricated CAD attachments; use the upload scenario for real files.', $8)
+      on conflict (company_id, lead_id) do nothing returning id
+    `, [input.companyId, lead.id, opportunity.id, `Demo: ${definition.title}`, definition.mode, input.designerId, input.headId, input.managerId])).rows[0];
+    const job = inserted ?? await one<IdRow>(client, 'select id from design_jobs where company_id = $1 and lead_id = $2', [input.companyId, lead.id]);
+    if (inserted && (definition.mode === 'buffer' || definition.mode === 'overdue')) {
+      await client.query(`
+        insert into design_deadline_extensions (company_id, design_job_id, sequence_number, previous_due_at, new_due_at, reason, requested_by_user_id)
+        select company_id, id, n, designer_assigned_at + interval '2 days' + (n-1) * interval '3 days',
+          designer_assigned_at + interval '2 days' + n * interval '3 days', 'Demo: waiting for updated site dimensions.', designer_user_id
+        from design_jobs cross join generate_series(1, buffer_extensions_used) n where id = $1
+      `, [job.id]);
+    }
+    if (inserted && definition.mode === 'customer') {
+      const revision = await one<IdRow>(client, `
+        insert into design_package_revisions (company_id, design_job_id, revision_number, title, change_summary, status, created_by_user_id, submitted_by_user_id, submitted_at)
+        values ($1, $2, 1, 'Demo drawing revision awaiting customer response', 'Synthetic file-free decision checkpoint; no real drawing evidence claimed.', 'sent_to_customer', $3, $3, now()) returning id
+      `, [input.companyId, job.id, input.designerId]);
+      await client.query(`insert into design_review_actions (company_id, revision_id, decision, actor_user_id) values ($1, $2, 'approved', $3)`, [input.companyId, revision.id, input.headId]);
+      await client.query(`update design_jobs set status = 'sent_to_customer', designer_completed_at = now() where id = $1`, [job.id]);
+    }
+    if (definition.mode === 'boq' || definition.mode === 'quote') {
+      const design = await ensureCustomerApprovedDesign(client, {
+        companyId: input.companyId, jobId: job.id, designerId: input.designerId, designHeadId: input.headId,
+        salesUserId: input.executiveId, scenario: `Demo approved design: ${definition.code}`,
+      });
+      const boq = await ensureApprovedBoq(client, {
+        companyId: input.companyId, jobId: job.id, designRevisionId: design.id, designerId: input.designerId,
+        designHeadId: input.headId, costingUserId: input.purchaseId, purchaseHeadUserId: input.purchaseManagerId,
+        adminApproverUserId: input.adminId, scenario: `Demo full catalogue: ${definition.code}`, referenceScope: true,
+        status: 'boqStatus' in definition ? definition.boqStatus : 'approved',
+      });
+      if (definition.mode === 'quote') {
+        const revision = await ensureQuotationScenario(client, {
+          companyId: input.companyId, jobId: job.id, opportunityId: opportunity.id, boqRevisionId: boq.id,
+          quotationNumber: `DEMO-${definition.code}`, customerName: 'Demo Acme Industrial Systems', title: `Demo: ${definition.title}`,
+          status: 'quoteStatus' in definition ? definition.quoteStatus : 'approved',
+          salesExecutiveId: definition.code === 'ADMIN-OVERRIDE' ? input.adminId : input.purchaseId,
+          salesManagerId: input.purchaseManagerId, approverId: input.adminId,
+          documentDetails: {
+            senderName: `${input.companyName} (DEMO)`, senderAddress: 'Synthetic demonstration office, Ahmedabad',
+            senderContact: 'demo.purchase.executive@example.test', recipientAddress: 'Demo Acme site, Ahmedabad, Gujarat',
+            recipientGstin: '24ABCDE1234F1Z5', documentDate: new Date().toISOString().slice(0, 10),
+            bankDetails: 'DEMO ONLY: replace with verified company bank details before real use.', signatory: 'Demo authorized signatory',
+          },
+        });
+        if ('target' in definition) checkpoints.push({ jobId: job.id, revisionId: revision.id, target: definition.target });
+      }
+    }
+    if (inserted) {
+      const recipientId = definition.mode === 'head' ? input.headId : definition.mode === 'quote' ? input.purchaseId
+        : definition.mode === 'boq' ? definition.boqStatus === 'purchase_review' ? input.purchaseManagerId
+          : definition.boqStatus === 'admin_review' ? input.adminId : definition.boqStatus === 'draft' ? input.designerId : input.purchaseId
+          : definition.mode === 'customer' ? input.executiveId : input.designerId;
+      await client.query(`
+        insert into notifications (company_id, recipient_user_id, type, severity, title, message, link, target_type, target_id, dedup_key)
+        values ($1, $2, 'development.demo_checkpoint', 'info', $3, 'Synthetic test record. Open the workspace to inspect its current state.', $4, 'design_job', $5, $6)
+        on conflict do nothing
+      `, [input.companyId, recipientId, `Demo: ${definition.title}`, `/engineering/design-jobs/${job.id}${definition.mode === 'quote' ? '/quotations' : definition.mode === 'boq' ? '/boq' : ''}`, job.id, `demo-current:${definition.code}`]);
+    }
+    await client.query(`
+      insert into outbox_jobs (company_id, type, payload, dedup_key, due_at)
+      select company_id, 'engineering.design_deadline', jsonb_build_object('jobId', id::text, 'dueAt', design_due_at),
+        'design-deadline:' || id::text || ':' || extract(epoch from design_due_at)::bigint, design_due_at
+      from design_jobs where id = $1 and designer_completed_at is null and design_due_at is not null
+      on conflict (company_id, type, dedup_key) do nothing
+    `, [job.id]);
+  }
+  return { checkpoints, scenarioCount: definitions.length, quotationCount: definitions.filter((definition) => definition.mode === 'quote').length };
+}
+
 async function seed() {
   const passwordHash = await hashPassword(demoPassword);
   const client = await pool.connect();
   let stage = "schema validation";
+  let transactionOpen = false;
   try {
     await client.query("begin");
+    transactionOpen = true;
+    await client.query("select pg_advisory_xact_lock(hashtext('fire-safety:demo-seed'))");
     const schema = await one<{ designJobs: string | null; quotationRevisions: string | null; surveyRevisions: string | null; procurementRequisitions: string | null; substitutionReviews: string | null }>(
       client,
       `
@@ -1618,26 +1883,26 @@ async function seed() {
         type: "engineering.design_assigned",
         severity: "info",
         title: "Demo design task assigned",
-        message: "A design task is due tomorrow. Open it to test the live timer and buffer request.",
-        jobId: designJobs[2]!.id,
+        message: "Open your demo design assignment to inspect its current timer, buffer allowance and status.",
+        jobId: designJobs[1]!.id,
         dedupKey: `demo-design-assigned:${designJobs[2]!.id}`,
       },
       {
         recipientId: designHeadId,
-        type: "engineering.design_submitted",
+        type: "engineering.design_approved",
         severity: "info",
-        title: "Demo design ready for review",
-        message: "A submitted design package is waiting for design-head review.",
+        title: "Demo approved design history",
+        message: "Inspect internal review and customer-decision history for this seeded design.",
         jobId: designJobs[0]!.id,
         dedupKey: `demo-design-review:${designJobs[0]!.id}`,
       },
       {
         recipientId: purchaseManagerId,
-        type: "engineering.boq_ready_for_purchase_review",
+        type: "development.demo_checkpoint",
         severity: "warning",
-        title: "Demo BOQ needs purchase review",
-        message: "Costing is complete and the BOQ is ready for purchase-head review.",
-        jobId: designJobs[1]!.id,
+        title: "Demo BOQ and quotation workspace",
+        message: "Inspect the seeded BOQ and purchase-contributed quotation; the quotation starts with administrator review pending.",
+        jobId: designJobs[3]!.id,
         dedupKey: `demo-boq-review:${designJobs[1]!.id}`,
       },
     ]) {
@@ -1646,7 +1911,9 @@ async function seed() {
           company_id, recipient_user_id, type, severity, title, message,
           link, target_type, target_id, dedup_key
         ) values ($1, $2, $3, $4::notification_severity, $5, $6, $7, 'design_job', $8, $9)
-        on conflict (company_id, recipient_user_id, dedup_key) do nothing
+        on conflict (company_id, recipient_user_id, dedup_key) do update
+          set title = excluded.title, message = excluded.message, type = excluded.type,
+              link = excluded.link, target_id = excluded.target_id
       `, [company.id, notification.recipientId, notification.type, notification.severity, notification.title,
         notification.message, `/engineering/design-jobs/${notification.jobId}`, notification.jobId, notification.dedupKey]);
     }
@@ -1737,6 +2004,7 @@ async function seed() {
 
     stage = "vendor and item masters";
     await seedMasterData(client, company.id, adminId);
+    await seedReferenceCatalogue(client, company.id, adminId);
     stage = "sector BOQ templates";
     await seedBoqTemplates(
       client,
@@ -1814,6 +2082,9 @@ async function seed() {
         designRevisionId: downstreamDesigns[jobIndex]!.id,
         designerId,
         designHeadId,
+        costingUserId: purchaseExecutiveId,
+        purchaseHeadUserId: purchaseManagerId,
+        adminApproverUserId: adminId,
         scenario,
       });
     }
@@ -1868,8 +2139,8 @@ async function seed() {
       customerName: "Demo Acme Industrial Systems",
       title: "Demo quotation awaiting independent approval",
       status: "submitted",
-      salesExecutiveId: executiveId,
-      salesManagerId: managerId,
+      salesExecutiveId: purchaseExecutiveId,
+      salesManagerId: purchaseManagerId,
       approverId: adminId,
     });
     await ensureQuotationScenario(client, {
@@ -1881,9 +2152,15 @@ async function seed() {
       customerName: "Demo Sunrise Hospital",
       title: "Demo approved quotation ready to issue",
       status: "approved",
-      salesExecutiveId: executiveId,
-      salesManagerId: managerId,
+      salesExecutiveId: purchaseExecutiveId,
+      salesManagerId: purchaseManagerId,
       approverId: adminId,
+    });
+    stage = 'latest catalogue and workflow checkpoints';
+    const currentWorkflows = await seedCurrentWorkflows(client, {
+      companyId: company.id, companyName: company.name, adminId, managerId, executiveId, designerId,
+      headId: designHeadId, purchaseId: purchaseExecutiveId, purchaseManagerId, serviceCategoryId: suppressionId,
+      customer: customers[0]!,
     });
     stage = "seed audit event";
     await client.query(
@@ -1895,12 +2172,16 @@ async function seed() {
       [company.id, adminId, userDefinitions.length, leads.length],
     );
     await client.query("commit");
+    transactionOpen = false;
+    stage = 'issued PDF and accepted-quotation checkpoints';
+    await finishDemoQuotations(client, { companyId: company.id, purchaseId: purchaseExecutiveId, salesId: executiveId, adminId }, currentWorkflows.checkpoints);
 
     process.stdout.write(
       [
         `Demo seed complete for ${company.name}.`,
-        `Created/refreshed ${userDefinitions.length} demo users, ${customers.length} customers and ${leads.length} leads.`,
-        `Ensured ${opportunities.length} assigned opportunities, ${designJobs.length} design jobs, 1 survey draft, 2 projects, 2 quotation checkpoints and 2 sourcing comparisons.`,
+        `Created/refreshed ${userDefinitions.length} demo users, ${customers.length} customers and ${leads.length + currentWorkflows.scenarioCount} lead fixtures.`,
+        `Ensured ${opportunities.length + currentWorkflows.scenarioCount} assigned opportunities, ${designJobs.length + currentWorkflows.scenarioCount} design jobs, 1 survey draft, 2 projects, ${2 + currentWorkflows.quotationCount} quotation checkpoints and 2 sourcing comparisons.`,
+        `Added ${referenceProducts.length} BOQ reference products and ${currentWorkflows.scenarioCount} DEMO-LATEST-* checkpoints, including full-catalogue PDFs and accepted payment-plan examples.`,
         "Workflow starts: DEMO-LEAD-003 authorize design; 006 upload/review design; 007 finalize the survey draft and build BOQ; 004 build quotation; 008 approve quotation; 009 issue and record decision; DEMO-REQ-001 compare/select a supplier; DEMO-REQ-SUB-001 review a technical deviation as design head.",
         "Login: demo.admin@example.test",
         `Password: ${demoPassword}`,
@@ -1908,7 +2189,7 @@ async function seed() {
       ].join("\n") + "\n",
     );
   } catch (error) {
-    await client.query("rollback");
+    if (transactionOpen) await client.query("rollback");
     process.stderr.write(`Demo seed stage: ${stage}\n`);
     throw error;
   } finally {
@@ -1935,4 +2216,4 @@ seed()
     process.stderr.write(`${details}\n`);
     process.exitCode = 1;
   })
-  .finally(closeDatabase);
+  .finally(async () => { await closePdfBrowser(); await closeDatabase(); });

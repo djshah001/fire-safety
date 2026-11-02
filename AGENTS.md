@@ -1,5 +1,7 @@
 # Fire Safety — Repository Instructions
 
+Latest confirmed update (2026-10-30): system administrators have all company permissions, company-wide record access and audited approval overrides, including approving their own work. They may manage their own account and role assignments. Independent approval restrictions apply to non-administrators. Immutable issued history, valid workflow transitions, session revocation and company isolation still apply. Purchase prepares quotations; cash/non-cash plans follow customer acceptance. This supersedes older administrator/no-self-approval wording for administrators.
+
 Place this file at the Git repository root, beside the six project documents. It applies to work throughout this repository. Keep it concise; detailed requirements belong in the referenced documents.
 
 ## Project and scope
@@ -37,8 +39,8 @@ Latest explicit user decisions take precedence over older project suggestions. D
 ## Business rules that must survive every change
 
 1. One company, internal employees. Staff see assigned projects and assigned pre-project leads/opportunities/design jobs. Branch membership alone does not expose all branch projects. Management/finance visibility requires explicit scope and field grants.
-2. Admin-created accounts, password reset and immediate session/access revocation for departing or disabled staff. Admin configuration permission does not automatically grant commercial approval or all financial data.
-3. No self-approval, including delegation. Missing eligible approvers block the affected action with a clear configuration requirement.
+2. Admin-created accounts, password reset and immediate session/access revocation for departing or disabled staff. System administrators have all company permissions, company-wide record access and audited approval overrides, as explicitly reconfirmed on 2026-10-30.
+3. No self-approval for non-administrators, including delegation. Administrators may approve their own contributed work; record the override in audit events. Missing eligible approvers block ordinary staff with a clear configuration requirement.
 4. Lead confirmation authorizes free CAD design; survey is optional. Preserve exact drawing/package revisions, design-head review and sales-recorded customer decision/evidence.
 5. Approved design is sufficient for an authorized project start. Quotation acceptance/customer PO is optional at that point and must not become a mandatory procurement gate. Execution and commercial award remain independent.
 6. Preserve the full technical BOQ. Full commercial value and variable cash/non-cash payment plan are separate. Record both payment methods; no omitted cash receipts, reduced physical scope or hidden ledger. A plan is not proof of payment.

@@ -1,7 +1,8 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, date, index, integer, numeric, pgEnum, pgTable, primaryKey, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { boolean, check, date, index, integer, jsonb, numeric, pgEnum, pgTable, primaryKey, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import type { CommercialDocumentDetails } from '../../../core/documents/commercialDocument.js';
 import { leads, marketSectors, opportunities } from './crm.js';
-import { brands, items, units } from './masters.js';
+import { brands, itemBrandOfferings, itemRateVersions, items, units } from './masters.js';
 import { users } from './identity.js';
 import { companies } from './organizations.js';
 
@@ -243,6 +244,9 @@ export const boqRevisions = pgTable('boq_revisions', {
   changeSummary: varchar('change_summary', { length: 1_000 }).notNull(),
   status: boqRevisionStatusEnum('status').notNull().default('draft'),
   estimateCurrency: varchar('estimate_currency', { length: 3 }).notNull().default('INR'),
+  costingDate: date('costing_date'),
+  calculationVersion: varchar('calculation_version', { length: 40 }).notNull().default('legacy-v1'),
+  roundingVersion: varchar('rounding_version', { length: 40 }).notNull().default('half-up-line-2-v1'),
   createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
   submittedByUserId: uuid('submitted_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
   submittedAt: timestamp('submitted_at', { withTimezone: true }),
@@ -302,17 +306,32 @@ export const estimateCostLines = pgTable('estimate_cost_lines', {
   quantity: numeric('quantity', { precision: 18, scale: 4 }).notNull(),
   unitRate: numeric('unit_rate', { precision: 18, scale: 2 }).notNull(),
   lineTotal: numeric('line_total', { precision: 20, scale: 2 }).notNull(),
+  rateVersionId: uuid('rate_version_id').references(() => itemRateVersions.id, { onDelete: 'restrict' }),
+  offeringId: uuid('offering_id').references(() => itemBrandOfferings.id, { onDelete: 'restrict' }),
+  brandIdSnapshot: uuid('brand_id_snapshot').references(() => brands.id, { onDelete: 'restrict' }),
+  brandNameSnapshot: varchar('brand_name_snapshot', { length: 120 }),
+  manufacturerModelSnapshot: varchar('manufacturer_model_snapshot', { length: 120 }),
+  manufacturerSkuSnapshot: varchar('manufacturer_sku_snapshot', { length: 100 }),
+  isPreferredOfferingSnapshot: boolean('is_preferred_offering_snapshot').notNull().default(false),
+  supplyRate: numeric('supply_rate', { precision: 18, scale: 4 }),
+  labourRate: numeric('labour_rate', { precision: 18, scale: 4 }),
+  miscellaneousRate: numeric('miscellaneous_rate', { precision: 18, scale: 4 }),
+  markupPercent: numeric('markup_percent', { precision: 7, scale: 4 }),
+  markupAmount: numeric('markup_amount', { precision: 18, scale: 4 }),
+  quotedUnitRate: numeric('quoted_unit_rate', { precision: 18, scale: 4 }),
   notes: varchar('notes', { length: 1_000 }),
   rowVersion: integer('row_version').notNull().default(1),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('estimate_lines_revision_number_uidx').on(table.boqRevisionId, table.lineNumber),
+  uniqueIndex('estimate_lines_revision_boq_offering_uidx').on(table.boqRevisionId, table.boqLineId, table.offeringId).where(sql`${table.boqLineId} is not null and ${table.rateVersionId} is not null and ${table.offeringId} is not null`),
   index('estimate_lines_boq_line_idx').on(table.companyId, table.boqLineId),
   check('estimate_lines_number_positive', sql`${table.lineNumber} > 0`),
   check('estimate_lines_quantity_positive', sql`${table.quantity} > 0`),
   check('estimate_lines_rate_nonnegative', sql`${table.unitRate} >= 0`),
   check('estimate_lines_total_nonnegative', sql`${table.lineTotal} >= 0`),
+  check('estimate_lines_catalogue_values_valid', sql`${table.rateVersionId} is null or (${table.supplyRate} >= 0 and ${table.labourRate} >= 0 and ${table.miscellaneousRate} >= 0 and ${table.markupPercent} between 0 and 1000 and ${table.markupAmount} >= 0 and ${table.quotedUnitRate} >= 0)`),
   check('estimate_lines_row_version_positive', sql`${table.rowVersion} > 0`),
 ]);
 
@@ -372,11 +391,14 @@ export const quotationRevisions = pgTable('quotation_revisions', {
   status: quotationRevisionStatusEnum('status').notNull().default('draft'),
   title: varchar('title', { length: 200 }).notNull(),
   customerNameSnapshot: varchar('customer_name_snapshot', { length: 200 }).notNull(),
+  documentDetails: jsonb('document_details').$type<CommercialDocumentDetails>().notNull().default({}),
   currency: varchar('currency', { length: 3 }).notNull().default('INR'),
   validityDays: integer('validity_days').notNull().default(30),
   exclusions: varchar('exclusions', { length: 4_000 }).notNull(),
   deliveryTerms: varchar('delivery_terms', { length: 2_000 }).notNull(),
   paymentTerms: varchar('payment_terms', { length: 2_000 }).notNull(),
+  calculationVersion: varchar('calculation_version', { length: 40 }).notNull().default('legacy-v1'),
+  roundingVersion: varchar('rounding_version', { length: 40 }).notNull().default('half-up-line-2-v1'),
   taxLabel: varchar('tax_label', { length: 120 }),
   subtotal: numeric('subtotal', { precision: 20, scale: 2 }).notNull().default('0'),
   lineDiscountTotal: numeric('line_discount_total', { precision: 20, scale: 2 }).notNull().default('0'),
@@ -425,9 +447,19 @@ export const quotationLines = pgTable('quotation_lines', {
   specificationSnapshot: varchar('specification_snapshot', { length: 2_000 }).notNull(),
   brandId: uuid('brand_id').references(() => brands.id, { onDelete: 'restrict' }),
   brandNameSnapshot: varchar('brand_name_snapshot', { length: 120 }),
+  offeringId: uuid('offering_id').references(() => itemBrandOfferings.id, { onDelete: 'restrict' }),
+  boqCostOptionId: uuid('boq_cost_option_id').references(() => estimateCostLines.id, { onDelete: 'restrict' }),
+  manufacturerModelSnapshot: varchar('manufacturer_model_snapshot', { length: 120 }),
+  manufacturerSkuSnapshot: varchar('manufacturer_sku_snapshot', { length: 100 }),
   unitSymbolSnapshot: varchar('unit_symbol_snapshot', { length: 20 }).notNull(),
   quantity: numeric('quantity', { precision: 18, scale: 4 }).notNull(),
   unitRate: numeric('unit_rate', { precision: 18, scale: 2 }).notNull().default('0'),
+  supplyRate: numeric('supply_rate', { precision: 18, scale: 4 }).notNull().default('0'),
+  labourRate: numeric('labour_rate', { precision: 18, scale: 4 }).notNull().default('0'),
+  miscellaneousRate: numeric('miscellaneous_rate', { precision: 18, scale: 4 }).notNull().default('0'),
+  markupPercent: numeric('markup_percent', { precision: 7, scale: 4 }).notNull().default('0'),
+  markupAmount: numeric('markup_amount', { precision: 18, scale: 4 }).notNull().default('0'),
+  quotedUnitRate: numeric('quoted_unit_rate', { precision: 18, scale: 4 }).notNull().default('0'),
   discountAmount: numeric('discount_amount', { precision: 20, scale: 2 }).notNull().default('0'),
   lineSubtotal: numeric('line_subtotal', { precision: 20, scale: 2 }).notNull().default('0'),
   lineTotal: numeric('line_total', { precision: 20, scale: 2 }).notNull().default('0'),
@@ -440,7 +472,7 @@ export const quotationLines = pgTable('quotation_lines', {
   uniqueIndex('quotation_lines_revision_boq_line_uidx').on(table.quotationRevisionId, table.boqLineId),
   check('quotation_lines_number_positive', sql`${table.lineNumber} > 0`),
   check('quotation_lines_quantity_positive', sql`${table.quantity} > 0`),
-  check('quotation_lines_amounts_valid', sql`${table.unitRate} >= 0 and ${table.discountAmount} >= 0 and ${table.lineSubtotal} >= 0 and ${table.lineTotal} >= 0 and ${table.discountAmount} <= ${table.lineSubtotal}`),
+  check('quotation_lines_amounts_valid', sql`${table.unitRate} >= 0 and ${table.supplyRate} >= 0 and ${table.labourRate} >= 0 and ${table.miscellaneousRate} >= 0 and ${table.markupPercent} between 0 and 1000 and ${table.markupAmount} >= 0 and ${table.quotedUnitRate} >= 0 and ${table.discountAmount} >= 0 and ${table.lineSubtotal} >= 0 and ${table.lineTotal} >= 0 and ${table.discountAmount} <= ${table.lineSubtotal}`),
   check('quotation_lines_brand_consistent', sql`(${table.brandId} is null and ${table.brandNameSnapshot} is null) or (${table.brandId} is not null and ${table.brandNameSnapshot} is not null)`),
   check('quotation_lines_row_version_positive', sql`${table.rowVersion} > 0`),
 ]);

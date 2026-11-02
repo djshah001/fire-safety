@@ -121,6 +121,7 @@ const router = createBrowserRouter([
       { path: "/engineering/design-jobs/:jobId/quotations", element: <QuotationWorkspacePage /> },
       { path: "/masters/vendors", element: <MasterDataPage /> },
       { path: "/masters/items", element: <MasterDataPage /> },
+      { path: "/masters/item-families", element: <MasterDataPage /> },
       { path: "/masters/brands", element: <MasterDataPage /> },
       { path: "/masters/item-categories", element: <MasterDataPage /> },
       { path: "/masters/units", element: <MasterDataPage /> },

@@ -4,6 +4,7 @@ import { env } from './config/env.js';
 import { logger } from './core/logger/logger.js';
 import { closeDatabase } from './infrastructure/database/db.js';
 import { ensureUploadRoot } from './infrastructure/storage/localFileStorage.js';
+import { closePdfBrowser } from './infrastructure/documents/pdfBrowser.js';
 
 await ensureUploadRoot();
 
@@ -22,6 +23,7 @@ async function shutdown(signal: NodeJS.Signals) {
 
   server.close(async (error) => {
     if (error) logger.error({ err: error }, 'HTTP server shutdown failed');
+    await closePdfBrowser();
     await closeDatabase().catch((databaseError: unknown) => {
       logger.error({ err: databaseError }, 'Database pool shutdown failed');
     });
@@ -30,7 +32,8 @@ async function shutdown(signal: NodeJS.Signals) {
 
   setTimeout(() => {
     logger.error('Graceful shutdown timed out');
-    process.exit(1);
+    const forceExit = setTimeout(() => process.exit(1), 1_000);
+    void closePdfBrowser().finally(() => { clearTimeout(forceExit); process.exit(1); });
   }, 10_000).unref();
 }
 

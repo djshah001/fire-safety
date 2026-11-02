@@ -62,7 +62,11 @@ async function resetIntegrationFixtures() {
   await pool.query('delete from service_categories');
   await pool.query('delete from vendor_contacts');
   await pool.query('delete from vendors');
+  await pool.query('delete from item_rate_versions');
+  await pool.query('delete from item_brands');
   await pool.query('delete from items');
+  await pool.query('delete from item_family_specifications');
+  await pool.query('delete from item_families');
   await pool.query('delete from brands');
   await pool.query('delete from item_categories');
   await pool.query('delete from units');

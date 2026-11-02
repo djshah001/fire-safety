@@ -1,3 +1,5 @@
+import { isAdministrator } from '../../core/security/administrator.js';
+import type { CommercialDocumentDetails } from '../../core/documents/commercialDocument.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { Decimal } from 'decimal.js';
@@ -10,7 +12,10 @@ import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
 import { createNotificationRepository } from '../notifications/notification.repository.js';
 import { createProjectRepository } from '../projects/project.repository.js';
 import { createEngineeringRepository } from './engineering.repository.js';
-import { renderDemoQuotationPdf } from './quotation.pdf.js';
+import { renderQuotationExcel } from './quotation.excel.js';
+import { quotationDefaults } from './quotation.defaults.js';
+import { quotationPdfTemplateVersion, renderDemoQuotationPdf } from './quotation.pdf.js';
+import type { PdfQuotation } from './quotation.template.js';
 import { createQuotationRepository } from './quotation.repository.js';
 
 type HeaderInput = {
@@ -45,13 +50,14 @@ function revisionDto(revision: RevisionRow, options: {
   review: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['findReview']>> | null;
   document: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['findIssueDocument']>> | null;
   decision: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['findCustomerDecision']>> | null;
-  brandOptions: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['listBrandOptionsForBoqLines']>>;
+  costOptions: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['listCostOptionsForBoqLines']>>;
   canViewPaymentPlan: boolean;
   isContributor: boolean;
 }) {
   const base = {
     id: revision.id, quotationId: revision.quotationId, boqRevisionId: revision.boqRevisionId,
     revisionNumber: revision.revisionNumber, status: revision.status, title: revision.title,
+    documentDetails: revision.documentDetails,
     customerName: revision.customerNameSnapshot, currency: revision.currency, validityDays: revision.validityDays,
     exclusions: revision.exclusions, deliveryTerms: revision.deliveryTerms, paymentTerms: revision.paymentTerms,
     taxLabel: revision.taxLabel, subtotal: revision.subtotal, lineDiscountTotal: revision.lineDiscountTotal,
@@ -64,9 +70,19 @@ function revisionDto(revision: RevisionRow, options: {
     lines: options.lines.map((line) => ({
       id: line.id, boqLineId: line.boqLineId, lineNumber: line.lineNumber, section: line.sectionSnapshot,
       itemCode: line.itemCodeSnapshot, itemName: line.itemNameSnapshot, specification: line.specificationSnapshot,
+      offeringId: line.offeringId, boqCostOptionId: line.boqCostOptionId,
       brandId: line.brandId, brandName: line.brandNameSnapshot,
-      brandOptions: options.brandOptions.filter((brand) => brand.boqLineId === line.boqLineId).map(({ brandId, code, name }) => ({ id: brandId, code, name })),
+      manufacturerModel: line.manufacturerModelSnapshot, manufacturerSku: line.manufacturerSkuSnapshot,
+      offeringOptions: options.costOptions.filter((option) => option.boqLineId === line.boqLineId).map((option) => ({
+        id: option.offeringId!, costOptionId: option.id, brandId: option.brandId,
+        brandName: option.brandName, manufacturerModel: option.manufacturerModel!, manufacturerSku: option.manufacturerSku,
+        isPreferred: option.isPreferred, supplyRate: option.supplyRate!, labourRate: option.labourRate!,
+        miscellaneousRate: option.miscellaneousRate!, markupPercent: option.markupPercent!,
+        markupAmount: option.markupAmount!, quotedUnitRate: option.quotedUnitRate!, lineTotal: option.lineTotal,
+      })),
       unitSymbol: line.unitSymbolSnapshot, quantity: line.quantity, unitRate: line.unitRate,
+      supplyRate: line.supplyRate, labourRate: line.labourRate, miscellaneousRate: line.miscellaneousRate,
+      markupPercent: line.markupPercent, markupAmount: line.markupAmount, quotedUnitRate: line.quotedUnitRate,
       discountAmount: line.discountAmount, lineSubtotal: line.lineSubtotal, lineTotal: line.lineTotal,
       notes: line.notes, rowVersion: line.rowVersion,
     })),
@@ -119,7 +135,7 @@ export class QuotationService {
         const lines = await repository.listLines(principal.companyId, revision.id);
         return revisionDto(revision, {
           lines,
-          brandOptions: await repository.listBrandOptionsForBoqLines(principal.companyId, lines.map((line) => line.boqLineId)),
+          costOptions: await repository.listCostOptionsForBoqLines(principal.companyId, lines.map((line) => line.boqLineId)),
           review: await repository.findReview(principal.companyId, revision.id) ?? null,
           document: await repository.findIssueDocument(principal.companyId, revision.id) ?? null,
           decision: await repository.findCustomerDecision(principal.companyId, revision.id) ?? null,
@@ -130,12 +146,14 @@ export class QuotationService {
       capabilities: {
         canWrite: hasPermission(principal, 'engineering.quotation.write'),
         canApprove: hasPermission(principal, 'engineering.quotation.approve'),
+        canOverrideApprovals: isAdministrator(principal),
         canIssue: hasPermission(principal, 'engineering.quotation.issue'),
         canRecordDecision: hasPermission(principal, 'engineering.quotation.customer_decision'),
         canViewPaymentPlan,
         canWritePaymentPlan: hasPermission(principal, 'engineering.payment_plan.write'),
       },
       documentMode: 'demo' as const,
+      defaults: quotationDefaults,
     };
   }
 
@@ -150,7 +168,12 @@ export class QuotationService {
     if (!context) throw new NotFoundError('Design job context not found.');
     if (!boq) throw validationError('Choose an approved BOQ revision from this design job.');
     const boqScope = await repository.listBoqLines(principal.companyId, boq.id);
+    const boqCosts = await repository.listApprovedBoqCostLines(principal.companyId, boq.id);
     if (boqScope.length === 0) throw validationError('The approved BOQ has no technical scope lines.');
+    const costedBoqLineIds = new Set(boqCosts.map((line) => line.boqLineId));
+    if (boq.calculationVersion !== 'catalogue-markup-v1' || boqScope.some((line) => !costedBoqLineIds.has(line.id)) || boqCosts.some((line) => !line.offeringId || line.supplyRate === null || line.labourRate === null || line.miscellaneousRate === null || line.markupPercent === null || line.markupAmount === null || line.quotedUnitRate === null)) {
+      throw validationError('This BOQ does not have a complete approved catalogue-rate and markup snapshot. Create and approve a new costing revision before quotation preparation.');
+    }
     const existingRevisions = existingQuotation ? await repository.listRevisions(principal.companyId, existingQuotation.id) : [];
     if (existingRevisions.some((revision) => revision.status === 'draft')) throw new ConflictError('This quotation already has a draft revision.');
     if (existingRevisions.length > 0 && !['returned', 'issued', 'declined'].includes(existingRevisions[0]!.status)) {
@@ -173,27 +196,38 @@ export class QuotationService {
         revisionNumber: await tx.nextRevisionNumber(principal.companyId, quotation.id), title: input.title,
         customerNameSnapshot: context.customerName, exclusions: input.exclusions,
         deliveryTerms: input.deliveryTerms, paymentTerms: input.paymentTerms, createdByUserId: principal.userId,
+        calculationVersion: boq.calculationVersion, roundingVersion: boq.roundingVersion,
+        validityDays: source?.revision.validityDays ?? quotationDefaults.validityDays,
+        currency: boq.estimateCurrency,
+        documentDetails: source?.revision.documentDetails ?? { senderName: context.companyName, documentDate: new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) },
       });
       const sourceLines = source ? await tx.listLines(principal.companyId, source.revision.id) : [];
       const sourceByBoqLine = new Map(sourceLines.map((line) => [line.boqLineId, line]));
       for (const line of boqScope) {
         const copied = sourceByBoqLine.get(line.id);
-        const unitRate = copied?.unitRate ?? '0.00';
-        const lineSubtotal = new Decimal(line.quantity).mul(unitRate).toDecimalPlaces(2).toFixed(2);
-        const discountAmount = copied && new Decimal(copied.discountAmount).lte(lineSubtotal) ? copied.discountAmount : '0.00';
+        const options = boqCosts.filter((option) => option.boqLineId === line.id);
+        const selected = copied?.offeringId ? options.find((option) => option.offeringId === copied.offeringId) : undefined;
+        const lineSubtotal = selected?.lineTotal ?? '0';
         await tx.createLine({
           companyId: principal.companyId, quotationRevisionId: revision.id, boqLineId: line.id,
           lineNumber: line.lineNumber, sectionSnapshot: line.section, itemCodeSnapshot: line.itemCodeSnapshot,
           itemNameSnapshot: line.itemNameSnapshot, specificationSnapshot: line.specificationSnapshot,
-          brandId: copied?.brandId, brandNameSnapshot: copied?.brandNameSnapshot,
-          unitSymbolSnapshot: line.unitSymbolSnapshot, quantity: line.quantity, unitRate,
-          discountAmount, lineSubtotal, lineTotal: new Decimal(lineSubtotal).minus(discountAmount).toFixed(2),
+          offeringId: selected?.offeringId, boqCostOptionId: selected?.costOptionId,
+          brandId: selected?.brandId, brandNameSnapshot: selected?.brandName,
+          manufacturerModelSnapshot: selected?.manufacturerModel, manufacturerSkuSnapshot: selected?.manufacturerSku,
+          unitSymbolSnapshot: line.unitSymbolSnapshot, quantity: line.quantity, unitRate: selected?.quotedUnitRate ?? '0',
+          supplyRate: selected?.supplyRate ?? '0', labourRate: selected?.labourRate ?? '0', miscellaneousRate: selected?.miscellaneousRate ?? '0',
+          markupPercent: selected?.markupPercent ?? '0', markupAmount: selected?.markupAmount ?? '0', quotedUnitRate: selected?.quotedUnitRate ?? '0',
+          discountAmount: '0', lineSubtotal, lineTotal: lineSubtotal,
           notes: copied?.notes,
         });
       }
+      const copiedLines = await tx.listLines(principal.companyId, revision.id);
+      const initialized = await tx.updateDraft(principal.companyId, revision.id, revision.rowVersion, totals(copiedLines, '0', '0', '0'));
+      if (!initialized) throw new ConflictError('The quotation changed during creation.');
       await tx.addContributor(principal.companyId, revision.id, principal.userId);
       await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_revision_created', targetType: 'quotation_revision', targetId: revision.id, requestId, metadata: { designJobId: jobId, quotationNumber: quotation.quotationNumber, revisionNumber: revision.revisionNumber, boqRevisionId: boq.id, copiedFrom: source?.revision.id } });
-      return { quotation, revision };
+      return { quotation, revision: initialized };
     });
   }
 
@@ -223,46 +257,52 @@ export class QuotationService {
     });
   }
 
-  async updateLine(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, lineId: string, input: { brandId: string; unitRate: string; discountAmount: string; notes?: string; expectedRevisionVersion: number; expectedLineVersion: number }, requestId: string) {
-    await this.draft(principal, jobId, revisionId);
+  async updateLine(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, lineId: string, input: { offeringId: string; notes?: string; expectedRevisionVersion: number; expectedLineVersion: number }, requestId: string) {
+    const found = await this.draft(principal, jobId, revisionId);
     const repository = createQuotationRepository(this.database);
     const line = await repository.findLine(principal.companyId, revisionId, lineId);
     if (!line) throw new NotFoundError('Quotation line not found.');
-    const brand = (await repository.listBrandOptionsForBoqLines(principal.companyId, [line.boqLineId])).find((option) => option.brandId === input.brandId);
-    if (!brand) throw validationError('Choose an active brand/make assigned to this item.');
-    const lineSubtotal = new Decimal(line.quantity).mul(input.unitRate).toDecimalPlaces(2);
-    if (new Decimal(input.discountAmount).gt(lineSubtotal)) throw validationError('Line discount cannot exceed its subtotal.');
-    const prospective = (await repository.listLines(principal.companyId, revisionId)).map((item) => item.id === lineId
-      ? { lineSubtotal: lineSubtotal.toFixed(2), discountAmount: new Decimal(input.discountAmount).toFixed(2) }
-      : item);
-    const revision = (await repository.findRevision(principal.companyId, jobId, revisionId))!.revision;
-    const calculated = totals(prospective, revision.additionalDiscount, revision.taxAmount, revision.roundingAdjustment);
+    const costOptions = await repository.listCostOptionsForBoqLines(principal.companyId, [line.boqLineId]);
+    const selected = costOptions.find((option) => option.offeringId === input.offeringId);
+    if (!selected || !selected.offeringId || selected.supplyRate === null || selected.labourRate === null || selected.miscellaneousRate === null || selected.markupPercent === null || selected.markupAmount === null || selected.quotedUnitRate === null) {
+      throw validationError('Choose a fully costed brand/model option approved with this BOQ.');
+    }
+    const currentLines = await repository.listLines(principal.companyId, revisionId);
+    const selectedLine = { lineSubtotal: selected.lineTotal, discountAmount: '0' };
+    const prospective = currentLines.map((entry) => entry.id === lineId ? { ...entry, ...selectedLine } : entry);
+    const calculated = totals(prospective, found.revision.additionalDiscount, found.revision.taxAmount, found.revision.roundingAdjustment);
     return this.database.transaction(async (transaction) => {
       const tx = createQuotationRepository(transaction);
-      const updatedRevision = await tx.updateDraft(principal.companyId, revisionId, input.expectedRevisionVersion, calculated);
-      if (!updatedRevision) throw new ConflictError('The quotation changed. Refresh and try again.');
       const updatedLine = await tx.updateLine(principal.companyId, revisionId, lineId, input.expectedLineVersion, {
-        unitRate: new Decimal(input.unitRate).toFixed(2), discountAmount: new Decimal(input.discountAmount).toFixed(2),
-        brandId: brand.brandId, brandNameSnapshot: brand.name,
-        lineSubtotal: lineSubtotal.toFixed(2), lineTotal: lineSubtotal.minus(input.discountAmount).toFixed(2), notes: input.notes,
+        offeringId: selected.offeringId, boqCostOptionId: selected.id,
+        brandId: selected.brandId, brandNameSnapshot: selected.brandName,
+        manufacturerModelSnapshot: selected.manufacturerModel, manufacturerSkuSnapshot: selected.manufacturerSku,
+        unitRate: selected.quotedUnitRate!, supplyRate: selected.supplyRate!, labourRate: selected.labourRate!,
+        miscellaneousRate: selected.miscellaneousRate!, markupPercent: selected.markupPercent!,
+        markupAmount: selected.markupAmount!, quotedUnitRate: selected.quotedUnitRate!,
+        discountAmount: '0', lineSubtotal: selected.lineTotal, lineTotal: selected.lineTotal, notes: input.notes ?? null,
       });
       if (!updatedLine) throw new ConflictError('The quotation line changed. Refresh and try again.');
+      const updatedRevision = await tx.updateDraft(principal.companyId, revisionId, input.expectedRevisionVersion, calculated);
+      if (!updatedRevision) throw new ConflictError('The quotation changed. Refresh and try again.');
       await tx.addContributor(principal.companyId, revisionId, principal.userId);
-      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_line_priced', targetType: 'quotation_line', targetId: lineId, requestId, metadata: { designJobId: jobId, quotationRevisionId: revisionId, brandId: brand.brandId, brandName: brand.name, lineTotal: updatedLine.lineTotal } });
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_line_configured', targetType: 'quotation_line', targetId: lineId, requestId, metadata: { designJobId: jobId, quotationRevisionId: revisionId, offeringId: selected.offeringId, brandId: selected.brandId, brandName: selected.brandName, manufacturerModel: selected.manufacturerModel, lineTotal: updatedLine.lineTotal } });
       return updatedLine;
     });
   }
 
   async updatePaymentPlan(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, input: { cashPercentage: string; nonCashPercentage: string; expectedVersion: number }, requestId: string) {
-    await this.draft(principal, jobId, revisionId, 'engineering.payment_plan.write');
+    await this.job(principal, jobId, 'engineering.payment_plan.write');
+    const found = await createQuotationRepository(this.database).findRevision(principal.companyId, jobId, revisionId);
+    if (!found) throw new NotFoundError('Quotation revision not found.');
+    if (found.revision.status !== 'accepted') throw new ConflictError('Configure the payment plan after customer acceptance.');
     if (!new Decimal(input.cashPercentage).plus(input.nonCashPercentage).eq(100)) throw validationError('Cash and non-cash percentages must total exactly 100.');
     return this.database.transaction(async (transaction) => {
       const tx = createQuotationRepository(transaction);
-      const updated = await tx.updateDraft(principal.companyId, revisionId, input.expectedVersion, {
+      const updated = await tx.updateAcceptedPaymentPlan(principal.companyId, revisionId, input.expectedVersion, {
         cashPercentage: new Decimal(input.cashPercentage).toFixed(2), nonCashPercentage: new Decimal(input.nonCashPercentage).toFixed(2),
       });
       if (!updated) throw new ConflictError('The quotation changed. Refresh and try again.');
-      await tx.addContributor(principal.companyId, revisionId, principal.userId);
       await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_payment_plan_updated', targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, cashPercentage: input.cashPercentage, nonCashPercentage: input.nonCashPercentage } });
       return updated;
     });
@@ -271,12 +311,11 @@ export class QuotationService {
   async submit(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, expectedVersion: number, requestId: string) {
     const found = await this.draft(principal, jobId, revisionId);
     if (new Decimal(found.revision.grandTotal).lte(0)) throw validationError('Quotation grand total must be greater than zero before submission.');
-    if (found.revision.cashPercentage === null || found.revision.nonCashPercentage === null) throw validationError('An authorized sales manager must configure the full cash/non-cash payment plan before submission.');
     const repository = createQuotationRepository(this.database);
     const lines = await repository.listLines(principal.companyId, revisionId);
-    const allowedBrands = await repository.listBrandOptionsForBoqLines(principal.companyId, lines.map((line) => line.boqLineId));
-    if (lines.some((line) => !line.brandId || !line.brandNameSnapshot || !allowedBrands.some((brand) => brand.boqLineId === line.boqLineId && brand.brandId === line.brandId))) {
-      throw validationError('Select an active allowed brand/make for every quotation line before submission.');
+    const allowedOptions = await repository.listCostOptionsForBoqLines(principal.companyId, lines.map((line) => line.boqLineId));
+    if (lines.some((line) => !line.offeringId || !line.boqCostOptionId || !allowedOptions.some((option) => option.id === line.boqCostOptionId && option.offeringId === line.offeringId && option.boqLineId === line.boqLineId))) {
+      throw validationError('Select an approved brand/model cost option for every quotation line before submission.');
     }
     return this.database.transaction(async (transaction) => {
       const tx = createQuotationRepository(transaction);
@@ -294,7 +333,7 @@ export class QuotationService {
     const found = await repository.findRevision(principal.companyId, jobId, revisionId);
     if (!found) throw new NotFoundError('Quotation revision not found.');
     if (found.revision.status !== 'submitted') throw new ConflictError('This quotation is not awaiting approval.');
-    if (await repository.hasContributor(principal.companyId, revisionId, principal.userId)) throw new ForbiddenError('You cannot approve or return a quotation revision that you prepared.');
+    if (!isAdministrator(principal) && await repository.hasContributor(principal.companyId, revisionId, principal.userId)) throw new ForbiddenError('You cannot approve or return a quotation revision that you prepared.');
     const now = new Date();
     return this.database.transaction(async (transaction) => {
       const tx = createQuotationRepository(transaction);
@@ -303,8 +342,48 @@ export class QuotationService {
         : { status: 'returned' });
       if (!updated) throw new ConflictError('The quotation changed or is no longer awaiting approval.');
       await tx.createReview({ companyId: principal.companyId, quotationRevisionId: revisionId, decision: input.decision, reason: input.reason, actorUserId: principal.userId });
-      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: `engineering.quotation_${input.decision}`, targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, reason: input.reason } });
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: `engineering.quotation_${input.decision}`, targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { administratorOverride: isAdministrator(principal), designJobId: jobId, reason: input.reason } });
       return updated;
+    });
+  }
+
+  private document(revision: RevisionRow, quotationNumber: string, lines: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['listLines']>>, preview = false): PdfQuotation {
+    return {
+      preview,
+      details: revision.documentDetails,
+      quotationNumber: quotationNumber, revisionNumber: revision.revisionNumber,
+      customerName: revision.customerNameSnapshot, title: revision.title, currency: revision.currency,
+      validityDays: revision.validityDays, exclusions: revision.exclusions, deliveryTerms: revision.deliveryTerms,
+      paymentTerms: revision.paymentTerms, subtotal: revision.subtotal,
+      lineDiscountTotal: revision.lineDiscountTotal, additionalDiscount: revision.additionalDiscount,
+      taxLabel: revision.taxLabel, taxAmount: revision.taxAmount,
+      roundingAdjustment: revision.roundingAdjustment, grandTotal: revision.grandTotal,
+      lines: lines.map((line) => ({ section: line.sectionSnapshot, lineNumber: line.lineNumber, itemCode: line.itemCodeSnapshot, itemName: line.itemNameSnapshot, specification: line.specificationSnapshot, brandName: line.manufacturerModelSnapshot ? `${line.brandNameSnapshot ?? 'Unbranded'} · ${line.manufacturerModelSnapshot}${line.manufacturerSkuSnapshot ? ` · ${line.manufacturerSkuSnapshot}` : ''}` : line.brandNameSnapshot, quantity: line.quantity, unitSymbol: line.unitSymbolSnapshot, unitRate: line.unitRate, supplyRate: line.supplyRate, labourRate: line.labourRate, miscellaneousRate: line.miscellaneousRate, markupPercent: line.markupPercent, markupAmount: line.markupAmount, quotedUnitRate: line.quotedUnitRate, discountAmount: line.discountAmount, lineTotal: line.lineTotal })),
+    };
+  }
+
+  private renderPdf(revision: RevisionRow, quotationNumber: string, lines: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['listLines']>>, preview = false) {
+    return renderDemoQuotationPdf(this.document(revision, quotationNumber, lines, preview));
+  }
+
+  async previewPdf(principal: AuthenticatedPrincipal, jobId: string, revisionId: string) {
+    await this.job(principal, jobId);
+    const repository = createQuotationRepository(this.database);
+    const found = await repository.findRevision(principal.companyId, jobId, revisionId);
+    if (!found) throw new NotFoundError('Quotation revision not found.');
+    const lines = await repository.listLines(principal.companyId, revisionId);
+    return this.renderPdf(found.revision, found.quotation.quotationNumber, lines, true);
+  }
+
+  async updateDocumentDetails(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, input: { details: CommercialDocumentDetails; expectedVersion: number }, requestId: string) {
+    await this.draft(principal, jobId, revisionId);
+    return this.database.transaction(async (transaction) => {
+      const tx = createQuotationRepository(transaction);
+      const revision = await tx.updateDraft(principal.companyId, revisionId, input.expectedVersion, { documentDetails: input.details });
+      if (!revision) throw new ConflictError('The quotation changed. Refresh and try again.');
+      await tx.addContributor(principal.companyId, revisionId, principal.userId);
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_document_details_updated', targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId } });
+      return revision;
     });
   }
 
@@ -318,17 +397,7 @@ export class QuotationService {
     if (found.revision.status !== 'approved') throw new ConflictError('Only an approved quotation can be issued.');
     if (await repository.findIssueDocument(principal.companyId, revisionId)) throw new ConflictError('This quotation revision already has an issued snapshot.');
     const lines = await repository.listLines(principal.companyId, revisionId);
-    if (lines.some((line) => !line.brandId || !line.brandNameSnapshot)) throw validationError('Every quotation line must preserve a selected brand/make before issue.');
-    const pdf = renderDemoQuotationPdf({
-      quotationNumber: found.quotation.quotationNumber, revisionNumber: found.revision.revisionNumber,
-      customerName: found.revision.customerNameSnapshot, title: found.revision.title, currency: found.revision.currency,
-      validityDays: found.revision.validityDays, exclusions: found.revision.exclusions, deliveryTerms: found.revision.deliveryTerms,
-      paymentTerms: found.revision.paymentTerms, subtotal: found.revision.subtotal,
-      lineDiscountTotal: found.revision.lineDiscountTotal, additionalDiscount: found.revision.additionalDiscount,
-      taxLabel: found.revision.taxLabel, taxAmount: found.revision.taxAmount,
-      roundingAdjustment: found.revision.roundingAdjustment, grandTotal: found.revision.grandTotal,
-      lines: lines.map((line) => ({ lineNumber: line.lineNumber, itemCode: line.itemCodeSnapshot, itemName: line.itemNameSnapshot, specification: line.specificationSnapshot, brandName: line.brandNameSnapshot!, quantity: line.quantity, unitSymbol: line.unitSymbolSnapshot, unitRate: line.unitRate, discountAmount: line.discountAmount, lineTotal: line.lineTotal })),
-    });
+    const pdf = await this.renderPdf(found.revision, found.quotation.quotationNumber, lines);
     const storageName = `${randomUUID()}.pdf`;
     await ensureUploadRoot();
     await writeFile(resolvePrivateFile(storageName), pdf);
@@ -342,13 +411,17 @@ export class QuotationService {
           companyId: principal.companyId, quotationRevisionId: revisionId,
           originalName: `${found.quotation.quotationNumber}-R${found.revision.revisionNumber}-DEMO.pdf`, storageName,
           mimeType: 'application/pdf', sizeBytes: pdf.byteLength,
-          checksumSha256: createHash('sha256').update(pdf).digest('hex'), templateVersion: 'demo-v1', isDemo: true,
+          checksumSha256: createHash('sha256').update(pdf).digest('hex'), templateVersion: quotationPdfTemplateVersion, isDemo: true,
           createdByUserId: principal.userId,
         });
         await tx.setCommercialState(principal.companyId, context.opportunityId, 'quoted');
         await tx.setLeadStage(principal.companyId, context.leadId, 'commercial_negotiation');
-        await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_issued_demo', targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, documentId: document.id, templateVersion: 'demo-v1', grandTotal: found.revision.grandTotal } });
-        return { revision: updated, document };
+        await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_issued_demo', targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, documentId: document.id, templateVersion: quotationPdfTemplateVersion, grandTotal: found.revision.grandTotal } });
+        return { revision: updated, document: {
+          id: document.id, originalName: document.originalName, mimeType: document.mimeType,
+          sizeBytes: document.sizeBytes, templateVersion: document.templateVersion,
+          isDemo: document.isDemo, createdAt: document.createdAt,
+        } };
       });
     } catch (error) {
       await removePrivateFile(storageName);
@@ -392,6 +465,19 @@ export class QuotationService {
     const document = await createQuotationRepository(this.database).findIssueDocument(principal.companyId, revisionId, documentId);
     if (!document) throw new NotFoundError('Issued quotation document not found.');
     return document;
+  }
+
+  async exportExcel(principal: AuthenticatedPrincipal, jobId: string, revisionId: string) {
+    await this.job(principal, jobId, 'engineering.quotation.read');
+    const repository = createQuotationRepository(this.database);
+    const found = await repository.findRevision(principal.companyId, jobId, revisionId);
+    if (!found) throw new NotFoundError('Quotation revision not found.');
+    if (found.revision.calculationVersion !== 'catalogue-markup-v1') {
+      throw new ConflictError('Excel breakdown export is available only for catalogue-rate quotation revisions.');
+    }
+    const lines = await repository.listLines(principal.companyId, revisionId);
+    const buffer = await renderQuotationExcel(this.document(found.revision, found.quotation.quotationNumber, lines));
+    return { buffer, filename: `${found.quotation.quotationNumber}-R${found.revision.revisionNumber}.xlsx` };
   }
 }
 

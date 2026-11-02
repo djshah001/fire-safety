@@ -58,7 +58,9 @@ export const sendToCustomerSchema = z.object({ expectedVersion });
 
 export const customerDecisionSchema = z.object({
   decision: z.enum(['approved', 'changes_requested']),
-  evidenceReference: z.string().trim().min(3).max(1_000),
-  notes: z.string().trim().max(1_000).optional(),
+  evidenceReference: z.string().trim()
+    .min(3, 'Enter a traceable evidence reference of at least 3 characters.')
+    .max(1_000, 'Evidence reference must be 1,000 characters or fewer.'),
+  notes: z.string().trim().max(1_000, 'Notes must be 1,000 characters or fewer.').optional(),
   expectedVersion,
 });

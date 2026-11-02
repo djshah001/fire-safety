@@ -34,6 +34,20 @@ describe('engineering input validation', () => {
       .toMatchObject({ decision: 'changes_requested', evidenceReference: 'Email dated 2026-10-11' });
   });
 
+  it('explains invalid customer evidence and notes without accepting an unversioned decision', () => {
+    for (const evidenceReference of ['', ' ', 'AB', ' A ', 'a'.repeat(1_001)]) {
+      const result = customerDecisionSchema.safeParse({ decision: 'approved', evidenceReference, expectedVersion: 1 });
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.issues[0]?.path).toEqual(['evidenceReference']);
+    }
+    expect(customerDecisionSchema.parse({ decision: 'approved', evidenceReference: ' Email 2026-10-30 ', notes: ' Confirmed R2 ', expectedVersion: 2 }))
+      .toEqual({ decision: 'approved', evidenceReference: 'Email 2026-10-30', notes: 'Confirmed R2', expectedVersion: 2 });
+    const invalidNotes = customerDecisionSchema.safeParse({ decision: 'changes_requested', evidenceReference: 'Customer email', notes: 'a'.repeat(1_001), expectedVersion: 1 });
+    expect(invalidNotes.success).toBe(false);
+    if (!invalidNotes.success) expect(invalidNotes.error.issues[0]?.message).toBe('Notes must be 1,000 characters or fewer.');
+    expect(() => customerDecisionSchema.parse({ decision: 'approved', evidenceReference: 'Customer email', expectedVersion: 0 })).toThrow();
+  });
+
   it('requires a reason and optimistic version for a deadline buffer', () => {
     expect(useDesignBufferSchema.parse({ reason: 'Waiting for revised floor plan', expectedVersion: 2 }))
       .toEqual({ reason: 'Waiting for revised floor plan', expectedVersion: 2 });

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { paymentPlanSchema, quotationHeaderSchema, quotationLineSchema, quotationReviewSchema } from './quotation.schemas.js';
+import { paymentPlanSchema, quotationDocumentDetailsSchema, quotationHeaderSchema, quotationLineSchema, quotationReviewSchema } from './quotation.schemas.js';
 
 describe('quotation schemas', () => {
+  it('bounds letterhead/contact fields and refuses client-provided asset paths', () => {
+    expect(quotationDocumentDetailsSchema.parse({ expectedVersion: 1, details: { senderTagline: ' Fire safety ', recipientContact: ' Customer contact ', recipientPhone: '123' } }).details)
+      .toEqual({ senderTagline: 'Fire safety', recipientContact: 'Customer contact', recipientPhone: '123' });
+    expect(() => quotationDocumentDetailsSchema.parse({ expectedVersion: 1, details: { senderTagline: 'x'.repeat(201) } })).toThrow();
+    expect(() => quotationDocumentDetailsSchema.parse({ expectedVersion: 1, details: { logoPath: '/private/file' } })).toThrow();
+  });
   it('requires payment percentages to reconcile exactly', () => {
     expect(paymentPlanSchema.parse({ cashPercentage: '30.25', nonCashPercentage: '69.75', expectedVersion: 1 })).toMatchObject({ cashPercentage: '30.25' });
     expect(() => paymentPlanSchema.parse({ cashPercentage: '30', nonCashPercentage: '60', expectedVersion: 1 })).toThrow();
@@ -17,9 +23,10 @@ describe('quotation schemas', () => {
     expect(() => quotationReviewSchema.parse({ decision: 'returned', expectedVersion: 1 })).toThrow();
   });
 
-  it('requires an item brand/make on priced lines', () => {
-    const input = { unitRate: '100.00', discountAmount: '0', expectedRevisionVersion: 1, expectedLineVersion: 1 };
+  it('requires selection of an approved offering and rejects client prices', () => {
+    const input = { expectedRevisionVersion: 1, expectedLineVersion: 1 };
     expect(() => quotationLineSchema.parse(input)).toThrow();
-    expect(quotationLineSchema.parse({ ...input, brandId: '00000000-0000-4000-8000-000000000001' }).brandId).toBeTruthy();
+    expect(quotationLineSchema.parse({ ...input, offeringId: '00000000-0000-4000-8000-000000000001' }).offeringId).toBeTruthy();
+    expect(() => quotationLineSchema.parse({ ...input, offeringId: '00000000-0000-4000-8000-000000000001', unitRate: '100.00' })).toThrow();
   });
 });

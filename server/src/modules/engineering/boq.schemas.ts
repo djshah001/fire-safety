@@ -33,6 +33,13 @@ export const estimateLineInputSchema = z.object({
 });
 export const estimateLineUpdateSchema = estimateLineInputSchema.extend({ expectedLineVersion: version });
 
+export const boqMarkupInputSchema = z.object({
+  markupPercent: z.string().trim().regex(/^\d{1,3}(?:\.\d{1,4})?$/, 'Enter a percentage from 0 to 1000 with at most four decimal places.')
+    .refine((value) => Number(value) <= 1000, 'Markup must not exceed 1000%.'),
+  expectedBoqVersion: version,
+  expectedLineVersion: version,
+}).strict();
+
 export const versionInputSchema = z.object({ expectedVersion: version });
 export const deleteLineSchema = z.object({ expectedBoqVersion: version, expectedLineVersion: version });
 export const boqReviewSchema = z.object({

@@ -8,7 +8,7 @@ export type MasterFilters = {
   sort?: MasterSort; direction?: 'asc' | 'desc';
 };
 export type Unit = {
-  id: string; code: string; name: string; symbol: string; status: MasterStatus;
+  id: string; code: string; name: string; symbol: string; allowFractional: boolean; status: MasterStatus;
   rowVersion: number; updatedAt: string;
 };
 export type ItemCategory = {
@@ -17,10 +17,27 @@ export type ItemCategory = {
 export type Brand = {
   id: string; code: string; name: string; status: MasterStatus; rowVersion: number; updatedAt: string;
 };
+export type ItemFamily = {
+  id: string; code: string; name: string; scopeDescription: string; categoryId: string; categoryName: string;
+  defaultUnitId: string | null; defaultUnitName: string | null; defaultUnitSymbol: string | null;
+  specifications: Array<{ key: string; label: string; valueType: 'text' | 'number' | 'boolean'; unitLabel: string | null; isRequired: boolean; sortOrder: number }>;
+  status: MasterStatus; rowVersion: number; updatedAt: string;
+};
 export type Item = {
   id: string; code: string; name: string; specification: string | null;
+  familyId: string | null; familyName: string | null;
+  model: string | null; specificationValues: Record<string, string | number | boolean>;
   categoryId: string; categoryName: string; unitId: string; unitName: string; unitSymbol: string;
   brands: Array<{ id: string; code: string; name: string; status: MasterStatus }>;
+  status: MasterStatus; rowVersion: number; updatedAt: string;
+};
+export type ItemRateVersion = {
+  id: string; itemId: string; offeringId: string; currency: string; effectiveFrom: string; supplyRate: string;
+  labourRate: string; miscellaneousRate: string; miscellaneousNote: string | null; createdAt: string;
+};
+export type ItemOffering = {
+  id: string; itemId: string; brandId: string | null; brandCode: string | null; brandName: string | null;
+  manufacturerModel: string; manufacturerSku: string | null; isPreferred: boolean;
   status: MasterStatus; rowVersion: number; updatedAt: string;
 };
 export type Vendor = {
@@ -30,7 +47,7 @@ export type Vendor = {
   primaryContact: { id: string; name: string; jobTitle: string | null; phone: string | null; email: string | null } | null;
 };
 export type MasterPage<T> = { items: T[]; total: number; page: number; pageSize: number };
-export type MasterResource = 'vendors' | 'items' | 'item-categories' | 'brands' | 'units';
+export type MasterResource = 'vendors' | 'items' | 'item-families' | 'item-categories' | 'brands' | 'units';
 
 const compact = (input: MasterFilters) => Object.fromEntries(
   Object.entries(input).filter(([, value]) => value !== undefined && value !== ''),
@@ -46,9 +63,37 @@ export const masterListQuery = <T>(resource: MasterResource, filters: MasterFilt
   },
 });
 
-export const masterLookupsQuery = (resource: 'units' | 'item-categories' | 'brands') => masterListQuery<Unit | ItemCategory | Brand>(resource, {
+export const masterLookupsQuery = (resource: 'units' | 'item-families' | 'item-categories' | 'brands') => masterListQuery<Unit | ItemFamily | ItemCategory | Brand>(resource, {
   status: 'active', page: 1, pageSize: 100, sort: 'name', direction: 'asc',
 });
+
+export const itemOfferingsQuery = (itemId?: string) => queryOptions({
+  queryKey: ['masters', 'items', itemId, 'offerings'] as const,
+  enabled: Boolean(itemId),
+  queryFn: async ({ signal }) => (await apiClient.get<ApiEnvelope<{ offerings: ItemOffering[] }>>(`/masters/items/${itemId}/offerings`, { signal })).data.data.offerings,
+});
+
+export const offeringRatesQuery = (itemId?: string, offeringId?: string) => queryOptions({
+  queryKey: ['masters', 'items', itemId, 'offerings', offeringId, 'rates'] as const,
+  enabled: Boolean(itemId && offeringId),
+  queryFn: async ({ signal }) => (await apiClient.get<ApiEnvelope<{ rates: ItemRateVersion[] }>>(`/masters/items/${itemId}/offerings/${offeringId}/rates`, { signal })).data.data.rates,
+});
+
+export async function createItemOffering(itemId: string, input: Record<string, unknown>) {
+  await apiClient.post(`/masters/items/${itemId}/offerings`, input);
+}
+
+export async function updateItemOffering(itemId: string, offeringId: string, input: Record<string, unknown>) {
+  await apiClient.put(`/masters/items/${itemId}/offerings/${offeringId}`, input);
+}
+
+export async function deactivateItemOffering(itemId: string, offeringId: string, expectedVersion: number, reason: string) {
+  await apiClient.post(`/masters/items/${itemId}/offerings/${offeringId}/deactivate`, { expectedVersion, reason });
+}
+
+export async function createItemRate(itemId: string, offeringId: string, input: Record<string, unknown>) {
+  await apiClient.post(`/masters/items/${itemId}/offerings/${offeringId}/rates`, input);
+}
 
 export async function createMaster(resource: MasterResource, input: Record<string, unknown>) {
   await apiClient.post(`/masters/${resource}`, input);

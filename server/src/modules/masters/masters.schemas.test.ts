@@ -6,6 +6,7 @@ describe('master request validation', () => {
     expect(itemCreateSchema.parse({
       code: 'sd-001',
       name: 'Smoke detector',
+      familyId: '00000000-0000-4000-8000-000000000004',
       categoryId: '00000000-0000-4000-8000-000000000001',
       unitId: '00000000-0000-4000-8000-000000000002',
       brandIds: ['00000000-0000-4000-8000-000000000003'],

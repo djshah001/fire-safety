@@ -4,6 +4,9 @@ const databaseUrl = process.env.INTEGRATION_DATABASE_URL;
 if (!databaseUrl) {
   throw new Error('INTEGRATION_DATABASE_URL is required for integration tests.');
 }
+if (!new URL(databaseUrl).pathname.endsWith('_test')) {
+  throw new Error('Integration tests delete fixtures and require a dedicated database whose name ends with _test.');
+}
 
 export default defineConfig({
   test: {

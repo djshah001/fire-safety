@@ -1,5 +1,23 @@
 # Fire Safety — Product and Interface Design
 
+## Reference quotation print layout — 2026-10-31
+
+Use the Puppeteer A4 portrait HTML/CSS template for quotation previews/new issues and scoped BOQ exports. Match the supplied reference's gold serif letterhead, thin red rule, recipient/contact boxes, black table borders, orange section bands, size variants under common scope, specification dividers and Page X of Y footer. Preserve configurable sender details rather than copying sample company/customer facts into production. An optional trusted local PNG/JPEG provides the original logo. Tagline and recipient contact/phone are editable per revision through the shadcn Document details dialog.
+
+The corrected user reference supersedes the interim seven-column layout: PDF and Excel show eleven columns in this order: serial, description, selected make/model, unit, quantity, supply, installation, markup amount, miscellaneous, rate and amount. A uniform percentage is the markup heading (for example 20%); mixed percentages are identified per PDF line and on Excel's visible Markup inputs sheet. Do not put the price breakdown inside descriptions. Common scope/specifications have size subrows; identical makes may share a merged cell, while distinct selected make/model/SKU values remain separate. Preserve exact decimals and Indian grouping in PDFs, complete numeric Excel formulas, orange sections and section/grand totals. Repeat PDF/table print headers, retain technical fields with units and split oversized descriptions without duplicating billing. Technical exports omit commercial content. Draft previews remain marked and old issued bytes are never regenerated.
+
+Excel has the reference's eleven-column Quotation sheet and a visible Markup inputs sheet. Exact line-number lookups keep percentages/discounts attached to their products after sorting. Changing inputs recalculates markup, unit rate, billable amount, section totals and the full-value summary with explicit discounts/tax/rounding. These local workbook edits do not update ERP records. Keep all values typed, formulas cached and headings/terms editable; reject values outside Excel's numeric precision instead of silently rounding them.
+
+Customer design decisions (2026-10-30): label evidence as required with a 3–1,000 character limit and optional notes with a 1,000 character limit. Trim and validate before sending, retain inputs on failure, and display API field errors instead of only a generic validation message. Evidence and exact revision/version remain required.
+
+Quotation form refinement (2026-10-30): use the repository-owned Collapsible, Badge, Button and Textarea primitives for compact clause cards. Keep textareas at a bounded height, preserve clause text in form state while collapsed, and scroll only the dialog body so header and Save/Cancel stay visible on desktop/mobile. Administrators see enabled review controls even when they contributed; ordinary employees retain independent review restrictions.
+
+## Quotation document/forms update (2026-10-30)
+
+Draft quotation action bars include **Document details** and **Preview PDF**. The shadcn details dialog uses labelled ordinary fields for letterhead, customer address/GSTIN, document date, bank details and signatory; no JSON editor is exposed. Preview PDFs say **PREVIEW - NOT ISSUED**. Technical BOQ exports use a wider description column and omit commercial columns and terms. Long descriptions, headings and unbroken strings wrap across pages with continuation markers.
+
+Purchase users prepare quotations. The create dialog preloads editable workbook terms and milestone payment wording; the header dialog edits those values and validity. Show the cash/non-cash Configure action only for accepted quotations. BOQ workspace offers PDF download. Generated documents follow the reference portrait format with section headings, descriptions, make/model, unit, quantity, supply, installation, markup, miscellaneous, rate and amount, followed by section totals and terms. Restricted BOQ exports display technical quantities without costs.
+
 Version: 1.0 · 2026-10-08 · Confirmed: desktop + mobile, light/dark theme, supplied shadcn preset
 
 ## 1. Design direction
@@ -111,7 +129,7 @@ Mobile: header with labelled menu/search/notifications, focus-managed drawer, re
 
 Later groups: inventory, execution, quality/handover and finance when implemented. Role-visible navigation improves usability; backend policies still govern access.
 
-Implemented P2 master directories reuse the shared shadcn `ServerDataTable` and `ListToolbar`, with URL search/status/sort/page state, a Sheet filter, Dialog create/edit/deactivate forms, semantic status badges and Sonner feedback. Vendor operational contacts are shown without bank fields; item rows show category and unit context. Deactivation preserves referenced history.
+Implemented P2 master directories reuse the shared shadcn `ServerDataTable` and `ListToolbar`, with URL search/status/sort/page state, a Sheet filter, Dialog create/edit/deactivate forms, semantic status badges and Sonner feedback. Vendor operational contacts are shown without bank fields; item rows show inherited category and unit context. Product entry is guided: the chosen family reveals typed specification controls, never JSON or delimiter syntax. A separate shadcn manager handles brand/model offerings and their dated rates. Deactivation preserves referenced history.
 
 Implemented P4 sourcing uses permission-visible **Procurement → Requisitions & sourcing** and **Technical reviews** submenus. Both directories keep URL-backed search/status/sort/pagination in the shared table/toolbar. The commercial workspace separates approved demand, internal RFQ metadata, comparable offer cards/tables, exact-line engineering decisions and the durable manager decision. The design-head workspace shows only approved/offered technical specifications, makes and deviation notes—never rates, totals, taxes, freight or payment terms. Dialogs capture exact-line approve/reject reasons, states remain prominently badged, persistent Alerts explain authority boundaries/external delivery status, and Sonner reports mutations.
 
@@ -125,8 +143,9 @@ Implemented P4 sourcing uses permission-visible **Procurement → Requisitions &
 | Lead list/detail | Name/contact/source/owner/stage, purpose/sector, customer/site, notes/files/timeline | Assign, follow up, authorize free design; configurable purpose/sector; Lost requires reason |
 | Design workspace | Revision list, multiple original CAD/PDF files, request, reviewer/customer decisions | Design-head engineer assignment; submit, return, approve internally, record customer response; exact version label |
 | BOQ templates | Sector, ordered items, costing employee, purchase head, final approver | Distinct assignees, active-master validation, optimistic edit |
-| BOQ editor | Template item/spec/unit and full quantity; separate costing table | Designer edits quantity only; purchase costs; purchase head then admin approves; cost fields permission-redacted |
-| Quotation editor | Revision/scope/rates/terms, full total and planned payment split | Submit, issue/preview, record acceptance; no receipts inferred from percentage |
+| Catalogue masters | Families, reusable scope/specification definitions, stable variants, units/makes and effective rate history | Shadcn server tables and dialogs; immutable new rate versions; purchase-manager rate permission; no stock balance implied |
+| BOQ editor | Template item/spec/unit and full quantity; fixed rate snapshots and separate markup table | Designer edits quantity only; purchase edits markup percentage only; supply/labour/miscellaneous remain read-only; purchase head then admin approves; cost fields permission-redacted |
+| Quotation editor | Revision/scope/make, full disclosed rate breakdown, terms, total and planned payment split | No price override; Excel export uses safe formulas and numeric cells; PDF preserves the same breakdown; submit, issue/preview, record acceptance; no receipts inferred from percentage |
 | Project hub | Approved design baseline, site/team/dates, commercial state | Start after approved design; no compulsory customer PO field |
 | Vendor comparison | Equivalent line offers, totals/freight/lead time/spec differences | Select + reason; single-source exception requires authorized approval |
 | PO workspace | Revision/lines/vendor/project/delivery/terms, approvals/history | Submit, issue, amend, cancel/short-close with reasons |

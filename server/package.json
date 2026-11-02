@@ -22,7 +22,9 @@
     "db:check": "drizzle-kit check",
     "db:studio": "drizzle-kit studio",
     "bootstrap:admin": "tsx src/scripts/bootstrapAdmin.ts",
-    "seed:demo": "tsx src/scripts/seedDemo.ts"
+    "reset:demo": "tsx src/scripts/resetDemo.ts --confirm",
+    "seed:demo": "tsx src/scripts/seedDemo.ts",
+    "preview:quotation:pdf": "tsx src/scripts/previewQuotationPdf.ts"
   },
   "dependencies": {
     "cookie-parser": "1.4.7",
@@ -39,6 +41,7 @@
     "pg": "8.23.1",
     "pino": "10.4.0",
     "pino-http": "11.0.0",
+    "puppeteer": "25.16.0",
     "uuid": "11.1.1",
     "zod": "4.6.5"
   },

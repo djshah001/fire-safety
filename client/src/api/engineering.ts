@@ -1,4 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
+import { z } from 'zod';
 import { apiClient, type ApiEnvelope } from '@/api/client';
 
 export type DesignStatus = 'awaiting_designer' | 'authorized' | 'draft' | 'under_review' | 'returned' | 'internally_approved' | 'sent_to_customer' | 'customer_approved' | 'changes_requested';
@@ -94,7 +95,16 @@ export async function sendDesignToCustomer(jobId: string, revisionId: string, ex
   await apiClient.post(`/engineering/design-jobs/${jobId}/revisions/${revisionId}/send-to-customer`, { expectedVersion });
 }
 export async function recordDesignCustomerDecision(jobId: string, revisionId: string, input: { decision: 'approved' | 'changes_requested'; evidenceReference: string; notes?: string; expectedVersion: number }) {
-  await apiClient.post(`/engineering/design-jobs/${jobId}/revisions/${revisionId}/customer-decision`, input);
+  // Match the API constraints before sending a decision; whitespace is not evidence.
+  const payload = z.object({
+    decision: z.enum(['approved', 'changes_requested']),
+    evidenceReference: z.string().trim()
+      .min(3, 'Enter a traceable evidence reference of at least 3 characters.')
+      .max(1_000, 'Evidence reference must be 1,000 characters or fewer.'),
+    notes: z.string().trim().max(1_000, 'Notes must be 1,000 characters or fewer.').optional(),
+    expectedVersion: z.number().int().positive('The revision version is unavailable. Refresh and try again.'),
+  }).parse(input);
+  await apiClient.post(`/engineering/design-jobs/${jobId}/revisions/${revisionId}/customer-decision`, payload);
 }
 export function designFileUrl(jobId: string, revisionId: string, fileId: string) {
   return apiClient.getUri({ url: `/engineering/design-jobs/${jobId}/revisions/${revisionId}/files/${fileId}` });
@@ -106,9 +116,14 @@ export type BoqLine = {
   quantity: string; drawingReference: string | null; notes: string | null; rowVersion: number;
 };
 export type EstimateCategory = 'material' | 'labour' | 'transport' | 'subcontracting' | 'overhead' | 'wastage' | 'margin';
+export const boqPdfUrl = (jobId: string, boqId: string) => apiClient.getUri({ url: `/engineering/design-jobs/${jobId}/boqs/${boqId}/export.pdf` });
 export type EstimateLine = {
   id: string; boqLineId: string | null; lineNumber: number; category: EstimateCategory; description: string;
   quantity: string; unitRate: string; lineTotal: string; notes: string | null; rowVersion: number;
+  rateVersionId: string | null; offeringId: string | null; brandId: string | null; brandName: string | null;
+  manufacturerModel: string | null; manufacturerSku: string | null; isPreferredOffering: boolean | null;
+  supplyRate: string | null; labourRate: string | null; miscellaneousRate: string | null;
+  markupPercent: string | null; markupAmount: string | null; quotedUnitRate: string | null;
 };
 export type BoqRevision = {
   id: string; designRevisionId: string; revisionNumber: number; title: string; changeSummary: string;
@@ -175,8 +190,7 @@ export async function saveBoqTemplate(templateId: string | undefined, input: { s
 
 export async function createBoqRevision(jobId: string, input: { designRevisionId: string; sourceBoqRevisionId?: string; title: string; changeSummary: string }) { await apiClient.post(`/engineering/design-jobs/${jobId}/boqs`, input); }
 export async function saveBoqQuantity(jobId: string, boqId: string, line: BoqLine, quantity: string, expectedBoqVersion: number) { await apiClient.patch(`/engineering/design-jobs/${jobId}/boqs/${boqId}/lines/${line.id}`, { quantity, expectedBoqVersion, expectedLineVersion: line.rowVersion }); }
-export async function saveEstimateLine(jobId: string, boqId: string, lineId: string | undefined, input: { boqLineId?: string; category: EstimateCategory; description: string; quantity: string; unitRate: string; notes?: string; expectedBoqVersion: number; expectedLineVersion?: number }) { await apiClient.request({ method: lineId ? 'patch' : 'post', url: `/engineering/design-jobs/${jobId}/boqs/${boqId}/estimate-lines${lineId ? `/${lineId}` : ''}`, data: input }); }
-export async function deleteEstimateLine(jobId: string, boqId: string, line: EstimateLine, expectedBoqVersion: number) { await apiClient.delete(`/engineering/design-jobs/${jobId}/boqs/${boqId}/estimate-lines/${line.id}`, { data: { expectedBoqVersion, expectedLineVersion: line.rowVersion } }); }
+export async function saveBoqMarkup(jobId: string, boqId: string, line: EstimateLine, markupPercent: string, expectedBoqVersion: number) { await apiClient.patch(`/engineering/design-jobs/${jobId}/boqs/${boqId}/cost-lines/${line.id}/markup`, { markupPercent, expectedBoqVersion, expectedLineVersion: line.rowVersion }); }
 export async function submitBoq(jobId: string, boqId: string, expectedVersion: number) { await apiClient.post(`/engineering/design-jobs/${jobId}/boqs/${boqId}/submit`, { expectedVersion }); }
 export async function submitBoqCosting(jobId: string, boqId: string, expectedVersion: number) { await apiClient.post(`/engineering/design-jobs/${jobId}/boqs/${boqId}/submit-costing`, { expectedVersion }); }
 export async function reviewBoq(jobId: string, boqId: string, stage: 'purchase' | 'final', input: { decision: 'approved' | 'returned'; reason?: string; expectedVersion: number }) { await apiClient.post(`/engineering/design-jobs/${jobId}/boqs/${boqId}/${stage === 'purchase' ? 'purchase-review' : 'final-review'}`, input); }

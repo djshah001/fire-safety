@@ -1,3 +1,4 @@
+import { isAdministrator } from '../../core/security/administrator.js';
 import { ConflictError, ForbiddenError } from '../../core/errors/appError.js';
 import { hashPassword } from '../../core/security/password.js';
 import { systemAdminPermissionCodes, type PermissionCode } from '../../core/security/permissions.js';
@@ -211,7 +212,7 @@ export class AdminService {
         throw new ConflictError('One or more roles are inactive or do not belong to this company.');
       }
       const currentAssignments = await repository.listUserRoles(principal.companyId, [userId]);
-      if (principal.userId === userId) {
+      if (!isAdministrator(principal) && principal.userId === userId) {
         const removedOwnRole = currentAssignments.some((assignment) => !uniqueRoleIds.includes(assignment.roleId));
         if (removedOwnRole) {
           throw new ForbiddenError('You may add a role to your own account, but another administrator must remove one.');
@@ -272,7 +273,7 @@ export class AdminService {
   }
 
   async disableUser(principal: AuthenticatedPrincipal, userId: string, rowVersion: number, reason: string, requestId: string) {
-    if (principal.userId === userId) throw new ForbiddenError('You cannot disable your own account.');
+    if (!isAdministrator(principal) && principal.userId === userId) throw new ForbiddenError('You cannot disable your own account.');
     return this.database.transaction(async (transaction) => {
       const now = new Date();
       const user = await createAdminRepository(transaction)

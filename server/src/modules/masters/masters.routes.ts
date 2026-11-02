@@ -10,6 +10,12 @@ import {
   itemCategoryCreateSchema,
   itemCategoryUpdateSchema,
   itemCreateSchema,
+  itemFamilyCreateSchema,
+  itemFamilyUpdateSchema,
+  itemOfferingCreateSchema,
+  itemOfferingParamsSchema,
+  itemOfferingUpdateSchema,
+  itemRateCreateSchema,
   itemUpdateSchema,
   masterIdParamsSchema,
   masterListQuerySchema,
@@ -84,6 +90,24 @@ export function createMastersRouter() {
   router.get('/items', requirePermission('procurement.item.read'), async (request, response) => {
     sendData(request, response, await mastersService.listItems(getPrincipal(request), masterListQuerySchema.parse(request.query)));
   });
+  router.get('/item-families', requirePermission('procurement.item.read'), async (request, response) => {
+    sendData(request, response, await mastersService.listItemFamilies(getPrincipal(request), masterListQuerySchema.parse(request.query)));
+  });
+  router.post('/item-families', requireCsrf, requirePermission('procurement.item.manage'), async (request, response) => {
+    const family = await mastersService.createItemFamily(getPrincipal(request), itemFamilyCreateSchema.parse(request.body), getRequestId(request));
+    sendData(request, response, { family }, 201);
+  });
+  router.put('/item-families/:id', requireCsrf, requirePermission('procurement.item.manage'), async (request, response) => {
+    const { id } = masterIdParamsSchema.parse(request.params);
+    const family = await mastersService.updateItemFamily(getPrincipal(request), id, itemFamilyUpdateSchema.parse(request.body), getRequestId(request));
+    sendData(request, response, { family });
+  });
+  router.post('/item-families/:id/deactivate', requireCsrf, requirePermission('procurement.item.manage'), async (request, response) => {
+    const { id } = masterIdParamsSchema.parse(request.params);
+    const input = deactivateMasterSchema.parse(request.body);
+    const family = await mastersService.deactivateItemFamily(getPrincipal(request), id, input.expectedVersion, input.reason, getRequestId(request));
+    sendData(request, response, { family });
+  });
   router.post('/items', requireCsrf, requirePermission('procurement.item.manage'), async (request, response) => {
     const item = await mastersService.createItem(getPrincipal(request), itemCreateSchema.parse(request.body), getRequestId(request));
     sendData(request, response, { item }, 201);
@@ -98,6 +122,35 @@ export function createMastersRouter() {
     const input = deactivateMasterSchema.parse(request.body);
     const item = await mastersService.deactivateItem(getPrincipal(request), id, input.expectedVersion, input.reason, getRequestId(request));
     sendData(request, response, { item });
+  });
+  router.get('/items/:id/offerings', requirePermission('procurement.item.read'), async (request, response) => {
+    const { id } = masterIdParamsSchema.parse(request.params);
+    sendData(request, response, { offerings: await mastersService.listItemOfferings(getPrincipal(request), id) });
+  });
+  router.post('/items/:id/offerings', requireCsrf, requirePermission('procurement.item.manage'), async (request, response) => {
+    const { id } = masterIdParamsSchema.parse(request.params);
+    const offering = await mastersService.createItemOffering(getPrincipal(request), id, itemOfferingCreateSchema.parse(request.body), getRequestId(request));
+    sendData(request, response, { offering }, 201);
+  });
+  router.put('/items/:id/offerings/:offeringId', requireCsrf, requirePermission('procurement.item.manage'), async (request, response) => {
+    const { id, offeringId } = itemOfferingParamsSchema.parse(request.params);
+    const offering = await mastersService.updateItemOffering(getPrincipal(request), id, offeringId, itemOfferingUpdateSchema.parse(request.body), getRequestId(request));
+    sendData(request, response, { offering });
+  });
+  router.post('/items/:id/offerings/:offeringId/deactivate', requireCsrf, requirePermission('procurement.item.manage'), async (request, response) => {
+    const { id, offeringId } = itemOfferingParamsSchema.parse(request.params);
+    const input = deactivateMasterSchema.parse(request.body);
+    const offering = await mastersService.deactivateItemOffering(getPrincipal(request), id, offeringId, input.expectedVersion, input.reason, getRequestId(request));
+    sendData(request, response, { offering });
+  });
+  router.get('/items/:id/offerings/:offeringId/rates', requirePermission('procurement.item.read'), async (request, response) => {
+    const { id, offeringId } = itemOfferingParamsSchema.parse(request.params);
+    sendData(request, response, { rates: await mastersService.listItemRates(getPrincipal(request), id, offeringId) });
+  });
+  router.post('/items/:id/offerings/:offeringId/rates', requireCsrf, requirePermission('procurement.item_rate.manage'), async (request, response) => {
+    const { id, offeringId } = itemOfferingParamsSchema.parse(request.params);
+    const rate = await mastersService.createItemRate(getPrincipal(request), id, offeringId, itemRateCreateSchema.parse(request.body), getRequestId(request));
+    sendData(request, response, { rate }, 201);
   });
 
   router.get('/vendors', requirePermission('procurement.vendor.read'), async (request, response) => {

@@ -1,0 +1,910 @@
+{
+  "source": {
+    "file": "BOQ.xlsx",
+    "sheet": "1",
+    "range": "A11:K66",
+    "sha256": "45f789a9830039b7c50cb79a2aa8df84ebf8dd9bba82d8cbc1bacf8235cfec80",
+    "description": "Billable variants only; headings, totals and technical continuation rows are not products. No source customer/company/bank data retained. Rates and dates are demo fixtures, not approved vendor prices."
+  },
+  "products": [
+    {
+      "sourceRow": 12,
+      "code": "DEMO-REF-R12",
+      "familyCode": "DEMO-REF-ELECTRIC-PUMP",
+      "familyName": "Electric fire pump",
+      "categoryCode": "DEMO-PUMP",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "Electric fire pump",
+      "scope": "Supply, installation, testing & commissioning of horizontal centrifugal single stage fire pump with squirrel cage induction motor (TEFC), mounted on common MS base frame with necessary fittings and accessories.",
+      "specifications": {
+        "head": 70,
+        "discharge": 1620
+      },
+      "brands": [
+        "KIRLOSKAR",
+        "PRIMA"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "135000",
+      "labourRate": "8000",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 15,
+      "code": "DEMO-REF-R15",
+      "familyCode": "DEMO-REF-DIESEL-PUMP",
+      "familyName": "Diesel fire pump set",
+      "categoryCode": "DEMO-PUMP",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "Diesel fire pump set",
+      "scope": "Supply, installation, testing & commissioning of diesel engine complete with fuel tank, battery, control panel, exhaust system, and all standard accessories as required.",
+      "specifications": {
+        "head": 70,
+        "discharge": 1620
+      },
+      "brands": [
+        "KIRLOSKAR",
+        "PRIMA"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "321000",
+      "labourRate": "8001",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 18,
+      "code": "DEMO-REF-R18",
+      "familyCode": "DEMO-REF-JOCKEY-PUMP",
+      "familyName": "Jockey fire pump",
+      "categoryCode": "DEMO-PUMP",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "Jockey fire pump",
+      "scope": "Supply, installation, testing & commissioning of horizontal centrifugal single stage fire pump with squirrel cage induction motor (TEFC), mounted on common MS base frame with necessary fittings and accessories.",
+      "specifications": {
+        "head": 70,
+        "discharge": 180
+      },
+      "brands": [
+        "KIRLOSKAR",
+        "PRIMA"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "46500",
+      "labourRate": "3500",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 21,
+      "code": "DEMO-REF-R21",
+      "familyCode": "DEMO-REF-PUMP-PANEL",
+      "familyName": "Pump control panel",
+      "categoryCode": "DEMO-PUMP",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "Pump control panel",
+      "scope": "Supply, installation, testing & commissioning of Control Panel fabricated out of 14 SWG CRCA sheet steel, modular construction, floor mounted, front operated type, with provision for top and bottom cable entry, suitable for operation of: Main Fire Pump – 1, Jockey Pump– 1 & diesel engine -1",
+      "specifications": {
+        "construction": "14 SWG CRCA",
+        "configuration": "1 main, 1 jockey, 1 diesel"
+      },
+      "brands": [
+        "C&S",
+        "SCHNEIDER",
+        "L&T"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "53500",
+      "labourRate": "4500",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 22,
+      "code": "DEMO-REF-R22",
+      "familyCode": "DEMO-REF-PUMP-CABLE",
+      "familyName": "Pump wiring lot",
+      "categoryCode": "DEMO-PUMP",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "Pump wiring lot",
+      "scope": "Supply, installation, testing & commissioning of Stranded Copper Conductor, Pvc Insulated Pvc Sheathed, Aluminium Mylar Tape Shielded For Pump Wire.(up to 10 mtr )",
+      "specifications": {
+        "length": 10,
+        "conductor": "Stranded copper"
+      },
+      "brands": [],
+      "unitCode": "DEMO-LOT",
+      "quantity": "1",
+      "supplyRate": "16500",
+      "labourRate": "3500",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 24,
+      "code": "DEMO-REF-R24",
+      "familyCode": "DEMO-REF-GI-B-PIPE",
+      "familyName": "GI B-Class pipe",
+      "categoryCode": "DEMO-PIP",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "GI B-Class pipe 100 mm",
+      "scope": "Supply, installation, testing & commissioning of G.I. ‘B’ Class pipeline as per relevant IS specifications, complete with necessary fittings such as sockets, bends, elbows, tees, plugs, nipples, flanges, reducers, etc., including cutting, welding, jointing, painting, and all accessories required for proper completion of work.",
+      "specifications": {
+        "class": "B",
+        "material": "GI",
+        "diameter": 100
+      },
+      "brands": [
+        "ASIAN",
+        "APOLLO"
+      ],
+      "unitCode": "DEMO-MTR",
+      "quantity": "24",
+      "supplyRate": "1045",
+      "labourRate": "320",
+      "miscellaneousRate": "25",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 25,
+      "code": "DEMO-REF-R25",
+      "familyCode": "DEMO-REF-GI-B-PIPE",
+      "familyName": "GI B-Class pipe",
+      "categoryCode": "DEMO-PIP",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "GI B-Class pipe 80 mm",
+      "scope": "Supply, installation, testing & commissioning of G.I. ‘B’ Class pipeline as per relevant IS specifications, complete with necessary fittings such as sockets, bends, elbows, tees, plugs, nipples, flanges, reducers, etc., including cutting, welding, jointing, painting, and all accessories required for proper completion of work.",
+      "specifications": {
+        "class": "B",
+        "material": "GI",
+        "diameter": 80
+      },
+      "brands": [
+        "ASIAN",
+        "APOLLO"
+      ],
+      "unitCode": "DEMO-MTR",
+      "quantity": "6",
+      "supplyRate": "740",
+      "labourRate": "240",
+      "miscellaneousRate": "25",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 26,
+      "code": "DEMO-REF-R26",
+      "familyCode": "DEMO-REF-GI-B-PIPE",
+      "familyName": "GI B-Class pipe",
+      "categoryCode": "DEMO-PIP",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "GI B-Class pipe 65 mm",
+      "scope": "Supply, installation, testing & commissioning of G.I. ‘B’ Class pipeline as per relevant IS specifications, complete with necessary fittings such as sockets, bends, elbows, tees, plugs, nipples, flanges, reducers, etc., including cutting, welding, jointing, painting, and all accessories required for proper completion of work.",
+      "specifications": {
+        "class": "B",
+        "material": "GI",
+        "diameter": 65
+      },
+      "brands": [
+        "ASIAN",
+        "APOLLO"
+      ],
+      "unitCode": "DEMO-MTR",
+      "quantity": "20",
+      "supplyRate": "580",
+      "labourRate": "200",
+      "miscellaneousRate": "25",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 27,
+      "code": "DEMO-REF-R27",
+      "familyCode": "DEMO-REF-GI-B-PIPE",
+      "familyName": "GI B-Class pipe",
+      "categoryCode": "DEMO-PIP",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "GI B-Class pipe 50 mm",
+      "scope": "Supply, installation, testing & commissioning of G.I. ‘B’ Class pipeline as per relevant IS specifications, complete with necessary fittings such as sockets, bends, elbows, tees, plugs, nipples, flanges, reducers, etc., including cutting, welding, jointing, painting, and all accessories required for proper completion of work.",
+      "specifications": {
+        "class": "B",
+        "material": "GI",
+        "diameter": 50
+      },
+      "brands": [
+        "ASIAN",
+        "APOLLO"
+      ],
+      "unitCode": "DEMO-MTR",
+      "quantity": "20",
+      "supplyRate": "450",
+      "labourRate": "160",
+      "miscellaneousRate": "25",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 28,
+      "code": "DEMO-REF-R28",
+      "familyCode": "DEMO-REF-GI-B-PIPE",
+      "familyName": "GI B-Class pipe",
+      "categoryCode": "DEMO-PIP",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "GI B-Class pipe 25 mm",
+      "scope": "Supply, installation, testing & commissioning of G.I. ‘B’ Class pipeline as per relevant IS specifications, complete with necessary fittings such as sockets, bends, elbows, tees, plugs, nipples, flanges, reducers, etc., including cutting, welding, jointing, painting, and all accessories required for proper completion of work.",
+      "specifications": {
+        "class": "B",
+        "material": "GI",
+        "diameter": 25
+      },
+      "brands": [
+        "ASIAN",
+        "APOLLO"
+      ],
+      "unitCode": "DEMO-MTR",
+      "quantity": "70",
+      "supplyRate": "225",
+      "labourRate": "80",
+      "miscellaneousRate": "40",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 30,
+      "code": "DEMO-REF-R30",
+      "familyCode": "DEMO-REF-FOOT-VALVE",
+      "familyName": "Foot valve with SS screen",
+      "categoryCode": "DEMO-VALVE",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "Foot valve with SS screen 100 mm",
+      "scope": "Supply, installation, testing & commissioning of Foot Valve with SS screen, complete with flanged ends and accessories.",
+      "specifications": {
+        "diameter": 100
+      },
+      "brands": [
+        "KARTAR"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "4840",
+      "labourRate": "400",
+      "miscellaneousRate": "400",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 31,
+      "code": "DEMO-REF-R31",
+      "familyCode": "DEMO-REF-BALL-VALVE",
+      "familyName": "Ball valve",
+      "categoryCode": "DEMO-VALVE",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "Ball valve",
+      "scope": "Supply, installation, testing & commissioning of Ball Valve",
+      "specifications": {},
+      "brands": [],
+      "unitCode": "DEMO-NOS",
+      "quantity": "2",
+      "supplyRate": "360",
+      "labourRate": "50",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 32,
+      "code": "DEMO-REF-R32",
+      "familyCode": "DEMO-REF-AIR-VALVE",
+      "familyName": "Air release valve",
+      "categoryCode": "DEMO-VALVE",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "Air release valve",
+      "scope": "Supply, installation, testing & commissioning of Air Release Valve (25 mm dia) on top of each riser.",
+      "specifications": {
+        "diameter": 25
+      },
+      "brands": [],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "650",
+      "labourRate": "50",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 34,
+      "code": "DEMO-REF-R34",
+      "familyCode": "DEMO-REF-BUTTERFLY",
+      "familyName": "Butterfly valve",
+      "categoryCode": "DEMO-VALVE",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "Butterfly valve 100 mm",
+      "scope": "Supply, Installation, Testing and Commissioning of heavy-duty, lever-operated Butterfly Valve, designed for reliable flow control. The valve shall be supplied complete with matching flanges, high-tensile nuts, bolts, and washers, ensuring a leak-proof joint",
+      "specifications": {
+        "diameter": 100
+      },
+      "brands": [
+        "KARTAR"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "3",
+      "supplyRate": "1880",
+      "labourRate": "400",
+      "miscellaneousRate": "400",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 35,
+      "code": "DEMO-REF-R35",
+      "familyCode": "DEMO-REF-BUTTERFLY",
+      "familyName": "Butterfly valve",
+      "categoryCode": "DEMO-VALVE",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "Butterfly valve 80 mm",
+      "scope": "Supply, Installation, Testing and Commissioning of heavy-duty, lever-operated Butterfly Valve, designed for reliable flow control. The valve shall be supplied complete with matching flanges, high-tensile nuts, bolts, and washers, ensuring a leak-proof joint",
+      "specifications": {
+        "diameter": 80
+      },
+      "brands": [
+        "KARTAR"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "1530",
+      "labourRate": "300",
+      "miscellaneousRate": "300",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 36,
+      "code": "DEMO-REF-R36",
+      "familyCode": "DEMO-REF-BUTTERFLY",
+      "familyName": "Butterfly valve",
+      "categoryCode": "DEMO-VALVE",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "Butterfly valve 65 mm",
+      "scope": "Supply, Installation, Testing and Commissioning of heavy-duty, lever-operated Butterfly Valve, designed for reliable flow control. The valve shall be supplied complete with matching flanges, high-tensile nuts, bolts, and washers, ensuring a leak-proof joint",
+      "specifications": {
+        "diameter": 65
+      },
+      "brands": [
+        "KARTAR"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "1350",
+      "labourRate": "250",
+      "miscellaneousRate": "250",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 38,
+      "code": "DEMO-REF-R38",
+      "familyCode": "DEMO-REF-NR-VALVE",
+      "familyName": "CIDF non-return valve",
+      "categoryCode": "DEMO-VALVE",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "CIDF non-return valve 100 mm",
+      "scope": "Supply, Installation, Testing and Commissioning of Cast Iron Double Flanged (CIDF) Non-Return Valve with robust metal internals and rubber sealing, conforming to relevant IS specifications. The valve shall be supplied complete with matching flanges, nuts, bolts, and washers, ensuring a tight and durable connection",
+      "specifications": {
+        "diameter": 100
+      },
+      "brands": [
+        "KARTAR"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "2",
+      "supplyRate": "2095",
+      "labourRate": "400",
+      "miscellaneousRate": "400",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 39,
+      "code": "DEMO-REF-R39",
+      "familyCode": "DEMO-REF-NR-VALVE",
+      "familyName": "CIDF non-return valve",
+      "categoryCode": "DEMO-VALVE",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "CIDF non-return valve 80 mm",
+      "scope": "Supply, Installation, Testing and Commissioning of Cast Iron Double Flanged (CIDF) Non-Return Valve with robust metal internals and rubber sealing, conforming to relevant IS specifications. The valve shall be supplied complete with matching flanges, nuts, bolts, and washers, ensuring a tight and durable connection",
+      "specifications": {
+        "diameter": 80
+      },
+      "brands": [
+        "KARTAR"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "1495",
+      "labourRate": "300",
+      "miscellaneousRate": "300",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 40,
+      "code": "DEMO-REF-R40",
+      "familyCode": "DEMO-REF-MS-SUPPORT",
+      "familyName": "MS structural pipe support",
+      "categoryCode": "DEMO-PIP",
+      "section": "PUMP HOUSE EQUIPMENT",
+      "name": "MS structural pipe support",
+      "scope": "Supply, Installation, Testing and Commissioning of Mild Steel (MS) structural members for supporting the fire hydrant pipeline network, fabricated and fixed from wall to wall as per site requirements. The supports shall be complete with necessary anchor fasteners, clamps, and allied fittings.",
+      "specifications": {
+        "material": "Mild steel"
+      },
+      "brands": [],
+      "unitCode": "DEMO-KG",
+      "quantity": "80",
+      "supplyRate": "75",
+      "labourRate": "30",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 43,
+      "code": "DEMO-REF-R43",
+      "familyCode": "DEMO-REF-HYDRANT-VALVE",
+      "familyName": "SS single-headed hydrant valve",
+      "categoryCode": "DEMO-HYDRANT",
+      "section": "HYDRANT",
+      "name": "SS single-headed hydrant valve",
+      "scope": "Supply, Installation, Testing and Commissioning of Stainless Steel  Hydrant Valve conforming to IS: 5290, Type-A, single-headed, with 63 mm dia. female outlet, oblique pattern. The valve shall be provided complete with flange inlet, matching nuts, bolts, washers, and blank cap with chain. The assembly shall be ISI-marked, pressure-tested,complete in all respects",
+      "specifications": {
+        "diameter": 63,
+        "standard": "IS 5290 Type A"
+      },
+      "brands": [
+        "EAGLE"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "2050",
+      "labourRate": "250",
+      "miscellaneousRate": "40",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 44,
+      "code": "DEMO-REF-R44",
+      "familyCode": "DEMO-REF-HOSE-BOX",
+      "familyName": "Single-door MS hose box",
+      "categoryCode": "DEMO-HYDRANT",
+      "section": "HYDRANT",
+      "name": "Single-door MS hose box",
+      "scope": "Supply, Installation, Testing and Commissioning of Mild Steel (MS) Hose Box, single-door type, suitable for accommodating 1 length of 15 mtr. fire hose pipe along with 1 branch pipes. The unit shall be provided with a front operable glass door and a separate glass provision for key access. The box shall be duly powder-coated/painted in Fire Red colour, complete with locking arrangement and all necessary hardware, installed complete in all respects.",
+      "specifications": {
+        "material": "Mild steel",
+        "configuration": "One 15 m hose and branch pipe"
+      },
+      "brands": [],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "850",
+      "labourRate": "50",
+      "miscellaneousRate": "40",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 45,
+      "code": "DEMO-REF-R45",
+      "familyCode": "DEMO-REF-RRL-HOSE",
+      "familyName": "RRL fire hose with SS couplings",
+      "categoryCode": "DEMO-HYDRANT",
+      "section": "HYDRANT",
+      "name": "RRL fire hose with SS couplings",
+      "scope": "Supply, Installation, Testing and Commissioning of 63 mm dia. x 15 m RRL Hosepipe as per IS: 636, complete with SS male & female instantaneous couplings, ISI-marked, pressure-tested, and ready for use, complete in all respects.",
+      "specifications": {
+        "diameter": 63,
+        "length": 15,
+        "standard": "IS 636"
+      },
+      "brands": [
+        "EAGLE"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "1900",
+      "labourRate": "50",
+      "miscellaneousRate": "40",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 46,
+      "code": "DEMO-REF-R46",
+      "familyCode": "DEMO-REF-BRANCH-PIPE",
+      "familyName": "SS branch pipe and nozzle",
+      "categoryCode": "DEMO-HYDRANT",
+      "section": "HYDRANT",
+      "name": "SS branch pipe and nozzle",
+      "scope": "Supply, Installation, Testing and Commissioning of Stainless Steel (SS) Branch pipe with Nozzle, conforming to IS: 903, complete, pressure-tested, and ready for firefighting use, installed complete in all respects.",
+      "specifications": {
+        "material": "Stainless steel",
+        "standard": "IS 903"
+      },
+      "brands": [
+        "EAGLE"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "580",
+      "labourRate": "50",
+      "miscellaneousRate": "40",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 47,
+      "code": "DEMO-REF-R47",
+      "familyCode": "DEMO-REF-HOSE-REEL",
+      "familyName": "Hose reel drum",
+      "categoryCode": "DEMO-HYDRANT",
+      "section": "HYDRANT",
+      "name": "Hose reel drum",
+      "scope": "Supply, Installation, Testing and Commissioning of Hose Reel Drum with 30 m hose, shut-off nozzle, and all accessories, conforming to relevant standards, pressure-tested and ready for firefighting use, installed complete in all respects.",
+      "specifications": {
+        "length": 30
+      },
+      "brands": [
+        "EAGLE"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "2950",
+      "labourRate": "350",
+      "miscellaneousRate": "40",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 48,
+      "code": "DEMO-REF-R48",
+      "familyCode": "DEMO-REF-BRIGADE-INLET",
+      "familyName": "Two-way fire brigade inlet",
+      "categoryCode": "DEMO-HYDRANT",
+      "section": "HYDRANT",
+      "name": "Two-way fire brigade inlet",
+      "scope": "Supply, Installation, Testing and Commissioning of 2-way Fire Brigade Inlet with CI body and GM couplings, pressure-tested, durable, and ready for firefighting use, installed complete in all respects.",
+      "specifications": {
+        "configuration": "Two-way",
+        "material": "CI body, GM couplings"
+      },
+      "brands": [
+        "EAGLE"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "1700",
+      "labourRate": "400",
+      "miscellaneousRate": "50",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 49,
+      "code": "DEMO-REF-R49",
+      "familyCode": "DEMO-REF-PRESSURE-GAUGE",
+      "familyName": "Pressure gauge with isolation valve",
+      "categoryCode": "DEMO-PUMP",
+      "section": "HYDRANT",
+      "name": "Pressure gauge with isolation valve",
+      "scope": "Supply, Installation, Testing and Commissioning of 100 mm dial size pressure gauge, complete with isolation valve and all necessary accessories, tested and ready for use, installed complete in all respects.",
+      "specifications": {
+        "dial_size": 100
+      },
+      "brands": [
+        "MAHAVIR"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "550",
+      "labourRate": "50",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 50,
+      "code": "DEMO-REF-R50",
+      "familyCode": "DEMO-REF-PRESSURE-SWITCH",
+      "familyName": "Automatic pump pressure switch",
+      "categoryCode": "DEMO-PUMP",
+      "section": "HYDRANT",
+      "name": "Automatic pump pressure switch",
+      "scope": "Supply, Installation, Testing and Commissioning of Pressure Switches for automatic operation of pumps, complete with necessary accessories, tested and fully operational, installed complete in all respects.",
+      "specifications": {},
+      "brands": [
+        "DENFOOS"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "3",
+      "supplyRate": "900",
+      "labourRate": "50",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 51,
+      "code": "DEMO-REF-R51",
+      "familyCode": "DEMO-REF-ABC-EXT",
+      "familyName": "ABC fire extinguisher",
+      "categoryCode": "DEMO-EXT",
+      "section": "HYDRANT",
+      "name": "ABC fire extinguisher",
+      "scope": "Supply, Installation, Testing and Commissioning of 6 kg ABC type fire extinguisher, ISI-marked, fully charged, with all necessary accessories and mounting brackets, ready for use, installed complete in all respects.",
+      "specifications": {
+        "capacity": 6,
+        "agent": "ABC dry powder"
+      },
+      "brands": [
+        "SAFEPRO"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "3",
+      "supplyRate": "690",
+      "labourRate": "50",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 52,
+      "code": "DEMO-REF-R52",
+      "familyCode": "DEMO-REF-CO2-EXT",
+      "familyName": "CO2 fire extinguisher",
+      "categoryCode": "DEMO-EXT",
+      "section": "HYDRANT",
+      "name": "CO2 fire extinguisher",
+      "scope": "Supply, Installation, Testing and Commissioning of 4.5 kg CO₂ type fire extinguisher, ISI-marked, fully charged, with all necessary accessories and mounting brackets, ready for use, installed complete in all respects.",
+      "specifications": {
+        "capacity": 4.5,
+        "agent": "CO2"
+      },
+      "brands": [
+        "SAFEPRO"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "2900",
+      "labourRate": "50",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 53,
+      "code": "DEMO-REF-R53",
+      "familyCode": "DEMO-REF-SPRINKLER",
+      "familyName": "Fire sprinkler",
+      "categoryCode": "DEMO-SPRINKLER",
+      "section": "HYDRANT",
+      "name": "Fire sprinkler",
+      "scope": "SITC of SPRINKLER",
+      "specifications": {},
+      "brands": [],
+      "unitCode": "DEMO-NOS",
+      "quantity": "50",
+      "supplyRate": "80",
+      "labourRate": "50",
+      "miscellaneousRate": "50",
+      "demoAssumptions": []
+    },
+    {
+      "sourceRow": 56,
+      "code": "DEMO-REF-R56",
+      "familyCode": "DEMO-REF-ALARM-PANEL",
+      "familyName": "Fire alarm panel",
+      "categoryCode": "DEMO-DET",
+      "section": "FIRE APPLIANCES",
+      "name": "Fire alarm panel",
+      "scope": "Supply, Installation, Testing and Commissioning of Fire Alarm Panel, complete with all necessary accessories, wiring, and connections, fully tested and operational, installed complete in all respects.",
+      "specifications": {},
+      "brands": [
+        "AGNI"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "1800",
+      "labourRate": "500",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 57,
+      "code": "DEMO-REF-R57",
+      "familyCode": "DEMO-REF-MCP",
+      "familyName": "Manual call point",
+      "categoryCode": "DEMO-DET",
+      "section": "FIRE APPLIANCES",
+      "name": "Manual call point",
+      "scope": "Supply, Installation, Testing and Commissioning of Manual Call Point (MCP) for fire alarm systems, conforming to relevant IS standards, complete with mounting accessories and wiring, fully tested and operational, installed complete in all respects.",
+      "specifications": {},
+      "brands": [
+        "AGNI"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "2",
+      "supplyRate": "130",
+      "labourRate": "100",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 58,
+      "code": "DEMO-REF-R58",
+      "familyCode": "DEMO-REF-HOOTER",
+      "familyName": "Fire alarm hooter",
+      "categoryCode": "DEMO-DET",
+      "section": "FIRE APPLIANCES",
+      "name": "Fire alarm hooter",
+      "scope": "Supply, Installation, Testing and Commissioning of Hooter for fire alarm system, complete with mounting accessories and wiring, fully tested and operational, installed complete in all respects.",
+      "specifications": {},
+      "brands": [
+        "AGNI"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "2",
+      "supplyRate": "160",
+      "labourRate": "100",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 59,
+      "code": "DEMO-REF-R59",
+      "familyCode": "DEMO-REF-SMOKE",
+      "familyName": "Smoke detector",
+      "categoryCode": "DEMO-DET",
+      "section": "FIRE APPLIANCES",
+      "name": "Smoke detector",
+      "scope": "Supply, Installation, Testing and Commissioning of Smoke Detectors  suitable for fire alarm and safety systems, complete with necessary accessories, terminations, and supports, fully tested and operational, installed complete in all respects.",
+      "specifications": {},
+      "brands": [
+        "AGNI"
+      ],
+      "unitCode": "DEMO-NOS",
+      "quantity": "10",
+      "supplyRate": "250",
+      "labourRate": "100",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 60,
+      "code": "DEMO-REF-R60",
+      "familyCode": "DEMO-REF-ALARM-CABLE",
+      "familyName": "Two-core fire alarm cable",
+      "categoryCode": "DEMO-DET",
+      "section": "FIRE APPLIANCES",
+      "name": "Two-core fire alarm cable",
+      "scope": "Supply, Installation, Testing and Commissioning of 2 Core 1 Sq. mm stranded flexible cable, suitable for fire alarm and safety systems, complete with necessary accessories, terminations, and supports, fully tested and operational, installed complete in all respects.",
+      "specifications": {
+        "cores": 2,
+        "cross_section": 1
+      },
+      "brands": [],
+      "unitCode": "DEMO-MTR",
+      "quantity": "150",
+      "supplyRate": "58",
+      "labourRate": "35",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 61,
+      "code": "DEMO-REF-R61",
+      "familyCode": "DEMO-REF-SIGNAGE",
+      "familyName": "Fire safety signage lot",
+      "categoryCode": "DEMO-SERVICE",
+      "section": "FIRE APPLIANCES",
+      "name": "Fire safety signage lot",
+      "scope": "Supply, Installation, Testing and Commissioning of fire safety Signages, made of durable material with clear markings, complete with mounting accessories, fully visible, compliant with relevant standards, and installed complete in all respects.",
+      "specifications": {},
+      "brands": [],
+      "unitCode": "DEMO-LOT",
+      "quantity": "1",
+      "supplyRate": "6500",
+      "labourRate": "500",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 63,
+      "code": "DEMO-REF-R63",
+      "familyCode": "DEMO-REF-CORE-CUT",
+      "familyName": "Core cutting",
+      "categoryCode": "DEMO-SERVICE",
+      "section": "FIRE APPLIANCES",
+      "name": "Core cutting 125 mm",
+      "scope": "Supply, Installation, Testing and Commissioning of core cutting works, including drilling or cutting of walls, floors, or slabs as required for installation of fire safety equipment, complete with debris removal, safety measures, and restoration, executed in all respects.(if Required )",
+      "specifications": {
+        "diameter": 125
+      },
+      "brands": [],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "0",
+      "labourRate": "580",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank supply explicitly set to zero for this labour-only demo.",
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 64,
+      "code": "DEMO-REF-R64",
+      "familyCode": "DEMO-REF-CORE-CUT",
+      "familyName": "Core cutting",
+      "categoryCode": "DEMO-SERVICE",
+      "section": "FIRE APPLIANCES",
+      "name": "Core cutting 100 mm",
+      "scope": "Supply, Installation, Testing and Commissioning of core cutting works, including drilling or cutting of walls, floors, or slabs as required for installation of fire safety equipment, complete with debris removal, safety measures, and restoration, executed in all respects.(if Required )",
+      "specifications": {
+        "diameter": 100
+      },
+      "brands": [],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "0",
+      "labourRate": "460",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank supply explicitly set to zero for this labour-only demo.",
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    },
+    {
+      "sourceRow": 65,
+      "code": "DEMO-REF-R65",
+      "familyCode": "DEMO-REF-CORE-CUT",
+      "familyName": "Core cutting",
+      "categoryCode": "DEMO-SERVICE",
+      "section": "FIRE APPLIANCES",
+      "name": "Core cutting 65 mm",
+      "scope": "Supply, Installation, Testing and Commissioning of core cutting works, including drilling or cutting of walls, floors, or slabs as required for installation of fire safety equipment, complete with debris removal, safety measures, and restoration, executed in all respects.(if Required )",
+      "specifications": {
+        "diameter": 65
+      },
+      "brands": [],
+      "unitCode": "DEMO-NOS",
+      "quantity": "1",
+      "supplyRate": "0",
+      "labourRate": "380",
+      "miscellaneousRate": "0",
+      "demoAssumptions": [
+        "Blank supply explicitly set to zero for this labour-only demo.",
+        "Blank miscellaneous explicitly set to zero for demo testing."
+      ]
+    }
+  ]
+}

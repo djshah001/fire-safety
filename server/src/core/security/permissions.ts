@@ -1,4 +1,5 @@
 export const permissionCatalog = {
+  'system.access.all': 'Administrator access to all company records and operations.',
   'identity.users.read': 'View employee accounts and their access status.',
   'identity.users.manage': 'Create, enable, disable, and reset employee accounts.',
   'identity.roles.manage': 'Configure roles and employee role assignments.',
@@ -36,6 +37,7 @@ export const permissionCatalog = {
   'procurement.vendor.manage': 'Create, update, and deactivate vendor master records.',
   'procurement.item.read': 'View item, category, and unit master records.',
   'procurement.item.manage': 'Create, update, and deactivate item, category, and unit master records.',
+  'procurement.item_rate.manage': 'Create immutable effective supply, labour, and miscellaneous rate versions for catalogue variants.',
   'procurement.sourcing.read': 'View explicitly assigned requisitions, RFQs, vendor offers, and comparisons.',
   'procurement.requisition.create': 'Create immutable project demand from approved BOQ lines in assigned project scope.',
   'procurement.rfq.manage': 'Create RFQs for explicitly assigned requisitions.',
@@ -46,13 +48,7 @@ export const permissionCatalog = {
 
 export type PermissionCode = keyof typeof permissionCatalog;
 
-export const systemAdminPermissionCodes: PermissionCode[] = [
-  'identity.users.read',
-  'identity.users.manage',
-  'identity.roles.manage',
-  'configuration.manage',
-  'jobs.read',
-];
+export const systemAdminPermissionCodes = Object.keys(permissionCatalog) as PermissionCode[];
 
 export const salesExecutivePermissionCodes: PermissionCode[] = [
   'crm.service_category.read',
@@ -64,7 +60,6 @@ export const salesExecutivePermissionCodes: PermissionCode[] = [
   'crm.opportunity.read',
   'engineering.design.customer_decision',
   'engineering.quotation.read',
-  'engineering.quotation.write',
   'engineering.quotation.issue',
   'engineering.quotation.customer_decision',
   'project.read',
@@ -96,6 +91,9 @@ export const designHeadPermissionCodes: PermissionCode[] = [
 ];
 
 export const purchaseExecutivePermissionCodes: PermissionCode[] = [
+  'engineering.quotation.read',
+  'engineering.quotation.write',
+  'engineering.quotation.issue',
   'procurement.vendor.read',
   'procurement.vendor.manage',
   'procurement.item.read',
@@ -110,10 +108,15 @@ export const purchaseExecutivePermissionCodes: PermissionCode[] = [
 ];
 
 export const purchaseManagerPermissionCodes: PermissionCode[] = [
+  'engineering.quotation.read',
+  'engineering.quotation.write',
+  'engineering.quotation.approve',
+  'engineering.quotation.issue',
   'procurement.vendor.read',
   'procurement.vendor.manage',
   'procurement.item.read',
   'procurement.item.manage',
+  'procurement.item_rate.manage',
   'engineering.estimate.read',
   'engineering.boq.template.manage',
   'engineering.boq.purchase_review',

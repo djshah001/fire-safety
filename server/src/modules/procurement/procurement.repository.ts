@@ -1,3 +1,4 @@
+import { administratorScope } from '../../core/security/administrator.js';
 import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
 import {
@@ -24,7 +25,7 @@ import {
 
 const access = (companyId: string, userId: string) => and(
   eq(procurementRequisitions.companyId, companyId),
-  or(eq(procurementRequisitions.buyerUserId, userId), eq(procurementRequisitions.purchaseManagerUserId, userId)),
+  or(administratorScope(companyId, userId), eq(procurementRequisitions.buyerUserId, userId), eq(procurementRequisitions.purchaseManagerUserId, userId)),
 );
 
 const listFields = {
@@ -103,21 +104,21 @@ export function createProcurementRepository(executor: DatabaseExecutor) {
         boqRevisionNumber: boqRevisions.revisionNumber,
         boqTitle: boqRevisions.title,
       }).from(projects)
-        .innerJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId), eq(projectMembers.companyId, companyId)))
+        .leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId), eq(projectMembers.companyId, companyId)))
         .innerJoin(projectDesignBaselines, and(eq(projectDesignBaselines.projectId, projects.id), eq(projectDesignBaselines.companyId, companyId)))
         .innerJoin(boqRevisions, and(
           eq(boqRevisions.designJobId, projectDesignBaselines.designJobId),
           eq(boqRevisions.designRevisionId, projectDesignBaselines.designRevisionId),
           eq(boqRevisions.status, 'approved'),
         ))
-        .where(and(eq(projects.companyId, companyId), eq(projects.status, 'started')))
+        .where(and(eq(projects.companyId, companyId), eq(projects.status, 'started'), or(eq(projectMembers.userId, userId), administratorScope(companyId, userId))))
         .orderBy(asc(projects.projectNumber), desc(boqRevisions.revisionNumber));
     },
 
     async findProjectBoq(companyId: string, userId: string, projectId: string, boqRevisionId: string) {
       const [row] = await executor.select({ projectId: projects.id, projectNumber: projects.projectNumber, projectTitle: projects.title, boqRevisionId: boqRevisions.id })
         .from(projects)
-        .innerJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId), eq(projectMembers.companyId, companyId)))
+        .leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.userId, userId), eq(projectMembers.companyId, companyId)))
         .innerJoin(projectDesignBaselines, and(eq(projectDesignBaselines.projectId, projects.id), eq(projectDesignBaselines.companyId, companyId)))
         .innerJoin(boqRevisions, and(
           eq(boqRevisions.id, boqRevisionId),
@@ -125,7 +126,7 @@ export function createProcurementRepository(executor: DatabaseExecutor) {
           eq(boqRevisions.designRevisionId, projectDesignBaselines.designRevisionId),
           eq(boqRevisions.status, 'approved'),
         ))
-        .where(and(eq(projects.companyId, companyId), eq(projects.id, projectId), eq(projects.status, 'started'))).limit(1);
+        .where(and(eq(projects.companyId, companyId), eq(projects.id, projectId), eq(projects.status, 'started'), or(eq(projectMembers.userId, userId), administratorScope(companyId, userId)))).limit(1);
       return row;
     },
 
@@ -275,8 +276,8 @@ export function createProcurementRepository(executor: DatabaseExecutor) {
     async listSubstitutionReviewQueue(companyId: string, userId: string, input: { search?: string; status?: 'pending' | 'approved' | 'rejected'; limit: number; offset: number; sort: 'requisitionNumber' | 'vendorName' | 'itemName' | 'status' | 'updatedAt'; direction: 'asc' | 'desc' }) {
       const filters = [
         eq(procurementRequisitions.companyId, companyId),
-        eq(designJobs.designHeadUserId, userId),
-        eq(projectMembers.userId, userId),
+        or(eq(designJobs.designHeadUserId, userId), administratorScope(companyId, userId))!,
+        or(eq(projectMembers.userId, userId), administratorScope(companyId, userId))!,
         ne(vendorOfferLines.equivalence, 'equivalent'),
       ];
       if (input.status === 'pending') filters.push(isNull(procurementSubstitutionReviews.id));
@@ -314,7 +315,7 @@ export function createProcurementRepository(executor: DatabaseExecutor) {
       const [items, totals] = await Promise.all([
         executor.select(fields).from(procurementRequisitions)
           .innerJoin(projects, eq(projects.id, procurementRequisitions.projectId))
-          .innerJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.companyId, companyId)))
+          .leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.companyId, companyId), eq(projectMembers.userId, userId)))
           .innerJoin(projectDesignBaselines, eq(projectDesignBaselines.projectId, projects.id))
           .innerJoin(designJobs, eq(designJobs.id, projectDesignBaselines.designJobId))
           .innerJoin(procurementRfqs, eq(procurementRfqs.requisitionId, procurementRequisitions.id))
@@ -326,7 +327,7 @@ export function createProcurementRepository(executor: DatabaseExecutor) {
           .where(where).orderBy(order, asc(vendorOfferLines.id)).limit(input.limit).offset(input.offset),
         executor.select({ value: count() }).from(procurementRequisitions)
           .innerJoin(projects, eq(projects.id, procurementRequisitions.projectId))
-          .innerJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.companyId, companyId)))
+          .leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.companyId, companyId), eq(projectMembers.userId, userId)))
           .innerJoin(projectDesignBaselines, eq(projectDesignBaselines.projectId, projects.id))
           .innerJoin(designJobs, eq(designJobs.id, projectDesignBaselines.designJobId))
           .innerJoin(procurementRfqs, eq(procurementRfqs.requisitionId, procurementRequisitions.id))
@@ -355,10 +356,10 @@ export function createProcurementRepository(executor: DatabaseExecutor) {
         purchaseManagerUserId: procurementRequisitions.purchaseManagerUserId,
       }).from(procurementRequisitions)
         .innerJoin(projects, eq(projects.id, procurementRequisitions.projectId))
-        .innerJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.companyId, companyId), eq(projectMembers.userId, userId)))
+        .leftJoin(projectMembers, and(eq(projectMembers.projectId, projects.id), eq(projectMembers.companyId, companyId), eq(projectMembers.userId, userId)))
         .innerJoin(projectDesignBaselines, eq(projectDesignBaselines.projectId, projects.id))
-        .innerJoin(designJobs, and(eq(designJobs.id, projectDesignBaselines.designJobId), eq(designJobs.designHeadUserId, userId)))
-        .where(and(eq(procurementRequisitions.companyId, companyId), eq(procurementRequisitions.id, requisitionId))).limit(1);
+        .innerJoin(designJobs, and(eq(designJobs.id, projectDesignBaselines.designJobId), or(eq(designJobs.designHeadUserId, userId), administratorScope(companyId, userId))!))
+        .where(and(eq(procurementRequisitions.companyId, companyId), eq(procurementRequisitions.id, requisitionId), or(eq(projectMembers.userId, userId), administratorScope(companyId, userId)))).limit(1);
       return row;
     },
 

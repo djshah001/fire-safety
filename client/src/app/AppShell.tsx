@@ -92,6 +92,7 @@ const pageTitles: Record<string, string> = {
   "/masters/boq-templates": "BOQ templates",
   "/masters/vendors": "Vendors",
   "/masters/items": "Items",
+  "/masters/item-families": "Item families",
   "/masters/brands": "Brands & makes",
   "/masters/item-categories": "Item categories",
   "/masters/units": "Units",
@@ -367,6 +368,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
   const masters: NavItem[] = [
     { to: "/masters/vendors", label: "Vendors", icon: Truck, visible: user.permissions.includes("procurement.vendor.read") },
     { to: "/masters/items", label: "Items", icon: Boxes, visible: user.permissions.includes("procurement.item.read") },
+    { to: "/masters/item-families", label: "Item families", icon: Boxes, visible: user.permissions.includes("procurement.item.read") },
     { to: "/masters/brands", label: "Brands & makes", icon: Factory, visible: user.permissions.includes("procurement.item.read") },
     { to: "/masters/item-categories", label: "Item categories", icon: Tags, visible: user.permissions.includes("procurement.item.read") },
     { to: "/masters/units", label: "Units", icon: Ruler, visible: user.permissions.includes("procurement.item.read") },

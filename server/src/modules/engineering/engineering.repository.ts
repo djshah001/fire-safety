@@ -1,3 +1,4 @@
+import { administratorScope } from '../../core/security/administrator.js';
 import { and, asc, count, desc, eq, exists, ilike, max, or, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
 import {
@@ -21,6 +22,7 @@ export type DesignJobAccess = { companyId: string; userId: string };
 
 function accessCondition(executor: DatabaseExecutor, access: DesignJobAccess) {
   return or(
+    administratorScope(access.companyId, access.userId),
     eq(designJobs.designerUserId, access.userId),
     eq(designJobs.designHeadUserId, access.userId),
     exists(executor.select({ value: sql`1` }).from(leadMembers).where(and(
@@ -264,7 +266,7 @@ export function createEngineeringRepository(executor: DatabaseExecutor) {
       }).where(and(
         eq(designJobs.companyId, companyId),
         eq(designJobs.id, jobId),
-        eq(designJobs.designerUserId, designerUserId),
+        or(eq(designJobs.designerUserId, designerUserId), administratorScope(companyId, designerUserId)),
         eq(designJobs.rowVersion, expectedVersion),
         sql`${designJobs.designerCompletedAt} is null`,
         sql`${designJobs.designDueAt} is not null`,

@@ -1,17 +1,18 @@
+import { administratorScope } from '../../core/security/administrator.js';
 import { and, asc, count, desc, eq, exists, ilike, inArray, max, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
 import {
   boqLines,
   boqRevisions,
-  brands,
   customers,
+  companies,
   designJobs,
   documentCounters,
+  estimateCostLines,
   leads,
   leadMembers,
   opportunities,
-  itemBrands,
   opportunityMembers,
   quotationCustomerDecisions,
   quotationIssueDocuments,
@@ -31,6 +32,8 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
       }).from(quotationRevisions).groupBy(quotationRevisions.quotationId).as('latest_quotation_numbers');
       const latest = alias(quotationRevisions, 'latest_quotation_revision');
       const accessFilter = or(
+        administratorScope(access.companyId, access.userId),
+        exists(executor.select({ value: sql`1` }).from(boqRevisions).where(and(eq(boqRevisions.designJobId, designJobs.id), eq(boqRevisions.companyId, access.companyId), or(eq(boqRevisions.costingUserId, access.userId), eq(boqRevisions.purchaseHeadUserId, access.userId))))),
         eq(designJobs.designerUserId, access.userId),
         eq(designJobs.designHeadUserId, access.userId),
         exists(executor.select({ value: sql`1` }).from(leadMembers).where(and(
@@ -96,7 +99,9 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
         leadStage: leads.stage,
         customerId: customers.id,
         customerName: customers.displayName,
+        companyName: companies.name,
       }).from(designJobs)
+        .innerJoin(companies, eq(companies.id, designJobs.companyId))
         .innerJoin(opportunities, eq(opportunities.id, designJobs.opportunityId))
         .innerJoin(leads, eq(leads.id, designJobs.leadId))
         .innerJoin(customers, eq(customers.id, opportunities.customerId))
@@ -131,18 +136,40 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
       )).orderBy(asc(boqLines.lineNumber));
     },
 
-    listBrandOptionsForBoqLines(companyId: string, boqLineIds: string[]) {
+    listApprovedBoqCostLines(companyId: string, boqRevisionId: string) {
+      return executor.select({
+        boqLineId: boqLines.id, lineNumber: boqLines.lineNumber, section: boqLines.section,
+        itemCodeSnapshot: boqLines.itemCodeSnapshot, itemNameSnapshot: boqLines.itemNameSnapshot,
+        specificationSnapshot: boqLines.specificationSnapshot, unitSymbolSnapshot: boqLines.unitSymbolSnapshot,
+        quantity: boqLines.quantity, supplyRate: estimateCostLines.supplyRate, labourRate: estimateCostLines.labourRate,
+        miscellaneousRate: estimateCostLines.miscellaneousRate, markupPercent: estimateCostLines.markupPercent,
+        markupAmount: estimateCostLines.markupAmount, quotedUnitRate: estimateCostLines.quotedUnitRate,
+        lineTotal: estimateCostLines.lineTotal, costOptionId: estimateCostLines.id,
+        offeringId: estimateCostLines.offeringId, brandId: estimateCostLines.brandIdSnapshot,
+        brandName: estimateCostLines.brandNameSnapshot, manufacturerModel: estimateCostLines.manufacturerModelSnapshot,
+        manufacturerSku: estimateCostLines.manufacturerSkuSnapshot,
+        isPreferred: estimateCostLines.isPreferredOfferingSnapshot,
+      }).from(boqLines).innerJoin(estimateCostLines, and(
+        eq(estimateCostLines.boqLineId, boqLines.id), eq(estimateCostLines.boqRevisionId, boqRevisionId),
+      )).where(and(eq(boqLines.companyId, companyId), eq(boqLines.boqRevisionId, boqRevisionId)))
+        .orderBy(asc(boqLines.lineNumber));
+    },
+
+    listCostOptionsForBoqLines(companyId: string, boqLineIds: string[]) {
       if (boqLineIds.length === 0) return Promise.resolve([]);
       return executor.select({
-        boqLineId: boqLines.id,
-        brandId: brands.id,
-        code: brands.code,
-        name: brands.name,
-      }).from(boqLines)
-        .innerJoin(itemBrands, and(eq(itemBrands.itemId, boqLines.itemId), eq(itemBrands.companyId, companyId)))
-        .innerJoin(brands, and(eq(brands.id, itemBrands.brandId), eq(brands.companyId, companyId), eq(brands.status, 'active')))
-        .where(and(eq(boqLines.companyId, companyId), inArray(boqLines.id, boqLineIds)))
-        .orderBy(asc(brands.name));
+        id: estimateCostLines.id, boqLineId: estimateCostLines.boqLineId,
+        offeringId: estimateCostLines.offeringId, brandId: estimateCostLines.brandIdSnapshot,
+        brandName: estimateCostLines.brandNameSnapshot, manufacturerModel: estimateCostLines.manufacturerModelSnapshot,
+        manufacturerSku: estimateCostLines.manufacturerSkuSnapshot,
+        isPreferred: estimateCostLines.isPreferredOfferingSnapshot,
+        supplyRate: estimateCostLines.supplyRate, labourRate: estimateCostLines.labourRate,
+        miscellaneousRate: estimateCostLines.miscellaneousRate, markupPercent: estimateCostLines.markupPercent,
+        markupAmount: estimateCostLines.markupAmount, quotedUnitRate: estimateCostLines.quotedUnitRate,
+        lineTotal: estimateCostLines.lineTotal,
+      }).from(estimateCostLines)
+        .where(and(eq(estimateCostLines.companyId, companyId), inArray(estimateCostLines.boqLineId, boqLineIds)))
+        .orderBy(desc(estimateCostLines.isPreferredOfferingSnapshot), asc(estimateCostLines.brandNameSnapshot), asc(estimateCostLines.manufacturerModelSnapshot));
     },
 
     async allocateQuotationNumber(companyId: string, now: Date) {
@@ -215,6 +242,14 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
       const [row] = await executor.update(quotationLines).set({ ...values, rowVersion: sql`${quotationLines.rowVersion} + 1`, updatedAt: new Date() }).where(and(
         eq(quotationLines.companyId, companyId), eq(quotationLines.quotationRevisionId, revisionId),
         eq(quotationLines.id, lineId), eq(quotationLines.rowVersion, expectedVersion),
+      )).returning();
+      return row;
+    },
+
+    async updateAcceptedPaymentPlan(companyId: string, revisionId: string, expectedVersion: number, values: Pick<typeof quotationRevisions.$inferInsert, 'cashPercentage' | 'nonCashPercentage'>) {
+      const [row] = await executor.update(quotationRevisions).set({ ...values, rowVersion: sql`${quotationRevisions.rowVersion} + 1`, updatedAt: new Date() }).where(and(
+        eq(quotationRevisions.companyId, companyId), eq(quotationRevisions.id, revisionId),
+        eq(quotationRevisions.rowVersion, expectedVersion), eq(quotationRevisions.status, 'accepted'),
       )).returning();
       return row;
     },

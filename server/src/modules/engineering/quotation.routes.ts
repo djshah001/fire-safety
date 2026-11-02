@@ -10,6 +10,7 @@ import {
   paymentPlanSchema,
   quotationCustomerDecisionSchema,
   quotationDocumentParamsSchema,
+  quotationDocumentDetailsSchema,
   quotationHeaderSchema,
   quotationLineParamsSchema,
   quotationLineSchema,
@@ -26,6 +27,18 @@ export function createQuotationRouter() {
 
   router.get('/quotations', requirePermission('engineering.quotation.read'), async (request, response) => {
     sendData(request, response, await quotationService.listQueue(getPrincipal(request), quotationListQuerySchema.parse(request.query)));
+  });
+
+  router.patch('/design-jobs/:jobId/quotations/:revisionId/document-details', requireCsrf, requirePermission('engineering.quotation.write'), async (request, response) => {
+    const { jobId, revisionId } = quotationParamsSchema.parse(request.params);
+    sendData(request, response, { revision: await quotationService.updateDocumentDetails(getPrincipal(request), jobId, revisionId, quotationDocumentDetailsSchema.parse(request.body), getRequestId(request)) });
+  });
+
+  router.get('/design-jobs/:jobId/quotations/:revisionId/preview.pdf', requirePermission('engineering.quotation.read'), async (request, response) => {
+    const { jobId, revisionId } = quotationParamsSchema.parse(request.params);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'self'; sandbox");
+    response.type('application/pdf').send(await quotationService.previewPdf(getPrincipal(request), jobId, revisionId));
   });
 
   router.get('/design-jobs/:jobId/quotations', requirePermission('engineering.quotation.read'), async (request, response) => {
@@ -81,13 +94,23 @@ export function createQuotationRouter() {
     sendData(request, response, { revision });
   });
 
+  router.get('/design-jobs/:jobId/quotations/:revisionId/export.xlsx', requirePermission('engineering.quotation.read'), async (request, response) => {
+    const { jobId, revisionId } = quotationParamsSchema.parse(request.params);
+    const result = await quotationService.exportExcel(getPrincipal(request), jobId, revisionId);
+    response.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    response.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(result.filename)}"`);
+    response.send(result.buffer);
+  });
+
   router.get('/design-jobs/:jobId/quotations/:revisionId/documents/:documentId', requirePermission('engineering.quotation.read'), async (request, response, next) => {
     const { jobId, revisionId, documentId } = quotationDocumentParamsSchema.parse(request.params);
     const document = await quotationService.getDocument(getPrincipal(request), jobId, revisionId, documentId);
     response.setHeader('Content-Type', 'application/pdf');
     response.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(document.originalName)}"`);
     response.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'self'; sandbox");
-    response.sendFile(resolvePrivateFile(document.storageName), (error) => { if (error && !response.headersSent) next(error); });
+    // The configured private upload root may be inside a dot-directory. The
+    // service has already authorized this exact generated storage name.
+    response.sendFile(resolvePrivateFile(document.storageName), { dotfiles: 'allow' }, (error) => { if (error && !response.headersSent) next(error); });
   });
 
   return router;

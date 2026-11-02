@@ -1,3 +1,4 @@
+import { isAdministrator } from '../../core/security/administrator.js';
 import { Decimal } from 'decimal.js';
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../core/errors/appError.js';
 import { db, type Database } from '../../infrastructure/database/db.js';
@@ -6,19 +7,13 @@ import { hasPermission } from '../auth/auth.middleware.js';
 import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
 import { createCrmRepository } from '../crm/crm.repository.js';
 import { createNotificationRepository } from '../notifications/notification.repository.js';
+import { createMastersRepository } from '../masters/masters.repository.js';
+import { calculateQuotedLine } from './boq.calculation.js';
 import { createBoqRepository } from './boq.repository.js';
 import { createEngineeringRepository } from './engineering.repository.js';
-
-type EstimateInput = {
-  boqLineId?: string;
-  category: 'material' | 'labour' | 'transport' | 'subcontracting' | 'overhead' | 'wastage' | 'margin';
-  description: string;
-  quantity: string;
-  unitRate: string;
-  notes?: string;
-  expectedBoqVersion: number;
-  expectedLineVersion?: number;
-};
+import { createQuotationRepository } from './quotation.repository.js';
+import { renderDemoQuotationPdf } from './quotation.pdf.js';
+import { quotationDefaults } from './quotation.defaults.js';
 
 type TemplateInput = {
   sectorId: string;
@@ -66,6 +61,19 @@ function publicEstimateLine(line: Awaited<ReturnType<ReturnType<typeof createBoq
     quantity: line.quantity,
     unitRate: line.unitRate,
     lineTotal: line.lineTotal,
+    rateVersionId: line.rateVersionId,
+    offeringId: line.offeringId,
+    brandId: line.brandIdSnapshot,
+    brandName: line.brandNameSnapshot,
+    manufacturerModel: line.manufacturerModelSnapshot,
+    manufacturerSku: line.manufacturerSkuSnapshot,
+    isPreferredOffering: line.isPreferredOfferingSnapshot,
+    supplyRate: line.supplyRate,
+    labourRate: line.labourRate,
+    miscellaneousRate: line.miscellaneousRate,
+    markupPercent: line.markupPercent,
+    markupAmount: line.markupAmount,
+    quotedUnitRate: line.quotedUnitRate,
     notes: line.notes,
     rowVersion: line.rowVersion,
     createdAt: line.createdAt,
@@ -73,10 +81,13 @@ function publicEstimateLine(line: Awaited<ReturnType<ReturnType<typeof createBoq
   };
 }
 
-function estimateTotals(lines: Array<{ category: string; lineTotal: string }>) {
+function estimateTotals(lines: Array<{ category: string; lineTotal: string; isPreferredOffering?: boolean | null }>) {
   const byCategory: Record<string, string> = {};
   let total = new Decimal(0);
   for (const line of lines) {
+    // Brand offerings are alternatives. Only the catalogue-preferred option contributes
+    // to the summary; adding every alternative would overstate the BOQ value.
+    if (line.isPreferredOffering === false) continue;
     const amount = new Decimal(line.lineTotal);
     byCategory[line.category] = new Decimal(byCategory[line.category] ?? 0).plus(amount).toFixed(2);
     total = total.plus(amount);
@@ -86,6 +97,32 @@ function estimateTotals(lines: Array<{ category: string; lineTotal: string }>) {
 
 export class BoqService {
   constructor(private readonly database: Database = db) {}
+
+  async exportPdf(principal: AuthenticatedPrincipal, jobId: string, boqId: string) {
+    const workspace = await this.getWorkspace(principal, jobId);
+    const boq = workspace.boqs.find((entry) => entry.id === boqId);
+    if (!boq) throw new NotFoundError('BOQ revision not found.');
+    const context = await createQuotationRepository(this.database).findContext(principal.companyId, jobId);
+    if (!context) throw new NotFoundError('BOQ customer not found.');
+    const estimates = 'estimateLines' in boq ? boq.estimateLines ?? [] : [];
+    const selected = boq.technicalLines.map((entry) => ({ entry, cost: estimates.find((option) => option.boqLineId === entry.id && option.isPreferredOffering) }));
+    const showPrices = boq.canViewEstimate && selected.length > 0 && selected.every(({ cost }) => cost?.quotedUnitRate !== null && cost?.quotedUnitRate !== undefined);
+    const lines = selected.map(({ entry, cost }) => ({ ...entry,
+      brandName: cost ? `${cost.brandName ?? 'Unbranded'} ${cost.manufacturerModel ?? ''}` : entry.brand,
+      supplyRate: cost?.supplyRate ?? '0', labourRate: cost?.labourRate ?? '0', miscellaneousRate: cost?.miscellaneousRate ?? '0',
+      markupPercent: cost?.markupPercent ?? '0', markupAmount: cost?.markupAmount ?? '0', quotedUnitRate: cost?.quotedUnitRate ?? '0',
+      unitRate: cost?.quotedUnitRate ?? '0', discountAmount: '0', lineTotal: cost?.lineTotal ?? '0',
+    }));
+    const total = showPrices ? lines.reduce((sum, entry) => sum.plus(entry.lineTotal), new Decimal(0)).toFixed(2) : '0';
+    return renderDemoQuotationPdf({
+      documentTitle: showPrices ? 'BILL OF QUANTITIES - PREFERRED OPTIONS' : 'BILL OF QUANTITIES - TECHNICAL',
+      quotationNumber: `BOQ R${boq.revisionNumber}`, revisionNumber: boq.revisionNumber,
+      showPrices, preview: boq.status !== 'approved', details: { senderName: context.companyName },
+      customerName: context.customerName, title: boq.title, currency: boq.estimateCurrency,
+      ...quotationDefaults, subtotal: total, grandTotal: total, lineDiscountTotal: '0', additionalDiscount: '0',
+      taxLabel: null, taxAmount: '0', roundingAdjustment: '0', lines,
+    });
+  }
 
   private async job(principal: AuthenticatedPrincipal, jobId: string) {
     if (principal.mustChangePassword) throw new ForbiddenError('Change the temporary password before using this feature.');
@@ -108,7 +145,7 @@ export class BoqService {
   private async designer(principal: AuthenticatedPrincipal, jobId: string) {
     if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
-    if (!job.designerUserId || job.designerUserId !== principal.userId) {
+    if (!isAdministrator(principal) && (!job.designerUserId || job.designerUserId !== principal.userId)) {
       throw new ForbiddenError('Only the assigned design engineer can enter BOQ quantities.');
     }
     return job;
@@ -123,15 +160,15 @@ export class BoqService {
       const technicalLines = (await repository.listLines(principal.companyId, revision.id)).map(publicTechnicalLine);
       const assignedToCostWorkflow = [revision.costingUserId, revision.purchaseHeadUserId, revision.adminApproverUserId]
         .includes(principal.userId);
-      const canViewEstimate = mayViewCost && assignedToCostWorkflow;
+      const canViewEstimate = mayViewCost && (assignedToCostWorkflow || isAdministrator(principal));
       const base = {
         ...revision,
         technicalLines,
         reviews: await repository.listReviews(principal.companyId, revision.id),
-        canEditQuantity: revision.status === 'draft' && job.designerUserId === principal.userId,
-        canEditCosting: revision.status === 'costing' && revision.costingUserId === principal.userId && hasPermission(principal, 'engineering.estimate.write'),
-        canPurchaseReview: revision.status === 'purchase_review' && revision.purchaseHeadUserId === principal.userId && hasPermission(principal, 'engineering.boq.purchase_review'),
-        canFinalReview: revision.status === 'admin_review' && revision.adminApproverUserId === principal.userId && hasPermission(principal, 'engineering.boq.final_review'),
+        canEditQuantity: revision.status === 'draft' && (job.designerUserId === principal.userId || isAdministrator(principal)),
+        canEditCosting: revision.status === 'costing' && (revision.costingUserId === principal.userId || isAdministrator(principal)) && hasPermission(principal, 'engineering.estimate.write'),
+        canPurchaseReview: revision.status === 'purchase_review' && (revision.purchaseHeadUserId === principal.userId || isAdministrator(principal)) && hasPermission(principal, 'engineering.boq.purchase_review'),
+        canFinalReview: revision.status === 'admin_review' && (revision.adminApproverUserId === principal.userId || isAdministrator(principal)) && hasPermission(principal, 'engineering.boq.final_review'),
       };
       if (!canViewEstimate) return { ...base, canViewEstimate: false };
       const estimateLines = (await repository.listEstimateLines(principal.companyId, revision.id)).map(publicEstimateLine);
@@ -342,7 +379,13 @@ export class BoqService {
     const revision = await this.revision(principal, jobId, boqId);
     if (revision.status !== 'draft') throw new ConflictError('Technical quantities are frozen after submission.');
     const repository = createBoqRepository(this.database);
-    if (!await repository.findLine(principal.companyId, boqId, lineId)) throw new NotFoundError('BOQ line not found.');
+    const existingLine = await repository.findLine(principal.companyId, boqId, lineId);
+    if (!existingLine) throw new NotFoundError('BOQ line not found.');
+    const unit = await createMastersRepository(this.database).findUnit(principal.companyId, existingLine.unitId);
+    if (!unit) throw new ConflictError('The BOQ line unit is no longer available.');
+    if (!unit.allowFractional && !new Decimal(input.quantity).isInteger()) {
+      throw validationError(`${unit.name} quantities must be whole numbers.`);
+    }
     return this.database.transaction(async (transaction) => {
       const tx = createBoqRepository(transaction);
       if (!await tx.bumpRevision(principal.companyId, boqId, input.expectedBoqVersion, 'draft')) {
@@ -369,91 +412,53 @@ export class BoqService {
   private async costingRevision(principal: AuthenticatedPrincipal, jobId: string, boqId: string) {
     if (!hasPermission(principal, 'engineering.estimate.write')) throw new ForbiddenError();
     const revision = await this.revision(principal, jobId, boqId);
-    if (revision.costingUserId !== principal.userId) {
+    if (!isAdministrator(principal) && revision.costingUserId !== principal.userId) {
       throw new ForbiddenError('Only the purchase employee assigned by the sector template can prepare costing.');
     }
     if (revision.status !== 'costing') throw new ConflictError('Costing can only be changed while the BOQ is in costing.');
     return revision;
   }
 
-  async saveEstimateLine(
+  async saveMarkup(
     principal: AuthenticatedPrincipal,
     jobId: string,
     boqId: string,
-    lineId: string | undefined,
-    input: EstimateInput,
+    lineId: string,
+    input: { markupPercent: string; expectedBoqVersion: number; expectedLineVersion: number },
     requestId: string,
   ) {
     await this.costingRevision(principal, jobId, boqId);
     const repository = createBoqRepository(this.database);
-    if (input.boqLineId && !await repository.findLine(principal.companyId, boqId, input.boqLineId)) {
-      throw validationError('The selected technical line does not belong to this BOQ revision.');
+    const current = await repository.findEstimateLine(principal.companyId, boqId, lineId);
+    if (!current || !current.rateVersionId || current.supplyRate === null || current.labourRate === null || current.miscellaneousRate === null) {
+      throw new ConflictError('This BOQ line has no fixed catalogue rate snapshot. Ask a rate master maintainer to configure pricing, then create a new costing revision.');
     }
-    const total = new Decimal(input.quantity).mul(input.unitRate).toDecimalPlaces(2).toFixed(2);
+    const calculation = calculateQuotedLine({
+      quantity: current.quantity, supplyRate: current.supplyRate, labourRate: current.labourRate,
+      miscellaneousRate: current.miscellaneousRate, markupPercent: input.markupPercent,
+    });
     return this.database.transaction(async (transaction) => {
       const tx = createBoqRepository(transaction);
       if (!await tx.bumpRevision(principal.companyId, boqId, input.expectedBoqVersion, 'costing')) {
         throw new ConflictError('The BOQ changed. Refresh and try again.');
       }
-      const values = {
-        boqLineId: input.boqLineId,
-        category: input.category,
-        description: input.description,
-        quantity: input.quantity,
-        unitRate: input.unitRate,
-        lineTotal: total,
-        notes: input.notes,
-      };
-      const line = lineId
-        ? await tx.updateEstimateLine(principal.companyId, boqId, lineId, input.expectedLineVersion!, values)
-        : await tx.createEstimateLine({
-          companyId: principal.companyId,
-          boqRevisionId: boqId,
-          lineNumber: await tx.nextEstimateLineNumber(principal.companyId, boqId),
-          ...values,
-        });
+      const line = await tx.updateEstimateLine(principal.companyId, boqId, lineId, input.expectedLineVersion, {
+        markupPercent: input.markupPercent, markupAmount: calculation.markupAmount,
+        quotedUnitRate: calculation.quotedUnitRate, unitRate: calculation.quotedUnitRate,
+        lineTotal: calculation.lineAmount,
+      });
       if (!line) throw new ConflictError('The estimate line changed. Refresh and try again.');
       await tx.addContributor(principal.companyId, boqId, principal.userId, 'costing');
       await createAuthRepository(transaction).appendAuditEvent({
         companyId: principal.companyId,
         actorUserId: principal.userId,
-        action: lineId ? 'engineering.estimate_line_updated' : 'engineering.estimate_line_created',
+        action: 'engineering.boq_markup_updated',
         targetType: 'estimate_cost_line',
         targetId: line.id,
         requestId,
-        metadata: { designJobId: jobId, boqRevisionId: boqId, category: input.category, lineTotal: total },
+        metadata: { designJobId: jobId, boqRevisionId: boqId, markupPercent: input.markupPercent, lineTotal: calculation.lineAmount },
       });
       return publicEstimateLine(line);
-    });
-  }
-
-  async deleteEstimateLine(
-    principal: AuthenticatedPrincipal,
-    jobId: string,
-    boqId: string,
-    lineId: string,
-    input: { expectedBoqVersion: number; expectedLineVersion: number },
-    requestId: string,
-  ) {
-    await this.costingRevision(principal, jobId, boqId);
-    return this.database.transaction(async (transaction) => {
-      const tx = createBoqRepository(transaction);
-      if (!await tx.bumpRevision(principal.companyId, boqId, input.expectedBoqVersion, 'costing')) {
-        throw new ConflictError('The BOQ changed. Refresh and try again.');
-      }
-      if (!await tx.deleteEstimateLine(principal.companyId, boqId, lineId, input.expectedLineVersion)) {
-        throw new ConflictError('The estimate line changed. Refresh and try again.');
-      }
-      await tx.addContributor(principal.companyId, boqId, principal.userId, 'costing');
-      await createAuthRepository(transaction).appendAuditEvent({
-        companyId: principal.companyId,
-        actorUserId: principal.userId,
-        action: 'engineering.estimate_line_deleted',
-        targetType: 'estimate_cost_line',
-        targetId: lineId,
-        requestId,
-        metadata: { designJobId: jobId, boqRevisionId: boqId },
-      });
     });
   }
 
@@ -472,12 +477,45 @@ export class BoqService {
     if (lines.some((line) => new Decimal(line.quantity).lte(0))) {
       throw validationError('Enter a quantity greater than zero for every template item before submitting to costing.');
     }
+    const costingDate = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const masters = createMastersRepository(this.database);
+    const rateSnapshots = await Promise.all(lines.map(async (line) => ({
+      line,
+      offerings: await masters.listEffectiveOfferingRates(principal.companyId, line.itemId, revision.estimateCurrency, costingDate),
+    })));
+    const missingRates = rateSnapshots.flatMap((entry) => {
+      if (entry.offerings.length === 0) return [`${entry.line.itemCodeSnapshot} (no active offering)`];
+      return entry.offerings.filter((option) => !option.rate).map((option) =>
+        `${entry.line.itemCodeSnapshot} (${option.brandName ?? 'Unbranded'} / ${option.offering.manufacturerModel})`);
+    });
+    if (missingRates.length > 0) {
+      throw validationError(`Configure an effective ${revision.estimateCurrency} catalogue rate for every BOQ item before starting costing. Missing: ${missingRates.join(', ')}.`);
+    }
     return this.database.transaction(async (transaction) => {
       const tx = createBoqRepository(transaction);
       const updated = await tx.transitionRevision(principal.companyId, boqId, expectedVersion, 'draft', {
         status: 'costing', submittedByUserId: principal.userId, submittedAt: new Date(),
+        costingDate, calculationVersion: 'catalogue-markup-v1', roundingVersion: 'half-up-line-2-v1',
       });
       if (!updated) throw new ConflictError('The BOQ changed or is no longer a draft.');
+      let costOptionNumber = 1;
+      for (const { line: technicalLine, offerings } of rateSnapshots) {
+        for (const option of offerings) {
+          if (!option.rate) throw new ConflictError('A validated catalogue rate became unavailable. Refresh and try again.');
+          await tx.createEstimateLine({
+            companyId: principal.companyId, boqRevisionId: boqId, boqLineId: technicalLine.id,
+            lineNumber: costOptionNumber++, category: 'material', description: technicalLine.itemNameSnapshot,
+            quantity: technicalLine.quantity, unitRate: '0', lineTotal: '0', rateVersionId: option.rate.id,
+            offeringId: option.offering.id, brandIdSnapshot: option.offering.brandId,
+            brandNameSnapshot: option.brandName, manufacturerModelSnapshot: option.offering.manufacturerModel,
+            manufacturerSkuSnapshot: option.offering.manufacturerSku,
+            isPreferredOfferingSnapshot: option.offering.isPreferred,
+            supplyRate: option.rate.supplyRate, labourRate: option.rate.labourRate, miscellaneousRate: option.rate.miscellaneousRate,
+            markupPercent: null, markupAmount: null, quotedUnitRate: null,
+            notes: option.rate.miscellaneousNote,
+          });
+        }
+      }
       await tx.addContributor(principal.companyId, boqId, principal.userId, 'quantity');
       if (revision.costingUserId) await createNotificationRepository(transaction).create({
         companyId: principal.companyId, recipientUserId: revision.costingUserId,
@@ -493,7 +531,7 @@ export class BoqService {
         targetType: 'boq_revision',
         targetId: boqId,
         requestId,
-        metadata: { designJobId: jobId, revisionNumber: revision.revisionNumber },
+        metadata: { designJobId: jobId, revisionNumber: revision.revisionNumber, costingDate, technicalLines: lines.length, costOptions: rateSnapshots.reduce((sum, entry) => sum + entry.offerings.length, 0), unpricedLines: 0 },
       });
       return updated;
     });
@@ -512,9 +550,10 @@ export class BoqService {
       repository.listLines(principal.companyId, boqId),
       repository.listEstimateLines(principal.companyId, boqId),
     ]);
-    const costedLineIds = new Set(estimates.map((line) => line.boqLineId).filter(Boolean));
-    if (technical.some((line) => !costedLineIds.has(line.id))) {
-      throw validationError('Add at least one linked cost line for every technical BOQ item before purchase review.');
+    const complete = (line: typeof estimates[number]) => line.rateVersionId && line.offeringId && line.markupPercent !== null && line.markupAmount !== null && line.quotedUnitRate !== null;
+    const costedLineIds = new Set(estimates.filter(complete).map((line) => line.boqLineId).filter(Boolean));
+    if (estimates.length === 0 || estimates.some((line) => !complete(line)) || technical.some((line) => !costedLineIds.has(line.id))) {
+      throw validationError('Every brand/model cost option needs an effective catalogue rate and a confirmed markup percentage before purchase review.');
     }
     return this.database.transaction(async (transaction) => {
       const tx = createBoqRepository(transaction);
@@ -552,11 +591,11 @@ export class BoqService {
   ) {
     if (!hasPermission(principal, 'engineering.boq.purchase_review')) throw new ForbiddenError();
     const revision = await this.revision(principal, jobId, boqId);
-    if (revision.purchaseHeadUserId !== principal.userId) {
+    if (!isAdministrator(principal) && revision.purchaseHeadUserId !== principal.userId) {
       throw new ForbiddenError('Only the purchase head assigned by the sector template can review this BOQ.');
     }
     const repository = createBoqRepository(this.database);
-    if (await repository.hasContributor(principal.companyId, boqId, principal.userId)) {
+    if (!isAdministrator(principal) && await repository.hasContributor(principal.companyId, boqId, principal.userId)) {
       throw new ForbiddenError('You cannot review a BOQ revision that you prepared.');
     }
     const target = input.decision === 'approved' ? 'admin_review' : 'returned';
@@ -588,7 +627,7 @@ export class BoqService {
         targetType: 'boq_revision',
         targetId: boqId,
         requestId,
-        metadata: { designJobId: jobId, reason: input.reason },
+        metadata: { administratorOverride: isAdministrator(principal), designJobId: jobId, reason: input.reason },
       });
       return updated;
     });
@@ -603,11 +642,11 @@ export class BoqService {
   ) {
     if (!hasPermission(principal, 'engineering.boq.final_review')) throw new ForbiddenError();
     const revision = await this.revision(principal, jobId, boqId);
-    if (revision.adminApproverUserId !== principal.userId) {
+    if (!isAdministrator(principal) && revision.adminApproverUserId !== principal.userId) {
       throw new ForbiddenError('Only the explicitly assigned administrative BOQ approver can perform final review.');
     }
     const repository = createBoqRepository(this.database);
-    if (await repository.hasContributor(principal.companyId, boqId, principal.userId)) {
+    if (!isAdministrator(principal) && await repository.hasContributor(principal.companyId, boqId, principal.userId)) {
       throw new ForbiddenError('You cannot give final approval to a BOQ revision that you prepared.');
     }
     const target = input.decision === 'approved' ? 'approved' : 'returned';
@@ -639,7 +678,7 @@ export class BoqService {
         targetType: 'boq_revision',
         targetId: boqId,
         requestId,
-        metadata: { designJobId: jobId, reason: input.reason },
+        metadata: { administratorOverride: isAdministrator(principal), designJobId: jobId, reason: input.reason },
       });
       return updated;
     });
@@ -654,10 +693,10 @@ export class BoqService {
   ) {
     if (!hasPermission(principal, 'engineering.design.review')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
-    if (job.designHeadUserId !== principal.userId) throw new ForbiddenError('Only the assigned design head can review this legacy BOQ.');
+    if (!isAdministrator(principal) && job.designHeadUserId !== principal.userId) throw new ForbiddenError('Only the assigned design head can review this legacy BOQ.');
     const revision = await this.revision(principal, jobId, boqId);
     if (revision.status !== 'submitted' || revision.templateId) throw new ConflictError('This is not a legacy BOQ awaiting review.');
-    if (revision.createdByUserId === principal.userId || revision.submittedByUserId === principal.userId) {
+    if (!isAdministrator(principal) && (revision.createdByUserId === principal.userId || revision.submittedByUserId === principal.userId)) {
       throw new ForbiddenError('You cannot review your own BOQ revision.');
     }
     const target = input.decision === 'approved' ? 'approved' : 'returned';
@@ -680,7 +719,7 @@ export class BoqService {
         targetType: 'boq_revision',
         targetId: boqId,
         requestId,
-        metadata: { designJobId: jobId, reason: input.reason },
+        metadata: { administratorOverride: isAdministrator(principal), designJobId: jobId, reason: input.reason },
       });
       return updated;
     });

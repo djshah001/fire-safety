@@ -30,7 +30,7 @@ async function cleanup() {
     'design_customer_decisions', 'design_review_actions', 'design_revision_files', 'survey_revision_files',
     'survey_revisions', 'design_package_revisions', 'design_jobs', 'opportunity_members', 'opportunities',
     'lead_members', 'leads', 'customer_members', 'customer_addresses', 'customer_contacts', 'sites', 'customers',
-    'vendor_contacts', 'vendors', 'item_brands', 'items', 'brands', 'item_categories', 'units', 'service_categories',
+    'vendor_contacts', 'vendors', 'item_rate_versions', 'item_brands', 'items', 'item_family_specifications', 'item_families', 'brands', 'item_categories', 'units', 'service_categories',
   ]) await pool.query(`delete from ${table}`);
   await pool.query("delete from document_counters where document_type in ('REQUISITION', 'RFQ')");
   await pool.query('delete from notifications');

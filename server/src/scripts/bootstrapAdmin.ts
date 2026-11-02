@@ -42,7 +42,7 @@ if (missing.length > 0) {
 }
 
 const roleDefinitions = [
-  ['system_admin', 'System administrator', 'Employee access and technical configuration only.'],
+  ['system_admin', 'System administrator', 'All company records and operations, including audited approval overrides.'],
   ['management', 'Management', 'Management role; permissions are configured after company review.'],
   ['sales_executive', 'Sales executive', 'Sales role; record scope is assigned explicitly.'],
   ['sales_manager', 'Sales manager', 'Sales review role; no approval policy is implied.'],

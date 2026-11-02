@@ -1,5 +1,11 @@
 # Fire Safety — Business and Engineering Rules
 
+Latest confirmed administrator clarification (2026-10-30): system administrators may perform every implemented role's operations across the company and may approve their own contributed work. Assignment/author restrictions apply to ordinary staff; administrator reviews record `administratorOverride` in audit metadata. Administrators may manage their own account/role assignments. Document history and workflow validation remain enforced. This supersedes older no-self-approval requirements for administrators only.
+
+## Superseding confirmed rules (2026-10-30)
+
+System administrators have all permissions and company-wide record access. Purchase prepares quotations and an independent permitted reviewer approves. Self-approval, company isolation and immutable submitted/issued commercial content remain enforced. Configure cash/non-cash percentages only after customer acceptance; the split totals exactly 100 and is audited without modifying issued documents. Quotation default terms are editable revision content based on BOQ.xlsx, including seven-day validity and 50/30/15/5 milestones. Text mentioning 18% GST does not automatically post tax.
+
 Version: 1.0 · 2026-10-08 · Applies to Darshan, Codex and future contributors
 
 ## 1. Read and work protocol
@@ -24,7 +30,7 @@ Before changing an existing repository, inspect its instructions, lockfiles, scr
 | B-06 | Approved design is sufficient to start an authorized project. Accepted quotation/customer PO is optional at this point. Never add an award gate without a subsequent user decision. |
 | B-07 | Execution, design, procurement, commercial award, invoicing and payment have independent state. A started project may be commercially unawarded. |
 | B-08 | Technical BOQ represents all physical scope. Full contract value and cash/non-cash plan are recorded separately. Cash receipts are recorded and reconciled; a payment method does not reduce technical quantities or conceal commercial value. |
-| B-09 | No self-approval, including delegated approval. Missing approver blocks the affected submission with a clear configuration issue. |
+| B-09 | No self-approval for ordinary employees, including delegated approval. System administrators may approve their own work with an audited override. Missing approver blocks the affected submission with a clear configuration issue. |
 | B-10 | Purchasing compares multiple offers. Default two valid vendors; an approved single-source exception is recorded. Lowest-price selection is optional; selection reason is required. |
 | B-11 | Approved design substitutions require engineering authorization. Purchasing cannot silently change item/unit/specification/quantity. |
 | B-12 | Receipts reference exact PO lines. Delivered, accepted, rejected, returned and outstanding quantities are distinct. Excess receipt is blocked absent explicit approved allowance. |
@@ -38,10 +44,11 @@ Before changing an existing repository, inspect its instructions, lockfiles, scr
 | B-20 | Assigning a design engineer starts a 2-calendar-day first-submission clock. The assigned engineer may record at most three reasoned extensions of exactly 3 calendar days each. The clock stops on the first submitted design revision; review/return cycles do not restart it. |
 | B-21 | In-app notifications are private to their explicit recipient. Assignment, deadline, design-review and BOQ handoff events are transactional and deduplicated; a hidden UI item never substitutes for recipient scoping in the API or worker. |
 | B-22 | Project start binds one opportunity to an immutable exact customer-approved design/evidence baseline, active site and explicit members. Creation is idempotent and unique per opportunity. An approved BOQ is optional; quotation/customer-PO acceptance is never a start gate and later commercial acceptance creates a separate baseline. |
-| B-23 | Customer masters record optional validated GSTIN/PAN and billing identity separately from contacts/sites. Items may have multiple active brands/makes. A draft quotation must select an active make assigned to each item; submission snapshots that make so later master changes cannot rewrite issued history. |
+| B-23 | Customer masters record optional validated GSTIN/PAN and billing identity separately from contacts/sites. Item category is inherited from its family. Every generic catalogue item has explicit brand/model offerings, including an offering row for an unbranded service. A draft quotation must select one fully costed offering approved with its BOQ; submission preserves brand/model/SKU and exact cost snapshot so later master changes cannot rewrite issued history. |
 | B-24 | Site survey evidence is optional and never blocks design. The assigned designer records numbered survey revisions with one or more private PDF/image files; finalization freezes the exact files and metadata, and corrections require another revision. |
-| B-25 | Design engineering owns BOQ quantities only. An explicitly assigned purchase employee owns costing; a different purchase head reviews it; a different explicitly assigned administrative approver gives final approval before quotation. System administration alone does not grant this commercial approval. |
+| B-25 | Design engineering owns BOQ quantities only. An explicitly assigned purchase employee owns costing; a different purchase head reviews it; a different explicitly assigned administrative approver gives final approval before quotation. System administrators can perform these stages through the explicitly confirmed administrator override. |
 | B-26 | A sourcing requisition is bound to approved BOQ-line snapshots on a started project and names a buyer plus a different purchase manager, both explicit project members. The buyer records complete invited-vendor offers; the manager records the supplier reason. Fewer than two submitted offers require a manager exception. Each deviation/unknown line needs an immutable approve/reject reason from the exact baseline design head, who must also be a project member and cannot approve an offer they recorded. Engineering sees technical fields only; rejected or pending lines block supplier selection. |
+| B-27 | Each brand/model offering owns immutable effective-dated versions for supply, labour/installation and miscellaneous cost. BOQ costing snapshots the latest eligible rate for every active offering on its costing date; missing offering rates block handoff and purchase confirms markup for every option. Alternative offerings are never summed: only the preferred option contributes to the BOQ summary until quotation selects an approved option. `markup = (supply + labour) × percentage / 100`, `quoted unit = supply + labour + markup + miscellaneous`, and `line amount = quantity × quoted unit`. Miscellaneous cost is never included in the markup base. |
 
 ## 3. Authorization and privacy
 

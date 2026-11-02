@@ -5,15 +5,13 @@ import { requireAuthentication, requireCsrf, requirePermission } from '../auth/a
 import { getPrincipal } from '../auth/auth.types.js';
 import {
   boqLineParamsSchema,
+  boqMarkupInputSchema,
   boqParamsSchema,
   boqQuantityInputSchema,
   boqReviewSchema,
   boqTemplateInputSchema,
   boqTemplateParamsSchema,
   createBoqSchema,
-  deleteLineSchema,
-  estimateLineInputSchema,
-  estimateLineUpdateSchema,
   itemCatalogQuerySchema,
   versionInputSchema,
 } from './boq.schemas.js';
@@ -23,6 +21,12 @@ import { designJobParamsSchema } from './engineering.schemas.js';
 export function createBoqRouter() {
   const router = Router();
   router.use(requireAuthentication);
+
+  router.get('/design-jobs/:jobId/boqs/:boqId/export.pdf', async (request, response) => {
+    const { jobId, boqId } = boqParamsSchema.parse(request.params);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.type('application/pdf').attachment(`BOQ-${boqId}.pdf`).send(await boqService.exportPdf(getPrincipal(request), jobId, boqId));
+  });
 
   router.get('/design-jobs/:jobId/boqs', async (request, response) => {
     const { jobId } = designJobParamsSchema.parse(request.params);
@@ -70,22 +74,10 @@ export function createBoqRouter() {
     sendData(request, response, { line });
   });
 
-  router.post('/design-jobs/:jobId/boqs/:boqId/estimate-lines', requireCsrf, requirePermission('engineering.estimate.write'), async (request, response) => {
-    const { jobId, boqId } = boqParamsSchema.parse(request.params);
-    const line = await boqService.saveEstimateLine(getPrincipal(request), jobId, boqId, undefined, estimateLineInputSchema.parse(request.body), getRequestId(request));
-    sendData(request, response, { line }, 201);
-  });
-
-  router.patch('/design-jobs/:jobId/boqs/:boqId/estimate-lines/:lineId', requireCsrf, requirePermission('engineering.estimate.write'), async (request, response) => {
+  router.patch('/design-jobs/:jobId/boqs/:boqId/cost-lines/:lineId/markup', requireCsrf, requirePermission('engineering.estimate.write'), async (request, response) => {
     const { jobId, boqId, lineId } = boqLineParamsSchema.parse(request.params);
-    const line = await boqService.saveEstimateLine(getPrincipal(request), jobId, boqId, lineId, estimateLineUpdateSchema.parse(request.body), getRequestId(request));
+    const line = await boqService.saveMarkup(getPrincipal(request), jobId, boqId, lineId, boqMarkupInputSchema.parse(request.body), getRequestId(request));
     sendData(request, response, { line });
-  });
-
-  router.delete('/design-jobs/:jobId/boqs/:boqId/estimate-lines/:lineId', requireCsrf, requirePermission('engineering.estimate.write'), async (request, response) => {
-    const { jobId, boqId, lineId } = boqLineParamsSchema.parse(request.params);
-    await boqService.deleteEstimateLine(getPrincipal(request), jobId, boqId, lineId, deleteLineSchema.parse(request.body), getRequestId(request));
-    response.status(204).end();
   });
 
   router.post('/design-jobs/:jobId/boqs/:boqId/submit', requireCsrf, requirePermission('engineering.design.write'), async (request, response) => {

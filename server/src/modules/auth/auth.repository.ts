@@ -1,5 +1,6 @@
 import { and, eq, gt, isNull, lte, or, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
+import { permissionCatalog } from '../../core/security/permissions.js';
 import {
   authSessions,
   passwordResetTokens,
@@ -54,6 +55,16 @@ export function createAuthRepository(executor: DatabaseExecutor) {
     },
 
     async listPermissionGrants(userId: string, companyId: string, now: Date) {
+      const [administrator] = await executor.select({ id: roles.id }).from(userRoleAssignments)
+        .innerJoin(roles, eq(roles.id, userRoleAssignments.roleId)).where(and(
+          eq(userRoleAssignments.userId, userId), eq(userRoleAssignments.companyId, companyId),
+          eq(roles.companyId, companyId), eq(roles.code, 'system_admin'), eq(roles.isSystem, true),
+          eq(roles.isActive, true), lte(userRoleAssignments.validFrom, now),
+          or(isNull(userRoleAssignments.validUntil), gt(userRoleAssignments.validUntil, now)),
+        )).limit(1);
+      if (administrator) return Object.keys(permissionCatalog).map((permissionCode) => ({
+        permissionCode, scopeKind: 'company' as const, scopeId: null, source: 'role' as const,
+      }));
       const roleGrants = await executor.select({
         permissionCode: rolePermissions.permissionCode,
         branchId: userRoleAssignments.branchId,

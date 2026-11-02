@@ -1,3 +1,4 @@
+import { isAdministrator } from '../../core/security/administrator.js';
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../core/errors/appError.js';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
@@ -563,7 +564,7 @@ export class CrmService {
   async getImportBatch(principal: AuthenticatedPrincipal, batchId: string) {
     const repository = createCrmRepository(this.database);
     const batch = await repository.findImportBatch(principal.companyId, batchId);
-    if (!batch || batch.createdByUserId !== principal.userId) throw new NotFoundError('Import batch not found.');
+    if (!batch || (!isAdministrator(principal) && batch.createdByUserId !== principal.userId)) throw new NotFoundError('Import batch not found.');
     this.assertImportPermission(principal, batch.type);
     const rows = await repository.listImportRows(principal.companyId, batchId);
     return {
@@ -598,7 +599,7 @@ export class CrmService {
     requestId: string,
   ) {
     const existing = await createCrmRepository(this.database).findImportBatch(principal.companyId, batchId);
-    if (!existing || existing.createdByUserId !== principal.userId) throw new NotFoundError('Import batch not found.');
+    if (!existing || (!isAdministrator(principal) && existing.createdByUserId !== principal.userId)) throw new NotFoundError('Import batch not found.');
     this.assertImportPermission(principal, existing.type);
     if (existing.status === 'completed' || existing.status === 'cancelled') {
       throw new ConflictError('This import batch is already closed.');

@@ -1,3 +1,4 @@
+import { isAdministrator } from '../../core/security/administrator.js';
 import { Decimal } from 'decimal.js';
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../core/errors/appError.js';
 import { db, type Database } from '../../infrastructure/database/db.js';
@@ -119,7 +120,7 @@ export class ProcurementService {
     const requisition = await this.requisition(principal, requisitionId);
     const repository = createProcurementRepository(this.database);
     const lines = await repository.listRequisitionLines(principal.companyId, requisitionId);
-    const activeVendors = requisition.buyerUserId === principal.userId ? await repository.listActiveVendors(principal.companyId) : [];
+    const activeVendors = (requisition.buyerUserId === principal.userId || isAdministrator(principal)) ? await repository.listActiveVendors(principal.companyId) : [];
     const rfq = await repository.findRfq(principal.companyId, requisitionId);
     if (!rfq) return { requisition, lines, activeVendors, rfq: null, rfqLines: [], invitedVendors: [], offers: [], comparison: null, selection: null, capabilities: this.capabilities(principal, requisition) };
     const [rfqLines, invitedVendors, offers, comparison] = await Promise.all([
@@ -138,16 +139,16 @@ export class ProcurementService {
 
   private capabilities(principal: AuthenticatedPrincipal, requisition: { buyerUserId: string; purchaseManagerUserId: string }) {
     return {
-      canManageRfq: requisition.buyerUserId === principal.userId && hasPermission(principal, 'procurement.rfq.manage'),
-      canRecordOffer: requisition.buyerUserId === principal.userId && hasPermission(principal, 'procurement.offer.manage'),
-      canSelect: requisition.purchaseManagerUserId === principal.userId && requisition.buyerUserId !== principal.userId && hasPermission(principal, 'procurement.comparison.select'),
+      canManageRfq: (requisition.buyerUserId === principal.userId || isAdministrator(principal)) && hasPermission(principal, 'procurement.rfq.manage'),
+      canRecordOffer: (requisition.buyerUserId === principal.userId || isAdministrator(principal)) && hasPermission(principal, 'procurement.offer.manage'),
+      canSelect: (requisition.purchaseManagerUserId === principal.userId || isAdministrator(principal)) && (requisition.buyerUserId !== principal.userId || isAdministrator(principal)) && hasPermission(principal, 'procurement.comparison.select'),
     };
   }
 
   async createRfq(principal: AuthenticatedPrincipal, requisitionId: string, input: { vendorIds: string[]; responseDueDate: string; commercialTerms: string; expectedVersion: number }, requestId: string) {
     this.assert(principal, 'procurement.rfq.manage');
     const requisition = await this.requisition(principal, requisitionId);
-    if (requisition.buyerUserId !== principal.userId) throw new ForbiddenError('Only the assigned buyer can create this RFQ.');
+    if (!isAdministrator(principal) && requisition.buyerUserId !== principal.userId) throw new ForbiddenError('Only the assigned buyer can create this RFQ.');
     if (requisition.status !== 'open') throw new ConflictError('This requisition is already in sourcing.');
     const repository = createProcurementRepository(this.database);
     const vendors = await repository.findActiveVendors(principal.companyId, input.vendorIds);
@@ -185,7 +186,7 @@ export class ProcurementService {
   async recordOffer(principal: AuthenticatedPrincipal, requisitionId: string, input: OfferInput, requestId: string) {
     this.assert(principal, 'procurement.offer.manage');
     const requisition = await this.requisition(principal, requisitionId);
-    if (requisition.buyerUserId !== principal.userId) throw new ForbiddenError('Only the assigned buyer can record vendor offers.');
+    if (!isAdministrator(principal) && requisition.buyerUserId !== principal.userId) throw new ForbiddenError('Only the assigned buyer can record vendor offers.');
     const repository = createProcurementRepository(this.database);
     const rfq = await repository.findRfq(principal.companyId, requisitionId);
     if (!rfq || rfq.status !== 'open' || requisition.status !== 'sourcing') throw new ConflictError('This RFQ is not open for offers.');
@@ -243,8 +244,8 @@ export class ProcurementService {
   async selectOffer(principal: AuthenticatedPrincipal, requisitionId: string, input: { offerId: string; selectionReason: string; singleSourceExceptionReason?: string; expectedVersion: number }, requestId: string) {
     this.assert(principal, 'procurement.comparison.select');
     const requisition = await this.requisition(principal, requisitionId);
-    if (requisition.purchaseManagerUserId !== principal.userId) throw new ForbiddenError('Only the assigned purchase manager can select the supplier.');
-    if (requisition.buyerUserId === principal.userId) throw new ForbiddenError('The buyer cannot approve their own sourcing work.');
+    if (!isAdministrator(principal) && requisition.purchaseManagerUserId !== principal.userId) throw new ForbiddenError('Only the assigned purchase manager can select the supplier.');
+    if (!isAdministrator(principal) && requisition.buyerUserId === principal.userId) throw new ForbiddenError('The buyer cannot approve their own sourcing work.');
     const repository = createProcurementRepository(this.database);
     const rfq = await repository.findRfq(principal.companyId, requisitionId);
     if (!rfq || rfq.status !== 'open' || requisition.status !== 'sourcing') throw new ConflictError('This comparison is not open for selection.');
@@ -286,7 +287,7 @@ export class ProcurementService {
       });
       await createAuthRepository(transaction).appendAuditEvent({
         companyId: principal.companyId, actorUserId: principal.userId, action: 'procurement.supplier_selected', targetType: 'procurement_selection', targetId: decision.id, requestId,
-        metadata: { requisitionId, rfqId: rfq.id, selectedOfferId: selected.id, vendorId: selected.vendorId, offerCount: offers.length, singleSourceException: offers.length < 2, nonLowestComparable: nonLowest, currency: selected.currency, total: selected.total },
+        metadata: { administratorOverride: isAdministrator(principal), requisitionId, rfqId: rfq.id, selectedOfferId: selected.id, vendorId: selected.vendorId, offerCount: offers.length, singleSourceException: offers.length < 2, nonLowestComparable: nonLowest, currency: selected.currency, total: selected.total },
       });
       return decision;
     });
@@ -317,7 +318,7 @@ export class ProcurementService {
     if (context.requisitionStatus !== 'sourcing') throw new ConflictError('This sourcing comparison is no longer open for technical review.');
     const line = await repository.findOfferLineForReview(principal.companyId, requisitionId, offerLineId);
     if (!line || line.equivalence === 'equivalent') throw new NotFoundError('Technical deviation line not found.');
-    if (line.recordedByUserId === principal.userId) throw new ForbiddenError('You cannot authorize a vendor offer that you recorded.');
+    if (!isAdministrator(principal) && line.recordedByUserId === principal.userId) throw new ForbiddenError('You cannot authorize a vendor offer that you recorded.');
 
     return this.database.transaction(async (transaction) => {
       const tx = createProcurementRepository(transaction);
@@ -341,7 +342,7 @@ export class ProcurementService {
       await createAuthRepository(transaction).appendAuditEvent({
         companyId: principal.companyId, actorUserId: principal.userId, action: `procurement.substitution_${input.decision}`,
         targetType: 'vendor_offer_line', targetId: offerLineId, requestId,
-        metadata: { requisitionId, decision: input.decision, reason: input.reason, vendorName: line.vendorName, itemName: line.itemName },
+        metadata: { administratorOverride: isAdministrator(principal), requisitionId, decision: input.decision, reason: input.reason, vendorName: line.vendorName, itemName: line.itemName },
       });
       return review;
     });

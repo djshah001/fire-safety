@@ -54,6 +54,7 @@ export function hasPermission(principal: AuthenticatedPrincipal, permissionCode:
 }
 
 export function hasExplicitCompanyGrant(principal: AuthenticatedPrincipal, permissionCode: string) {
+  if (hasCompanyPermission(principal, 'system.access.all')) return true;
   return principal.grants.some((grant) =>
     grant.permissionCode === permissionCode &&
     grant.scopeKind === 'company' &&

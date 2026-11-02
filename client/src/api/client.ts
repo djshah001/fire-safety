@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { ZodError } from 'zod';
 
 export type ApiEnvelope<T> = {
   data: T;
@@ -41,8 +42,15 @@ apiClient.interceptors.request.use((config) => {
 });
 
 export function getApiErrorMessage(error: unknown, fallback = 'The request could not be completed.') {
+  if (error instanceof ZodError) {
+    return error.issues.map((issue) => issue.message).join(' ');
+  }
   if (axios.isAxiosError<ApiErrorEnvelope>(error)) {
-    return error.response?.data.error.message ?? fallback;
+    const apiError = error.response?.data?.error;
+    if (apiError?.fieldErrors?.length) {
+      return apiError.fieldErrors.map((issue) => `${issue.path}: ${issue.message}`).join(' ');
+    }
+    return apiError?.message ?? fallback;
   }
   return fallback;
 }

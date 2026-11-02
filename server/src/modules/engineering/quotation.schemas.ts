@@ -20,6 +20,24 @@ export const quotationParamsSchema = z.object({ jobId: uuid, revisionId: uuid })
 export const quotationLineParamsSchema = quotationParamsSchema.extend({ lineId: uuid });
 export const quotationDocumentParamsSchema = quotationParamsSchema.extend({ documentId: uuid });
 
+export const quotationDocumentDetailsSchema = z.object({
+  expectedVersion: version,
+  details: z.object({
+    senderName: z.string().trim().max(160).optional(),
+    senderTagline: z.string().trim().max(200).optional(),
+    senderAddress: z.string().trim().max(600).optional(),
+    senderContact: z.string().trim().max(200).optional(),
+    senderGstin: z.string().trim().max(40).optional(),
+    recipientAddress: z.string().trim().max(600).optional(),
+    recipientGstin: z.string().trim().max(40).optional(),
+    recipientContact: z.string().trim().max(160).optional(),
+    recipientPhone: z.string().trim().max(40).optional(),
+    documentDate: z.iso.date().optional(),
+    bankDetails: z.string().trim().max(1000).optional(),
+    signatory: z.string().trim().max(160).optional(),
+  }).strict(),
+}).strict();
+
 export const createQuotationRevisionSchema = z.object({
   boqRevisionId: uuid,
   sourceRevisionId: uuid.optional(),
@@ -47,13 +65,11 @@ export const quotationHeaderSchema = z.object({
 });
 
 export const quotationLineSchema = z.object({
-  brandId: uuid,
-  unitRate: money,
-  discountAmount: money,
+  offeringId: uuid,
   notes: z.string().trim().max(1_000).optional(),
   expectedRevisionVersion: version,
   expectedLineVersion: version,
-});
+}).strict();
 
 export const paymentPlanSchema = z.object({
   cashPercentage: percentage,

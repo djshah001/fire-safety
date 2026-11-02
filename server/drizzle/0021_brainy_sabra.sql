@@ -1,0 +1,1 @@
+ALTER TABLE "quotation_revisions" ADD COLUMN "document_details" jsonb DEFAULT '{}'::jsonb NOT NULL;
