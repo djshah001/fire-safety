@@ -84,6 +84,15 @@ const inquiryItemSchema = z.object({
     .min(1, "Quantity is required")
     .refine((v) => !isNaN(Number(v)) && Number(v) > 0, "Must be a number > 0"),
   specification: z.string().optional(),
+  eligibleBrands: z
+    .array(
+      z.object({
+        id: z.string(),
+        name: z.string(),
+        code: z.string().optional(),
+      }),
+    )
+    .optional(),
 });
 
 const inquiryFormSchema = z.object({
@@ -217,6 +226,9 @@ export function PriceInquirySheet({
       unit: item.unitSymbol || "NOS",
       quantity: "1",
       specification: item.specification || "",
+      eligibleBrands: (item.brands ?? [])
+        .filter((b) => b.status === "active")
+        .map((b) => ({ id: b.id, name: b.name, code: b.code })),
     });
     setCatalogueComboboxOpen(false);
     toast.success(`Added "${item.name}" from catalogue`);
@@ -235,6 +247,7 @@ export function PriceInquirySheet({
           unit: i.unit.trim(),
           quantity: i.quantity.trim(),
           specification: i.specification?.trim() || undefined,
+          eligibleBrands: i.eligibleBrands,
         })),
         responseDueDate: data.responseDueDate || undefined,
       });
@@ -685,10 +698,16 @@ export function PriceInquirySheet({
 
                               {/* Bottom Tier: Full-width specification / brand / model */}
                               <div className="space-y-1">
-                                <Label className="text-[11px] text-muted-foreground font-normal">
-                                  Specification / Brand / Model Requirement
-                                  (optional)
-                                </Label>
+                                <div className="flex items-center justify-between">
+                                  <Label className="text-[11px] text-muted-foreground font-normal">
+                                    Specification / Requirement (optional)
+                                  </Label>
+                                  {(fields[index]?.eligibleBrands?.length ?? 0) > 0 && (
+                                    <span className="text-[10px] text-primary font-medium">
+                                      Approved makes: {fields[index]?.eligibleBrands?.map((b) => b.name).join(", ")}
+                                    </span>
+                                  )}
+                                </div>
                                 <Input
                                   placeholder="e.g. UL Listed, System Sensor or Apollo equivalent, with mounting base"
                                   {...form.register(

@@ -8,6 +8,14 @@ export type InquiryItem = {
   unit?: string;
   quantity?: string;
   specification?: string;
+  brandOffered?: string;
+  eligibleBrands?: Array<{
+    id: string;
+    name: string;
+    code?: string;
+    model?: string | null;
+    isPreferred?: boolean;
+  }>;
 };
 
 export type PriceInquiry = {

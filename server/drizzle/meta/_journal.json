@@ -169,6 +169,13 @@
       "when": 1793724916000,
       "tag": "0023_vendor_price_inquiry",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793812368588,
+      "tag": "0024_romantic_venom",
+      "breakpoints": true
     }
   ]
 }

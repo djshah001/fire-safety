@@ -7,6 +7,14 @@ export const inquiryItemSchema = z.object({
   unit: z.string().max(30).optional(),
   quantity: z.string().regex(/^\d+(\.\d+)?$/).optional(),
   specification: z.string().max(500).optional(),
+  brandOffered: z.string().max(160).optional(),
+  eligibleBrands: z.array(z.object({
+    id: z.string(),
+    name: z.string(),
+    code: z.string().optional(),
+    model: z.string().nullish(),
+    isPreferred: z.boolean().optional(),
+  })).optional(),
 });
 
 export const createPriceInquirySchema = z.object({

@@ -4,8 +4,11 @@ import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
 import {
   boqLines,
   boqRevisions,
+  brands,
   designJobs,
   documentCounters,
+  itemBrandOfferings,
+  itemBrands,
   procurementRequisitionLines,
   procurementRequisitions,
   procurementRfqs,
@@ -215,6 +218,58 @@ export function createProcurementRepository(executor: DatabaseExecutor) {
 
     listRfqLines(companyId: string, rfqId: string) {
       return executor.select().from(procurementRfqLines).where(and(eq(procurementRfqLines.companyId, companyId), eq(procurementRfqLines.rfqId, rfqId))).orderBy(asc(procurementRfqLines.lineNumber));
+    },
+    async listBrandsForItems(companyId: string, itemIds: string[]) {
+      if (itemIds.length === 0) return [];
+      const brandRows = await executor
+        .select({
+          itemId: itemBrands.itemId,
+          id: brands.id,
+          name: brands.name,
+          code: brands.code,
+        })
+        .from(itemBrands)
+        .innerJoin(brands, eq(brands.id, itemBrands.brandId))
+        .where(
+          and(
+            eq(brands.companyId, companyId),
+            inArray(itemBrands.itemId, itemIds),
+            eq(brands.status, 'active'),
+          ),
+        )
+        .orderBy(asc(brands.name));
+
+      const offerings = await executor
+        .select({
+          itemId: itemBrandOfferings.itemId,
+          brandId: itemBrandOfferings.brandId,
+          manufacturerModel: itemBrandOfferings.manufacturerModel,
+          manufacturerSku: itemBrandOfferings.manufacturerSku,
+          isPreferred: itemBrandOfferings.isPreferred,
+        })
+        .from(itemBrandOfferings)
+        .where(
+          and(
+            eq(itemBrandOfferings.companyId, companyId),
+            inArray(itemBrandOfferings.itemId, itemIds),
+            eq(itemBrandOfferings.status, 'active'),
+          ),
+        );
+
+      return brandRows.map((b) => {
+        const offering = offerings.find(
+          (o) => o.itemId === b.itemId && o.brandId === b.id,
+        );
+        return {
+          itemId: b.itemId,
+          id: b.id,
+          name: b.name,
+          code: b.code,
+          model: offering?.manufacturerModel ?? null,
+          sku: offering?.manufacturerSku ?? null,
+          isPreferred: offering?.isPreferred ?? false,
+        };
+      });
     },
     listRfqVendors(companyId: string, rfqId: string) {
       return executor.select({ id: vendors.id, code: vendors.code, name: vendors.displayName })

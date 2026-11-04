@@ -80,6 +80,8 @@ const RequisitionsPage = lazy(() => import('@/features/procurement/RequisitionsP
 const RequisitionWorkspacePage = lazy(() => import('@/features/procurement/RequisitionWorkspacePage').then((module) => ({ default: module.RequisitionWorkspacePage })));
 const SubstitutionReviewsPage = lazy(() => import('@/features/procurement/SubstitutionReviewsPage').then((module) => ({ default: module.SubstitutionReviewsPage })));
 const SubstitutionReviewWorkspacePage = lazy(() => import('@/features/procurement/SubstitutionReviewWorkspacePage').then((module) => ({ default: module.SubstitutionReviewWorkspacePage })));
+const PurchaseOrdersPage = lazy(() => import('@/features/procurement/PurchaseOrdersPage').then((module) => ({ default: module.PurchaseOrdersPage })));
+const PurchaseOrderWorkspacePage = lazy(() => import('@/features/procurement/PurchaseOrderWorkspacePage').then((module) => ({ default: module.PurchaseOrderWorkspacePage })));
 const PublicVendorRegistrationPage = lazy(() => import('@/features/masters/PublicVendorRegistrationPage').then((module) => ({ default: module.PublicVendorRegistrationPage })));
 const PublicPriceSubmissionPage = lazy(() => import('@/features/procurement/PublicPriceSubmissionPage').then((module) => ({ default: module.PublicPriceSubmissionPage })));
 
@@ -140,6 +142,8 @@ const router = createBrowserRouter([
           { path: "/projects/:projectId", element: <ProjectPage /> },
           { path: "/procurement/requisitions", element: <RequisitionsPage /> },
           { path: "/procurement/requisitions/:requisitionId", element: <RequisitionWorkspacePage /> },
+          { path: "/procurement/purchase-orders", element: <PurchaseOrdersPage /> },
+          { path: "/procurement/purchase-orders/:poId", element: <PurchaseOrderWorkspacePage /> },
           { path: "/procurement/substitution-reviews", element: <SubstitutionReviewsPage /> },
           { path: "/procurement/substitution-reviews/:requisitionId", element: <SubstitutionReviewWorkspacePage /> },
         ],

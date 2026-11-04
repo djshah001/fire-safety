@@ -3,14 +3,16 @@ import {
   ArrowLeft,
   CheckCircle2,
   CircleAlert,
+  FileCheck2,
   MessageSquare,
   Plus,
   Send,
 } from "lucide-react";
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getApiErrorMessage } from "@/api/client";
+import { createPurchaseOrderFromRequisition } from "@/api/purchaseOrders";
 import {
   createProcurementRfq,
   procurementWorkspaceQuery,
@@ -69,6 +71,7 @@ function amount(currency: string, value: string) {
 
 export function RequisitionWorkspacePage() {
   const { requisitionId } = useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const workspace = useQuery(procurementWorkspaceQuery(requisitionId));
   const [modal, setModal] = useState<Modal>();
@@ -78,10 +81,37 @@ export function RequisitionWorkspacePage() {
   const [equivalence, setEquivalence] = useState<Record<string, Equivalence>>(
     {},
   );
+  const [selectedBrands, setSelectedBrands] = useState<Record<string, string>>({});
+  const [customBrands, setCustomBrands] = useState<Record<string, string>>({});
   const [priceInquiryOpen, setPriceInquiryOpen] = useState(false);
   const [comparisonInquiryId, setComparisonInquiryId] = useState<string | null>(
     null,
   );
+  const [generatePoOpen, setGeneratePoOpen] = useState(false);
+
+  const createPoMutation = useMutation({
+    mutationFn: async (form: FormData) => {
+      if (!requisitionId) throw new Error("Requisition ID missing");
+      return createPurchaseOrderFromRequisition({
+        requisitionId,
+        title: String(form.get("title") || "").trim() || undefined,
+        paymentTerms: String(form.get("paymentTerms") || "").trim() || undefined,
+        deliveryTerms: String(form.get("deliveryTerms") || "").trim() || undefined,
+        deliveryLocation: String(form.get("deliveryLocation") || "").trim() || undefined,
+        deliveryDueDate: String(form.get("deliveryDueDate") || "").trim() || undefined,
+        billingAddress: String(form.get("billingAddress") || "").trim() || undefined,
+        shippingAddress: String(form.get("shippingAddress") || "").trim() || undefined,
+        notes: String(form.get("notes") || "").trim() || undefined,
+      });
+    },
+    onSuccess: (po) => {
+      toast.success(`Purchase Order ${po.poNumber} created.`);
+      navigate(`/procurement/purchase-orders/${po.id}`);
+    },
+    onError: (error) => {
+      toast.error(getApiErrorMessage(error));
+    },
+  });
   const invalidate = async () => {
     await Promise.all([
       queryClient.invalidateQueries({
@@ -99,6 +129,8 @@ export function RequisitionWorkspacePage() {
     setVendorId("");
     setOfferId("");
     setEquivalence({});
+    setSelectedBrands({});
+    setCustomBrands({});
   };
 
   const action = useMutation({
@@ -126,16 +158,23 @@ export function RequisitionWorkspacePage() {
           paymentTerms: String(form.get("paymentTerms")),
           warranty: String(form.get("warranty")),
           validUntil: String(form.get("validUntil") ?? "") || undefined,
-          lines: data.rfqLines.map((line) => ({
-            rfqLineId: line.id,
-            unitRate: String(form.get(`rate:${line.id}`)),
-            brandOffered: String(form.get(`brand:${line.id}`)),
-            specificationOffered: String(form.get(`specification:${line.id}`)),
-            equivalence: equivalence[line.id] ?? "unknown",
-            deviationNotes:
-              String(form.get(`deviation:${line.id}`) ?? "").trim() ||
-              undefined,
-          })),
+          lines: data.rfqLines.map((line) => {
+            const rawBrand = form.get(`brand:${line.id}`);
+            const brandOffered =
+              selectedBrands[line.id] === "__other__"
+                ? String(customBrands[line.id] || form.get(`customBrand:${line.id}`) || "").trim()
+                : String(rawBrand || selectedBrands[line.id] || (line.eligibleBrands?.[0]?.name ?? "")).trim();
+            return {
+              rfqLineId: line.id,
+              unitRate: String(form.get(`rate:${line.id}`)),
+              brandOffered,
+              specificationOffered: String(form.get(`specification:${line.id}`)),
+              equivalence: equivalence[line.id] ?? "unknown",
+              deviationNotes:
+                String(form.get(`deviation:${line.id}`) ?? "").trim() ||
+                undefined,
+            };
+          }),
         });
       if (!data.comparison) throw new Error("Comparison unavailable.");
       return selectVendorOffer(requisitionId, {
@@ -424,13 +463,6 @@ export function RequisitionWorkspacePage() {
                       const technicalLines = offer.lines.filter(
                         (line) => line.equivalence !== "equivalent",
                       );
-                      const pendingTechnical = technicalLines.some(
-                        (line) => !line.substitutionReview,
-                      );
-                      const rejectedTechnical = technicalLines.some(
-                        (line) =>
-                          line.substitutionReview?.decision === "rejected",
-                      );
                       return (
                         <div
                           className={`rounded-xl border p-4 ${selection?.selectedOfferId === offer.id ? "border-primary bg-primary/5" : ""}`}
@@ -611,6 +643,15 @@ export function RequisitionWorkspacePage() {
                       value={selection.singleSourceExceptionReason}
                     />
                   )}
+                  <div className="pt-2">
+                    <Button
+                      className="w-full"
+                      onClick={() => setGeneratePoOpen(true)}
+                    >
+                      <FileCheck2 className="h-4 w-4 mr-1.5" />
+                      Generate Purchase Order
+                    </Button>
+                  </div>
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
@@ -633,6 +674,10 @@ export function RequisitionWorkspacePage() {
         setOfferId={setOfferId}
         equivalence={equivalence}
         setEquivalence={setEquivalence}
+        selectedBrands={selectedBrands}
+        setSelectedBrands={setSelectedBrands}
+        customBrands={customBrands}
+        setCustomBrands={setCustomBrands}
         busy={action.isPending}
         error={action.isError ? getApiErrorMessage(action.error) : undefined}
         onClose={close}
@@ -641,13 +686,20 @@ export function RequisitionWorkspacePage() {
       <PriceInquirySheet
         open={priceInquiryOpen}
         onOpenChange={setPriceInquiryOpen}
-        initialItems={lines.map((l) => ({
-          itemName: l.itemNameSnapshot,
-          itemCode: l.itemCodeSnapshot || undefined,
-          quantity: l.quantity,
-          unit: l.unitSymbolSnapshot,
-          specification: l.specificationSnapshot || undefined,
-        }))}
+        initialItems={lines.map((l) => {
+          const matchingRfqLine = data.rfqLines?.find(
+            (rl) => rl.requisitionLineId === l.id || rl.itemId === l.itemId,
+          );
+          return {
+            itemId: l.itemId,
+            itemName: l.itemNameSnapshot,
+            itemCode: l.itemCodeSnapshot || undefined,
+            quantity: l.quantity,
+            unit: l.unitSymbolSnapshot,
+            specification: l.specificationSnapshot || undefined,
+            eligibleBrands: matchingRfqLine?.eligibleBrands,
+          };
+        })}
         defaultTitle={`Price inquiry for ${requisition.requisitionNumber} - ${requisition.title}`}
         onInquiryCreated={(inquiry) => {
           setPriceInquiryOpen(false);
@@ -661,6 +713,114 @@ export function RequisitionWorkspacePage() {
           if (!open) setComparisonInquiryId(null);
         }}
       />
+      <Dialog open={generatePoOpen} onOpenChange={setGeneratePoOpen}>
+        <DialogContent className="max-w-xl">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              createPoMutation.mutate(new FormData(e.currentTarget));
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Generate Purchase Order</DialogTitle>
+              <DialogDescription>
+                Create an authoritative PO draft from the selected vendor offer (
+                {selectedOffer?.vendorName}).
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="mt-4 space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="po-title">PO Title</Label>
+                <Input
+                  id="po-title"
+                  name="title"
+                  defaultValue={`PO for ${requisition.title} - ${selectedOffer?.vendorName}`}
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="po-payment">Payment Terms</Label>
+                  <Input
+                    id="po-payment"
+                    name="paymentTerms"
+                    defaultValue={selectedOffer?.paymentTerms ?? "30 days net"}
+                    required
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="po-delivery-terms">Delivery Terms</Label>
+                  <Input
+                    id="po-delivery-terms"
+                    name="deliveryTerms"
+                    defaultValue="Ex-works / Site Delivery"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="po-location">Delivery Location</Label>
+                  <Input
+                    id="po-location"
+                    name="deliveryLocation"
+                    defaultValue={requisition.deliveryLocation}
+                    required
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="po-due-date">Delivery Due Date</Label>
+                  <Input
+                    id="po-due-date"
+                    name="deliveryDueDate"
+                    type="date"
+                    defaultValue={requisition.requiredBy}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="po-shipping">Shipping Address</Label>
+                <Textarea
+                  id="po-shipping"
+                  name="shippingAddress"
+                  defaultValue={requisition.deliveryLocation}
+                  rows={2}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="po-notes">Notes / Special Instructions</Label>
+                <Textarea
+                  id="po-notes"
+                  name="notes"
+                  placeholder="Add any specific instructions for vendor or receiving team"
+                  rows={2}
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="mt-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setGeneratePoOpen(false)}
+                disabled={createPoMutation.isPending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={createPoMutation.isPending}>
+                {createPoMutation.isPending
+                  ? "Generating..."
+                  : "Generate Purchase Order"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
@@ -676,6 +836,10 @@ function ActionDialog({
   setOfferId,
   equivalence,
   setEquivalence,
+  selectedBrands,
+  setSelectedBrands,
+  customBrands,
+  setCustomBrands,
   busy,
   error,
   onClose,
@@ -692,6 +856,14 @@ function ActionDialog({
   equivalence: Record<string, Equivalence>;
   setEquivalence: React.Dispatch<
     React.SetStateAction<Record<string, Equivalence>>
+  >;
+  selectedBrands: Record<string, string>;
+  setSelectedBrands: React.Dispatch<
+    React.SetStateAction<Record<string, string>>
+  >;
+  customBrands: Record<string, string>;
+  setCustomBrands: React.Dispatch<
+    React.SetStateAction<Record<string, string>>
   >;
   busy: boolean;
   error?: string;
@@ -844,11 +1016,67 @@ function ActionDialog({
                             inputMode="decimal"
                             required
                           />
-                          <Field
-                            label="Brand / make"
-                            name={`brand:${line.id}`}
-                            required
-                          />
+                          {line.eligibleBrands && line.eligibleBrands.length > 0 ? (
+                            <div className="space-y-2">
+                              <SelectField
+                                label="Brand / make (from catalogue)"
+                                value={
+                                  selectedBrands[line.id] ??
+                                  line.eligibleBrands.find((b) => b.isPreferred)?.name ??
+                                  line.eligibleBrands[0]?.name ??
+                                  ""
+                                }
+                                onChange={(val) => {
+                                  setSelectedBrands((prev) => ({ ...prev, [line.id]: val }));
+                                  if (val === "__other__") {
+                                    setEquivalence((prev) => ({ ...prev, [line.id]: "deviation" }));
+                                  } else {
+                                    setEquivalence((prev) => ({ ...prev, [line.id]: "equivalent" }));
+                                  }
+                                }}
+                                items={[
+                                  ...line.eligibleBrands.map((b) => ({
+                                    value: b.name,
+                                    label: `${b.name}${b.model ? ` · ${b.model}` : ""}${b.isPreferred ? " ★ (Preferred)" : ""}`,
+                                  })),
+                                  { value: "__other__", label: "Other / Alternative brand..." },
+                                ]}
+                              />
+                              {selectedBrands[line.id] === "__other__" && (
+                                <Field
+                                  label="Custom brand / make"
+                                  name={`customBrand:${line.id}`}
+                                  value={customBrands[line.id] ?? ""}
+                                  onChange={(e) =>
+                                    setCustomBrands((prev) => ({
+                                      ...prev,
+                                      [line.id]: e.target.value,
+                                    }))
+                                  }
+                                  placeholder="e.g. Alternative Manufacturer"
+                                  required
+                                />
+                              )}
+                              <input
+                                type="hidden"
+                                name={`brand:${line.id}`}
+                                value={
+                                  selectedBrands[line.id] === "__other__"
+                                    ? (customBrands[line.id] ?? "")
+                                    : (selectedBrands[line.id] ??
+                                       line.eligibleBrands.find((b) => b.isPreferred)?.name ??
+                                       line.eligibleBrands[0]?.name ??
+                                       "")
+                                }
+                              />
+                            </div>
+                          ) : (
+                            <Field
+                              label="Brand / make"
+                              name={`brand:${line.id}`}
+                              required
+                            />
+                          )}
                           <div className="sm:col-span-2">
                             <TextField
                               label="Offered specification"

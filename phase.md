@@ -1,5 +1,7 @@
 # Fire Safety — Implementation Phases
 
+2026-11-04 focused follow-up: Purchase Orders (PO) and Goods Receipts (GRN) lifecycle (Phase 4 Checkpoints 3 & 4) completed locally. Includes requisition-linked and direct PO creation, immutable revision control (R00, R01 amendments), purchase-manager approval with audited administrator override, immutable signed PDF issuance with Puppeteer in isolated Chrome context, SHA-256 file checksums, direct-to-site partial shipments via Goods Receipts (GRN), and line-level receiving inspection recording accepted vs rejected quantities with mandatory rejection reasons. UI includes `PurchaseOrdersPage` directory with `ServerDataTable` and `ListToolbar`, `PurchaseOrderWorkspacePage` with fulfillment progress tracking and revision history, right-aligned `GoodsReceiptSheet`, and Requisition offer selection CTA. Migration 0024 applied to PostgreSQL; full server test suite (92/92 tests) and client build pass cleanly.
+
 2026-11-03 focused follow-up: removed technical reviews requirement (sourcing offers can now be selected directly by the purchase manager without mandatory engineering approval); seeded new awarded PO scenario (`DEMO-REQ-PO-001`) and populated Price Inquiry data (`DEMO-PRI-001`) with multi-vendor comparison matrix, historical rates, and quotation responses; resolved undefined access crashes in `PriceComparisonSheet.tsx`. All workspaces pass typecheck, oxlint (0 errors/0 warnings), and production build.
 
 2026-11-03 focused follow-up: PO and item-level vendor price inquiry feature and complete UI/UX overhaul implemented. Replaced modal dialogs with standard right-aligned Shadcn `<Sheet>` (`PriceInquirySheet.tsx`) providing 100vh vertical space with pinned header and footer. Features two-tier line item rows (top tier: Name, Qty, Unit, Tooltip-wrapped Delete; bottom tier: full-width specification/brand requirement), Framer Motion `<AnimatePresence>` slide/fade height transitions, designed dashed empty states with CTAs, `cmdk`-backed searchable Comboboxes for 40+ catalogue items and active vendors, React Hook Form + Zod schema validation with inline red border and error messages, Shadcn `<Checkbox>` for MSG91 WhatsApp dispatch, staggered entrance animations for invited vendors, pulsing real-time status dots (emerald for responded, amber for sent, slate for pending), and Radix `<Tooltip>` wrappers on all accessible icon buttons. Route error boundary (`RouteErrorPage.tsx`) wired to protected layouts. Migration 0023 applied locally. Both workspaces pass typecheck, oxlint (0 errors/warnings), and client production build (`vite build`) cleanly.
@@ -28,19 +30,19 @@ The original blueprint's full ERP milestone is replaced by this narrower pilot. 
 
 ## 2. Phase map
 
-| Phase | Outcome | Indicative focused days | Pilot? | Initial status |
-| --- | --- | ---: | --- | --- |
-| P0 | Validate docs, inspect Prem starter, collect minimal company decisions | 1–2 | Yes | Technical planning and Prem source audit prepared; company validation pending |
-| P1 | Working foundation, employee access and themed shell | 3–5 | Yes | Complete locally 2026-10-09; production company/provider/hosting configuration remains pending |
-| P2 | CRM, masters, private attachments and recurring follow-ups | 4–6 | Yes | In progress; checkpoints 1–5 complete locally 2026-10-11; production email configuration pending |
-| P3 | Free CAD design, approvals, BOQ, quotation and project start | 6–10 | Yes | Complete locally 2026-10-26; production commercial policy/template confirmation remains a rollout input |
-| P4 | Vendor comparison, PO approval, receipts/inspection | 5–8 | Yes | In progress; sourcing comparison and engineering substitution checkpoints complete locally 2026-10-26 |
-| P5 | End-to-end pilot hardening and rollout | 3–5 | Yes | Not started |
-| P6 | Inventory ledger and site material control | 6–10 | Later | Not started |
-| P7 | Execution, daily reports, delays and variations | 5–8 | Later | Not started |
-| P8 | Quality, mandatory handover and closure | 4–7 | Later | Not started |
-| P9 | Commercial operations and validated accounting path | Scope after finance review | Later | Not started |
-| P10 | Optional AMC/service and further integrations | Scope on demand | Optional | Not committed |
+| Phase | Outcome                                                                |    Indicative focused days | Pilot?   | Initial status                                                                                          |
+| ----- | ---------------------------------------------------------------------- | -------------------------: | -------- | ------------------------------------------------------------------------------------------------------- |
+| P0    | Validate docs, inspect Prem starter, collect minimal company decisions |                        1–2 | Yes      | Technical planning and Prem source audit prepared; company validation pending                           |
+| P1    | Working foundation, employee access and themed shell                   |                        3–5 | Yes      | Complete locally 2026-10-09; production company/provider/hosting configuration remains pending          |
+| P2    | CRM, masters, private attachments and recurring follow-ups             |                        4–6 | Yes      | In progress; checkpoints 1–5 complete locally 2026-10-11; production email configuration pending        |
+| P3    | Free CAD design, approvals, BOQ, quotation and project start           |                       6–10 | Yes      | Complete locally 2026-10-26; production commercial policy/template confirmation remains a rollout input |
+| P4    | Vendor comparison, PO approval, receipts/inspection                    |                        5–8 | Yes      | In progress; sourcing comparison and engineering substitution checkpoints complete locally 2026-10-26   |
+| P5    | End-to-end pilot hardening and rollout                                 |                        3–5 | Yes      | Not started                                                                                             |
+| P6    | Inventory ledger and site material control                             |                       6–10 | Later    | Not started                                                                                             |
+| P7    | Execution, daily reports, delays and variations                        |                        5–8 | Later    | Not started                                                                                             |
+| P8    | Quality, mandatory handover and closure                                |                        4–7 | Later    | Not started                                                                                             |
+| P9    | Commercial operations and validated accounting path                    | Scope after finance review | Later    | Not started                                                                                             |
+| P10   | Optional AMC/service and further integrations                          |            Scope on demand | Optional | Not committed                                                                                           |
 
 P1–P5 nominal estimate is 21–34 focused days, excluding P0, feedback delays and reserve. These are provisional estimates with no source-code review, not verified completion capacity. Confirm exact launch date and available time, then reduce optional pilot features or revise target if required.
 
@@ -112,7 +114,7 @@ Exit journey: lead → free CAD revision → return and revised submission → i
 
 ## 7. P4 — Procurement
 
-Status: **In progress — checkpoints 1–2 complete locally (2026-10-26).** Implemented approved-BOQ project requisitions, internal RFQs, immutable submitted vendor offers, normalized comparison, reasoned purchase-manager selection and assigned-design-head technical substitution review with commercial redaction. PO/amendment, delivery/inspection, vendor/item import and deliberate external RFQ delivery remain in later P4 checkpoints.
+Status: **Checkpoints 1–4 complete locally (2026-11-04).** Implemented approved-BOQ project requisitions, internal RFQs, vendor price inquiry, catalogue brand/make resolution, immutable submitted vendor offers, normalized comparison, reasoned purchase-manager selection, direct and requisition-linked PO creation, immutable revisions (R00, R01 amendments), purchase-manager approval with audited administrator override, immutable signed PDF issuance with Puppeteer and SHA-256 storage checksums, Goods Receipts (GRN) with vendor challan/carrier details, and line-level receiving inspection recording accepted vs rejected quantities with mandatory rejection reasons. Requisitions allow immediate supplier selection and one-click PO generation. Directory and workspace UI built with `ServerDataTable`, `ListToolbar`, right-aligned Sheets, and Radix UI Tabs. Migration `0024_romantic_venom.sql` applied and demo scenarios seeded (`DEMO-PO-001`, `DEMO-PO-002`, `DEMO-PO-003`, `DEMO-GRN-001`). Vendor/item Excel bulk import remains in P4 follow-up.
 
 Extend vendor/item masters and add project-linked requisition, RFQ, vendor offers and normalized comparison. Default two offers, recorded purchase-manager single-source exception, reasoned non-lowest selection and engineering substitution review.
 

@@ -127,6 +127,12 @@ export class ProcurementService {
       repository.listRfqLines(principal.companyId, rfq.id), repository.listRfqVendors(principal.companyId, rfq.id),
       repository.listOffers(principal.companyId, rfq.id), repository.findComparison(principal.companyId, rfq.id),
     ]);
+    const itemIds = Array.from(new Set(rfqLines.map((line) => line.itemId).filter(Boolean)));
+    const itemBrandsList = await repository.listBrandsForItems(principal.companyId, itemIds);
+    const rfqLinesWithBrands = rfqLines.map((line) => ({
+      ...line,
+      eligibleBrands: itemBrandsList.filter((b) => b.itemId === line.itemId),
+    }));
     const offerLines = await repository.listOfferLines(principal.companyId, offers.map((offer) => offer.id));
     const substitutionReviews = await repository.listSubstitutionReviews(principal.companyId, offerLines.map((line) => line.id));
     const offersWithLines = offers.map((offer) => ({ ...offer, lines: offerLines.filter((line) => line.vendorOfferId === offer.id).map((line) => ({
@@ -134,7 +140,7 @@ export class ProcurementService {
       substitutionReview: substitutionReviews.find((review) => review.vendorOfferLineId === line.id) ?? null,
     })) }));
     const selection = comparison ? await repository.findSelection(principal.companyId, comparison.id) : null;
-    return { requisition, lines, activeVendors, rfq, rfqLines, invitedVendors, offers: offersWithLines, comparison, selection, capabilities: this.capabilities(principal, requisition) };
+    return { requisition, lines, activeVendors, rfq, rfqLines: rfqLinesWithBrands, invitedVendors, offers: offersWithLines, comparison, selection, capabilities: this.capabilities(principal, requisition) };
   }
 
   private capabilities(principal: AuthenticatedPrincipal, requisition: { buyerUserId: string; purchaseManagerUserId: string }) {

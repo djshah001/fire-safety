@@ -1,10 +1,29 @@
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight } from 'lucide-react';
-import type { ReactNode } from 'react';
-import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
+import type { ReactNode } from "react";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 export type ServerColumn<T, TSort extends string> = {
   key: string;
@@ -44,8 +63,8 @@ export function ServerDataTable<T, TSort extends string>({
   loading?: boolean;
   empty: ReactNode;
   sort: TSort;
-  direction: 'asc' | 'desc';
-  onSort: (sort: TSort, direction: 'asc' | 'desc') => void;
+  direction: "asc" | "desc";
+  onSort: (sort: TSort, direction: "asc" | "desc") => void;
   page: number;
   pageSize: number;
   total: number;
@@ -57,7 +76,9 @@ export function ServerDataTable<T, TSort extends string>({
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const first = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const last = Math.min(page * pageSize, total);
-  const selectedOnPage = rows.filter((row) => selection?.selectedKeys.has(rowKey(row))).length;
+  const selectedOnPage = rows.filter((row) =>
+    selection?.selectedKeys.has(rowKey(row)),
+  ).length;
   const allOnPageSelected = rows.length > 0 && selectedOnPage === rows.length;
   const someOnPageSelected = selectedOnPage > 0 && !allOnPageSelected;
   const columnCount = columns.length + (selection ? 1 : 0);
@@ -72,9 +93,14 @@ export function ServerDataTable<T, TSort extends string>({
                 <TableHead className="w-11 px-3">
                   <Checkbox
                     aria-label="Select all rows on this page"
-                    checked={allOnPageSelected || (someOnPageSelected ? 'indeterminate' : false)}
+                    checked={
+                      allOnPageSelected ||
+                      (someOnPageSelected ? "indeterminate" : false)
+                    }
                     disabled={loading || rows.length === 0}
-                    onCheckedChange={(checked) => selection.onToggleAll(rows, checked === true)}
+                    onCheckedChange={(checked) =>
+                      selection.onToggleAll(rows, checked === true)
+                    }
                   />
                 </TableHead>
               )}
@@ -83,76 +109,145 @@ export function ServerDataTable<T, TSort extends string>({
                   {column.sort ? (
                     <Button
                       className="-ml-3 h-8"
-                      onClick={() => onSort(
-                        column.sort!,
-                        sort === column.sort && direction === 'asc' ? 'desc' : 'asc',
-                      )}
+                      onClick={() =>
+                        onSort(
+                          column.sort!,
+                          sort === column.sort && direction === "asc"
+                            ? "desc"
+                            : "asc",
+                        )
+                      }
                       size="sm"
                       variant="ghost"
                     >
                       {column.label}
-                      {sort !== column.sort ? <ArrowUpDown /> : direction === 'asc' ? <ArrowUp /> : <ArrowDown />}
+                      {sort !== column.sort ? (
+                        <ArrowUpDown />
+                      ) : direction === "asc" ? (
+                        <ArrowUp />
+                      ) : (
+                        <ArrowDown />
+                      )}
                     </Button>
-                  ) : column.label}
+                  ) : (
+                    column.label
+                  )}
                 </TableHead>
               ))}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {loading ? Array.from({ length: 5 }, (_, index) => (
-              <TableRow key={index}>
-                {selection && <TableCell className="px-3"><Skeleton className="size-4" /></TableCell>}
-                {columns.map((column) => <TableCell key={column.key}><Skeleton className="h-6 w-full" /></TableCell>)}
-              </TableRow>
-            )) : rows.length === 0 ? (
-              <TableRow>
-                <TableCell className="h-40 text-center text-muted-foreground" colSpan={columnCount}>{empty}</TableCell>
-              </TableRow>
-            ) : rows.map((row) => {
-              const key = rowKey(row);
-              const selected = selection?.selectedKeys.has(key) ?? false;
-              return (
-                <TableRow
-                  className={onRowClick ? 'cursor-pointer' : undefined}
-                  data-state={selected ? 'selected' : undefined}
-                  key={key}
-                  onClick={() => onRowClick?.(row)}
-                  tabIndex={onRowClick ? 0 : undefined}
-                  onKeyDown={(event) => {
-                    if (onRowClick && (event.key === 'Enter' || event.key === ' ')) onRowClick(row);
-                  }}
-                >
+            {loading ? (
+              Array.from({ length: 5 }, (_, index) => (
+                <TableRow key={index}>
                   {selection && (
-                    <TableCell className="w-11 px-3" onClick={(event) => event.stopPropagation()}>
-                      <Checkbox
-                        aria-label={`Select ${selection.rowLabel(row)}`}
-                        checked={selected}
-                        onCheckedChange={(checked) => selection.onToggle(row, checked === true)}
-                      />
+                    <TableCell className="px-3">
+                      <Skeleton className="size-4" />
                     </TableCell>
                   )}
                   {columns.map((column) => (
-                    <TableCell className={column.className} key={column.key}>{column.cell(row)}</TableCell>
+                    <TableCell key={column.key}>
+                      <Skeleton className="h-6 w-full" />
+                    </TableCell>
                   ))}
                 </TableRow>
-              );
-            })}
+              ))
+            ) : rows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  className="h-40 text-center text-muted-foreground"
+                  colSpan={columnCount}
+                >
+                  {empty}
+                </TableCell>
+              </TableRow>
+            ) : (
+              rows.map((row) => {
+                const key = rowKey(row);
+                const selected = selection?.selectedKeys.has(key) ?? false;
+                return (
+                  <TableRow
+                    className={onRowClick ? "cursor-pointer" : undefined}
+                    data-state={selected ? "selected" : undefined}
+                    key={key}
+                    onClick={() => onRowClick?.(row)}
+                    tabIndex={onRowClick ? 0 : undefined}
+                    onKeyDown={(event) => {
+                      if (
+                        onRowClick &&
+                        (event.key === "Enter" || event.key === " ")
+                      )
+                        onRowClick(row);
+                    }}
+                  >
+                    {selection && (
+                      <TableCell
+                        className="w-11 px-3"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <Checkbox
+                          aria-label={`Select ${selection.rowLabel(row)}`}
+                          checked={selected}
+                          onCheckedChange={(checked) =>
+                            selection.onToggle(row, checked === true)
+                          }
+                        />
+                      </TableCell>
+                    )}
+                    {columns.map((column) => (
+                      <TableCell className={column.className} key={column.key}>
+                        {column.cell(row)}
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                );
+              })
+            )}
           </TableBody>
         </Table>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 text-xs text-muted-foreground">
-        <span className="tabular-nums">{first}–{last} of {total}</span>
+        <span className="tabular-nums">
+          {first}–{last} of {total}
+        </span>
         <div className="flex items-center gap-2">
           <span className="hidden sm:inline">Rows</span>
-          <Select value={String(pageSize)} onValueChange={(value) => onPageSizeChange(Number(value))}>
-            <SelectTrigger className="h-8 w-20" aria-label="Rows per page"><SelectValue /></SelectTrigger>
+          <Select
+            value={String(pageSize)}
+            onValueChange={(value) => onPageSizeChange(Number(value))}
+          >
+            <SelectTrigger className="h-8 w-20" aria-label="Rows per page">
+              <SelectValue />
+            </SelectTrigger>
             <SelectContent>
-              {[10, 20, 50, 100, 200, 500].map((size) => <SelectItem key={size} value={String(size)}>{size}</SelectItem>)}
+              {[10, 20, 50, 100, 200, 500].map((size) => (
+                <SelectItem key={size} value={String(size)}>
+                  {size}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
-          <Button aria-label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)} size="icon-sm" variant="outline"><ChevronLeft /></Button>
-          <span className="min-w-16 text-center tabular-nums">{page} / {pages}</span>
-          <Button aria-label="Next page" disabled={page >= pages} onClick={() => onPageChange(page + 1)} size="icon-sm" variant="outline"><ChevronRight /></Button>
+          <Button
+            aria-label="Previous page"
+            disabled={page <= 1}
+            onClick={() => onPageChange(page - 1)}
+            size="icon-sm"
+            variant="outline"
+          >
+            <ChevronLeft />
+          </Button>
+          <span className="min-w-16 text-center tabular-nums">
+            {page} / {pages}
+          </span>
+          <Button
+            aria-label="Next page"
+            disabled={page >= pages}
+            onClick={() => onPageChange(page + 1)}
+            size="icon-sm"
+            variant="outline"
+          >
+            <ChevronRight />
+          </Button>
         </div>
       </div>
     </div>

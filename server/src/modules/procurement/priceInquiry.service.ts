@@ -1,25 +1,28 @@
-import crypto from 'crypto';
-import { and, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
-import { db } from '../../infrastructure/database/db.js';
+import crypto from "crypto";
+import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { db } from "../../infrastructure/database/db.js";
 import {
+  brands,
+  itemBrandOfferings,
+  itemBrands,
   vendorContacts,
   vendorPriceInquiries,
   vendorPriceInquiryInvitations,
   vendorPriceInquiryResponses,
   vendorPriceLists,
   vendors,
-} from '../../infrastructure/database/schema/masters.js';
-import { msg91WhatsAppService } from '../../infrastructure/notifications/msg91.js';
-import { env } from '../../config/env.js';
-import { logger } from '../../core/logger/logger.js';
-import { AppError } from '../../core/errors/appError.js';
-import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
+} from "../../infrastructure/database/schema/masters.js";
+import { msg91WhatsAppService } from "../../infrastructure/notifications/msg91.js";
+import { env } from "../../config/env.js";
+import { logger } from "../../core/logger/logger.js";
+import { AppError } from "../../core/errors/appError.js";
+import type { AuthenticatedPrincipal } from "../auth/auth.types.js";
 import type {
   CreatePriceInquiryInput,
   InviteVendorInput,
   PriceInquiryListQuery,
   SubmitPriceResponseInput,
-} from './priceInquiry.schemas.js';
+} from "./priceInquiry.schemas.js";
 
 async function generateInquiryCode(companyId: string): Promise<string> {
   const result = await db
@@ -27,7 +30,74 @@ async function generateInquiryCode(companyId: string): Promise<string> {
     .from(vendorPriceInquiries)
     .where(eq(vendorPriceInquiries.companyId, companyId));
   const seq = (result[0]?.count ?? 0) + 1;
-  return `PRI-${String(seq).padStart(6, '0')}`;
+  return `PRI-${String(seq).padStart(6, "0")}`;
+}
+
+async function enrichInquiryItemsWithBrands(items: any[]): Promise<any[]> {
+  const itemIds = items.map((i) => i.itemId).filter(Boolean);
+  if (itemIds.length === 0) return items;
+
+  const brandRows = await db
+    .select({
+      itemId: itemBrands.itemId,
+      id: brands.id,
+      name: brands.name,
+      code: brands.code,
+    })
+    .from(itemBrands)
+    .innerJoin(brands, eq(brands.id, itemBrands.brandId))
+    .where(
+      and(inArray(itemBrands.itemId, itemIds), eq(brands.status, "active")),
+    )
+    .orderBy(brands.name);
+
+  const offerings = await db
+    .select({
+      itemId: itemBrandOfferings.itemId,
+      brandId: itemBrandOfferings.brandId,
+      manufacturerModel: itemBrandOfferings.manufacturerModel,
+      isPreferred: itemBrandOfferings.isPreferred,
+    })
+    .from(itemBrandOfferings)
+    .where(
+      and(
+        inArray(itemBrandOfferings.itemId, itemIds),
+        eq(itemBrandOfferings.status, "active"),
+      ),
+    );
+
+  const brandsByItem: Record<
+    string,
+    Array<{
+      id: string;
+      name: string;
+      code?: string;
+      model?: string | null;
+      isPreferred?: boolean;
+    }>
+  > = {};
+  for (const b of brandRows) {
+    const list = brandsByItem[b.itemId] ?? [];
+    brandsByItem[b.itemId] = list;
+    const offering = offerings.find(
+      (o) => o.itemId === b.itemId && o.brandId === b.id,
+    );
+    list.push({
+      id: b.id,
+      name: b.name,
+      code: b.code,
+      model: offering?.manufacturerModel ?? null,
+      isPreferred: offering?.isPreferred ?? false,
+    });
+  }
+
+  return items.map((item) => ({
+    ...item,
+    eligibleBrands:
+      item.itemId && brandsByItem[item.itemId]
+        ? brandsByItem[item.itemId]
+        : (item.eligibleBrands ?? []),
+  }));
 }
 
 export class PriceInquiryService {
@@ -45,13 +115,14 @@ export class PriceInquiryService {
         title: input.title,
         description: input.description,
         items: input.items,
-        status: 'active',
+        status: "active",
         responseDueDate: input.responseDueDate,
         createdByUserId: principal.userId,
       })
       .returning();
 
-    if (!inquiry) throw new AppError('INTERNAL_ERROR', 'Failed to create inquiry.', 500);
+    if (!inquiry)
+      throw new AppError("INTERNAL_ERROR", "Failed to create inquiry.", 500);
     return { inquiry };
   }
 
@@ -62,7 +133,9 @@ export class PriceInquiryService {
     const { page, pageSize, status, search } = query;
     const offset = (page - 1) * pageSize;
 
-    const conditions = [eq(vendorPriceInquiries.companyId, principal.companyId)];
+    const conditions = [
+      eq(vendorPriceInquiries.companyId, principal.companyId),
+    ];
     if (status) conditions.push(eq(vendorPriceInquiries.status, status));
     if (search) {
       conditions.push(
@@ -105,7 +178,8 @@ export class PriceInquiryService {
           eq(vendorPriceInquiries.companyId, principal.companyId),
         ),
       );
-    if (!inquiry) throw new AppError('NOT_FOUND', 'Price inquiry not found.', 404);
+    if (!inquiry)
+      throw new AppError("NOT_FOUND", "Price inquiry not found.", 404);
 
     const invitations = await db
       .select({
@@ -118,7 +192,10 @@ export class PriceInquiryService {
         },
       })
       .from(vendorPriceInquiryInvitations)
-      .innerJoin(vendors, eq(vendorPriceInquiryInvitations.vendorId, vendors.id))
+      .innerJoin(
+        vendors,
+        eq(vendorPriceInquiryInvitations.vendorId, vendors.id),
+      )
       .where(eq(vendorPriceInquiryInvitations.inquiryId, inquiryId));
 
     const responses = await db
@@ -141,7 +218,19 @@ export class PriceInquiryService {
             )
         : [];
 
-    return { inquiry, invitations, responses, priceListData };
+    const enrichedItems = await enrichInquiryItemsWithBrands(
+      (inquiry.items as any[]) ?? [],
+    );
+
+    return {
+      inquiry: {
+        ...inquiry,
+        items: enrichedItems,
+      },
+      invitations,
+      responses,
+      priceListData,
+    };
   }
 
   async inviteVendor(
@@ -159,7 +248,8 @@ export class PriceInquiryService {
           eq(vendorPriceInquiries.companyId, principal.companyId),
         ),
       );
-    if (!inquiry) throw new AppError('NOT_FOUND', 'Price inquiry not found.', 404);
+    if (!inquiry)
+      throw new AppError("NOT_FOUND", "Price inquiry not found.", 404);
 
     const [vendor] = await db
       .select()
@@ -170,7 +260,7 @@ export class PriceInquiryService {
           eq(vendors.companyId, principal.companyId),
         ),
       );
-    if (!vendor) throw new AppError('NOT_FOUND', 'Vendor not found.', 404);
+    if (!vendor) throw new AppError("NOT_FOUND", "Vendor not found.", 404);
 
     let defaultPhone = input.whatsappNumber?.trim() || null;
     let contactName = vendor.displayName;
@@ -191,7 +281,7 @@ export class PriceInquiryService {
       }
     }
 
-    const token = crypto.randomBytes(32).toString('hex');
+    const token = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + input.expiryDays);
 
@@ -203,12 +293,13 @@ export class PriceInquiryService {
         vendorId: input.vendorId,
         token,
         whatsappNumber: defaultPhone,
-        status: 'pending',
+        status: "pending",
         expiresAt,
       })
       .returning();
 
-    if (!invitation) throw new AppError('INTERNAL_ERROR', 'Failed to create invitation.', 500);
+    if (!invitation)
+      throw new AppError("INTERNAL_ERROR", "Failed to create invitation.", 500);
 
     let msg91Result = null;
     const submissionUrl = `${env.APP_ORIGIN}/vendor-price/${token}`;
@@ -225,19 +316,23 @@ export class PriceInquiryService {
         await db
           .update(vendorPriceInquiryInvitations)
           .set({
-            status: 'sent',
+            status: "sent",
             sentAt: new Date(),
             msg91MessageId: msg91Result.messageId,
           })
           .where(eq(vendorPriceInquiryInvitations.id, invitation.id));
-        invitation.status = 'sent';
+        invitation.status = "sent";
       }
     }
 
     return { invitation, submissionUrl, msg91Result };
   }
 
-  async sendMsg91(principal: AuthenticatedPrincipal, inquiryId: string, invitationId: string) {
+  async sendMsg91(
+    principal: AuthenticatedPrincipal,
+    inquiryId: string,
+    invitationId: string,
+  ) {
     const [row] = await db
       .select({
         invitation: vendorPriceInquiryInvitations,
@@ -245,8 +340,14 @@ export class PriceInquiryService {
         inquiryTitle: vendorPriceInquiries.title,
       })
       .from(vendorPriceInquiryInvitations)
-      .innerJoin(vendors, eq(vendorPriceInquiryInvitations.vendorId, vendors.id))
-      .innerJoin(vendorPriceInquiries, eq(vendorPriceInquiryInvitations.inquiryId, vendorPriceInquiries.id))
+      .innerJoin(
+        vendors,
+        eq(vendorPriceInquiryInvitations.vendorId, vendors.id),
+      )
+      .innerJoin(
+        vendorPriceInquiries,
+        eq(vendorPriceInquiryInvitations.inquiryId, vendorPriceInquiries.id),
+      )
       .where(
         and(
           eq(vendorPriceInquiryInvitations.id, invitationId),
@@ -254,11 +355,15 @@ export class PriceInquiryService {
           eq(vendorPriceInquiryInvitations.companyId, principal.companyId),
         ),
       );
-    if (!row) throw new AppError('NOT_FOUND', 'Invitation not found.', 404);
+    if (!row) throw new AppError("NOT_FOUND", "Invitation not found.", 404);
 
     const { invitation, vendorName, inquiryTitle } = row;
     if (!invitation.whatsappNumber) {
-      throw new AppError('VALIDATION_ERROR', 'No WhatsApp number on this invitation.', 422);
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "No WhatsApp number on this invitation.",
+        422,
+      );
     }
 
     const submissionUrl = `${env.APP_ORIGIN}/vendor-price/${invitation.token}`;
@@ -272,7 +377,11 @@ export class PriceInquiryService {
     if (result.success) {
       await db
         .update(vendorPriceInquiryInvitations)
-        .set({ status: 'sent', sentAt: new Date(), msg91MessageId: result.messageId })
+        .set({
+          status: "sent",
+          sentAt: new Date(),
+          msg91MessageId: result.messageId,
+        })
         .where(eq(vendorPriceInquiryInvitations.id, invitationId));
     }
 
@@ -293,15 +402,34 @@ export class PriceInquiryService {
         },
       })
       .from(vendorPriceInquiryInvitations)
-      .innerJoin(vendorPriceInquiries, eq(vendorPriceInquiryInvitations.inquiryId, vendorPriceInquiries.id))
-      .innerJoin(vendors, eq(vendorPriceInquiryInvitations.vendorId, vendors.id))
+      .innerJoin(
+        vendorPriceInquiries,
+        eq(vendorPriceInquiryInvitations.inquiryId, vendorPriceInquiries.id),
+      )
+      .innerJoin(
+        vendors,
+        eq(vendorPriceInquiryInvitations.vendorId, vendors.id),
+      )
       .where(eq(vendorPriceInquiryInvitations.token, token));
 
-    if (!row) throw new AppError('NOT_FOUND', 'This invitation link is not valid.', 404);
+    if (!row)
+      throw new AppError(
+        "NOT_FOUND",
+        "This invitation link is not valid.",
+        404,
+      );
 
     if (row.invitation.expiresAt < new Date()) {
-      throw new AppError('VALIDATION_ERROR', 'This invitation link has expired.', 410);
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "This invitation link has expired.",
+        410,
+      );
     }
+
+    const enrichedItems = await enrichInquiryItemsWithBrands(
+      (row.inquiry.items as any[]) ?? [],
+    );
 
     return {
       inquiry: {
@@ -309,7 +437,7 @@ export class PriceInquiryService {
         inquiryCode: row.inquiry.inquiryCode,
         title: row.inquiry.title,
         description: row.inquiry.description,
-        items: row.inquiry.items,
+        items: enrichedItems,
         responseDueDate: row.inquiry.responseDueDate,
       },
       vendor: row.vendor,
@@ -325,9 +453,14 @@ export class PriceInquiryService {
       .from(vendorPriceInquiryInvitations)
       .where(eq(vendorPriceInquiryInvitations.token, token));
 
-    if (!invitation) throw new AppError('NOT_FOUND', 'Invitation not found.', 404);
+    if (!invitation)
+      throw new AppError("NOT_FOUND", "Invitation not found.", 404);
     if (invitation.expiresAt < new Date()) {
-      throw new AppError('VALIDATION_ERROR', 'This invitation link has expired.', 410);
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "This invitation link has expired.",
+        410,
+      );
     }
 
     const responseRows = input.responses.map((r) => ({
@@ -351,13 +484,13 @@ export class PriceInquiryService {
 
     await db
       .update(vendorPriceInquiryInvitations)
-      .set({ status: 'responded', respondedAt: new Date() })
+      .set({ status: "responded", respondedAt: new Date() })
       .where(eq(vendorPriceInquiryInvitations.id, invitation.id));
 
     // Save/update to vendorPriceLists for future comparison
     if (input.saveToPriceList !== false) {
       for (const r of input.responses) {
-        const todayStr = new Date().toISOString().split('T')[0]!;
+        const todayStr = new Date().toISOString().split("T")[0]!;
         const itemId = r.itemRef.itemId;
         if (itemId) {
           const existing = await db
@@ -399,8 +532,12 @@ export class PriceInquiryService {
     }
 
     logger.info(
-      { inquiryId: invitation.inquiryId, vendorId: invitation.vendorId, count: inserted.length },
-      'Vendor submitted price inquiry responses.',
+      {
+        inquiryId: invitation.inquiryId,
+        vendorId: invitation.vendorId,
+        count: inserted.length,
+      },
+      "Vendor submitted price inquiry responses.",
     );
 
     return { submitted: inserted.length };

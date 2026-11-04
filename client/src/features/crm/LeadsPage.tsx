@@ -1,17 +1,29 @@
+import { useState } from "react";
+import { useOutletContext, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { motion, AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
 import {
   BellPlus,
   CircleDot,
   FileUp,
-  LoaderCircle,
+  Loader2,
   Plus,
   Settings2,
   UserRoundCheck,
   X,
+  Phone,
+  Mail,
+  Building,
+  Target,
+  ArrowRight,
+  ShieldCheck,
+  DraftingCompass,
+  CheckCircle2,
+  Clock,
+  Sparkles,
 } from "lucide-react";
-import { useState } from "react";
-import { toast } from "sonner";
-import { useOutletContext, useSearchParams } from "react-router-dom";
+
 import type { CurrentUser } from "@/api/auth";
 import {
   assigneesQuery,
@@ -40,6 +52,7 @@ import {
 } from "@/components/data-table/ServerDataTable";
 import { StatusBadge } from "@/components/data-table/StatusBadge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -70,6 +83,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { LeadWorkPanel } from "@/features/crm/LeadWorkPanel";
 import { CrmImportDialog } from "@/features/crm/CrmImportDialog";
 import { AuthorizeDesignDialog } from "@/features/crm/AuthorizeDesignDialog";
+import { cn } from "@/lib/utils";
 
 const stages: LeadStage[] = [
   "new",
@@ -81,6 +95,7 @@ const stages: LeadStage[] = [
   "lost",
   "on_hold",
 ];
+
 const formatStage = (stage: string) =>
   stage.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
 
@@ -94,6 +109,7 @@ export function LeadsPage() {
   const canAuthorizeDesign = user.permissions.includes(
     "crm.lead.authorize_design",
   );
+
   const [params, setParams] = useSearchParams();
   const [modal, setModal] = useState<
     "create" | "category" | "purpose" | "sector" | "qualify"
@@ -110,6 +126,7 @@ export function LeadsPage() {
   );
   const [bulkAction, setBulkAction] = useState<"assign" | "reminder">();
   const [bulkAssigneeId, setBulkAssigneeId] = useState("");
+
   const search = params.get("search") ?? "";
   const stage = (
     stages.includes(params.get("stage") as LeadStage)
@@ -128,6 +145,7 @@ export function LeadsPage() {
       : "updatedAt"
   ) as "leadNumber" | "inquiryName" | "stage" | "updatedAt";
   const direction = params.get("direction") === "asc" ? "asc" : "desc";
+
   const leads = useQuery(
     leadsQuery({
       search: search || undefined,
@@ -172,8 +190,10 @@ export function LeadsPage() {
       await queryClient.invalidateQueries({ queryKey: ["crm", "leads"] });
       setSelectedId(result.lead.id);
       if (result.duplicateHints.length === 0) setModal(undefined);
+      toast.success("Lead created.");
     },
   });
+
   const categoryCreation = useMutation({
     mutationFn: (form: FormData) =>
       createServiceCategory({
@@ -185,8 +205,10 @@ export function LeadsPage() {
         queryKey: ["crm", "service-categories"],
       });
       setModal(undefined);
+      toast.success("Service category added.");
     },
   });
+
   const classificationCreation = useMutation({
     mutationFn: (form: FormData) =>
       createLeadClassification(modal === "purpose" ? "purposes" : "sectors", {
@@ -201,6 +223,7 @@ export function LeadsPage() {
       toast.success("Lead classification added.");
     },
   });
+
   const stageChange = useMutation({
     mutationFn: (input: {
       lead: Lead;
@@ -218,8 +241,10 @@ export function LeadsPage() {
       queryClient.setQueryData(["crm", "lead", lead.id], lead);
       setLostLead(undefined);
       setLostReason("");
+      toast.success("Lead stage updated.");
     },
   });
+
   const qualification = useMutation({
     mutationFn: (form: FormData) => {
       if (!selectedLead.data) throw new Error("Lead is unavailable.");
@@ -244,8 +269,10 @@ export function LeadsPage() {
           queryKey: ["crm", "lead", selectedId],
         });
       setModal(undefined);
+      toast.success("Lead qualified into opportunity.");
     },
   });
+
   const bulkAssignment = useMutation({
     mutationFn: () =>
       bulkAssignLeads({
@@ -265,6 +292,7 @@ export function LeadsPage() {
       await queryClient.invalidateQueries({ queryKey: ["crm", "leads"] });
     },
   });
+
   const bulkReminder = useMutation({
     mutationFn: (form: FormData) =>
       bulkCreateReminders({
@@ -315,38 +343,47 @@ export function LeadsPage() {
       next.set(key, String(value));
     setParams(next, { replace: true });
   }
+
   const columns: Array<ServerColumn<Lead, typeof sort>> = [
     {
       key: "lead",
-      label: "Lead",
+      label: "Lead / Inquiry",
       sort: "inquiryName",
-      className: "min-w-64",
+      className: "min-w-[240px]",
       cell: (lead) => (
-        <div>
-          <p className="font-medium">{lead.inquiryName}</p>
-          <p className="text-xs text-muted-foreground">
-            {lead.leadNumber} · {lead.serviceCategoryName}
+        <div className="space-y-0.5">
+          <p className="font-semibold text-xs text-foreground hover:text-primary transition-colors">
+            {lead.inquiryName}
           </p>
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground font-mono">
+            <span>{lead.leadNumber}</span>
+            <span>•</span>
+            <span className="font-sans text-foreground/80">
+              {lead.serviceCategoryName}
+            </span>
+          </div>
         </div>
       ),
     },
     {
       key: "classification",
-      label: "Purpose / sector",
+      label: "Purpose / Sector",
+      className: "min-w-[180px]",
       cell: (lead) => (
-        <div>
-          <p>{lead.purposeName}</p>
-          <p className="text-xs text-muted-foreground">{lead.sectorName}</p>
+        <div className="space-y-0.5">
+          <p className="text-xs font-medium text-foreground">{lead.purposeName}</p>
+          <p className="text-[11px] text-muted-foreground">{lead.sectorName}</p>
         </div>
       ),
     },
     {
       key: "contact",
-      label: "Contact",
+      label: "Contact Person",
+      className: "min-w-[200px]",
       cell: (lead) => (
-        <div>
-          <p>{lead.contactName}</p>
-          <p className="text-xs text-muted-foreground">
+        <div className="space-y-0.5">
+          <p className="text-xs font-medium text-foreground">{lead.contactName}</p>
+          <p className="text-[11px] text-muted-foreground font-mono truncate max-w-[180px]">
             {lead.companyName || lead.phone || lead.email}
           </p>
         </div>
@@ -356,48 +393,75 @@ export function LeadsPage() {
       key: "stage",
       label: "Stage",
       sort: "stage",
+      className: "min-w-[120px]",
       cell: (lead) => <StatusBadge status={lead.stage} />,
     },
     {
       key: "updated",
       label: "Updated",
       sort: "updatedAt",
-      className: "tabular-nums",
+      className: "tabular-nums text-xs font-mono text-muted-foreground",
       cell: (lead) => new Date(lead.updatedAt).toLocaleDateString(),
     },
   ];
 
   return (
     <main className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
+      {/* Page Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-sm font-semibold text-primary">CRM</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">Leads</h1>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Only assigned leads appear here. Purpose and market sector classify
-            the enquiry; the sector selects its BOQ template.
+          <p className="text-xs font-semibold uppercase tracking-wider text-primary">
+            CRM & Pipeline
+          </p>
+          <h1 className="mt-1 text-2xl sm:text-3xl font-semibold tracking-tight text-foreground">
+            Leads Register
+          </h1>
+          <p className="mt-1.5 max-w-3xl text-sm text-muted-foreground leading-relaxed">
+            Only assigned leads appear in this scope. Purpose and market sector classify
+            the enquiry; the chosen sector selects its matching technical BOQ template.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+
+        <div className="flex flex-wrap items-center gap-2">
           {canManageCategories && (
             <>
-              <Button onClick={() => setModal("category")} variant="outline">
-                <Settings2 />
+              <Button
+                onClick={() => setModal("category")}
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+              >
+                <Settings2 className="size-3.5 mr-1" />
                 Services
               </Button>
-              <Button onClick={() => setModal("purpose")} variant="outline">
-                <Plus />
+              <Button
+                onClick={() => setModal("purpose")}
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+              >
+                <Plus className="size-3.5 mr-1" />
                 Purpose
               </Button>
-              <Button onClick={() => setModal("sector")} variant="outline">
-                <Plus />
+              <Button
+                onClick={() => setModal("sector")}
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+              >
+                <Plus className="size-3.5 mr-1" />
                 Sector
               </Button>
             </>
           )}
           {canWrite && (
-            <Button onClick={() => setShowImport(true)} variant="outline">
-              <FileUp />
+            <Button
+              onClick={() => setShowImport(true)}
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+            >
+              <FileUp className="size-3.5 mr-1" />
               Import
             </Button>
           )}
@@ -408,14 +472,17 @@ export function LeadsPage() {
                 creation.reset();
                 setModal("create");
               }}
+              size="sm"
+              className="h-8 text-xs"
             >
-              <Plus />
-              Add lead
+              <Plus className="size-3.5 mr-1" />
+              Add Lead
             </Button>
           )}
         </div>
       </div>
 
+      {/* Filter Toolbar */}
       <div className="mt-6">
         <ListToolbar
           search={search}
@@ -423,19 +490,19 @@ export function LeadsPage() {
           activeFilters={stage ? 1 : 0}
           onClear={() => updateFilter("stage", "all")}
         >
-          <div className="space-y-2">
-            <Label>Stage</Label>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-semibold">Filter by Stage</Label>
             <Select
               onValueChange={(value) => updateFilter("stage", value)}
               value={stage ?? "all"}
             >
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full h-9 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All stages</SelectItem>
                 {stages.map((item) => (
-                  <SelectItem key={item} value={item}>
+                  <SelectItem key={item} value={item} className="text-xs">
                     {formatStage(item)}
                   </SelectItem>
                 ))}
@@ -445,6 +512,7 @@ export function LeadsPage() {
         </ListToolbar>
       </div>
 
+      {/* Embedded Lead Work Panel (Activities / Reminders / Files) */}
       {selectedLead.data && (
         <div className="mt-6">
           <LeadWorkPanel
@@ -455,20 +523,29 @@ export function LeadsPage() {
         </div>
       )}
 
+      {/* Main Table + Sticky Inspector Layout */}
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle>Assigned leads</CardTitle>
-            <CardDescription>
-              {leads.data
-                ? `${leads.data.total} visible lead${leads.data.total === 1 ? "" : "s"}`
-                : "Loading leads…"}
-            </CardDescription>
+        <Card className="shadow-xs overflow-hidden">
+          <CardHeader className="border-b bg-card/60 p-4 pb-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-sm font-semibold">Assigned Leads</CardTitle>
+                <CardDescription className="text-xs">
+                  {leads.data
+                    ? `${leads.data.total} visible record${leads.data.total === 1 ? "" : "s"}`
+                    : "Loading records…"}
+                </CardDescription>
+              </div>
+              <Badge variant="outline" className="text-[11px] font-mono">
+                Page {page}
+              </Badge>
+            </div>
           </CardHeader>
-          <CardContent className="px-0">
+
+          <CardContent className="p-0">
             {leads.isError ? (
-              <Alert className="mx-5" variant="destructive">
-                <AlertDescription>
+              <Alert className="m-4" variant="destructive">
+                <AlertDescription className="text-xs">
                   {getApiErrorMessage(leads.error)}
                 </AlertDescription>
               </Alert>
@@ -525,121 +602,182 @@ export function LeadsPage() {
           </CardContent>
         </Card>
 
-        <Card className="self-start xl:sticky xl:top-24">
+        {/* Sticky Detail Inspector Drawer */}
+        <Card className="self-start xl:sticky xl:top-20 shadow-xs border-border/80">
           {!selectedId ? (
-            <CardContent className="text-sm text-muted-foreground">
-              Select a lead to review its contact and permitted actions.
+            <CardContent className="p-8 text-center text-xs text-muted-foreground">
+              <Target className="mx-auto mb-2 size-6 text-muted-foreground/40" />
+              Select a lead from the table to inspect details, actions, and qualifications.
             </CardContent>
           ) : selectedLead.isPending ? (
-            <CardContent>
-              <Skeleton className="h-48" />
+            <CardContent className="p-5 space-y-3">
+              <Skeleton className="h-5 w-24" />
+              <Skeleton className="h-6 w-48" />
+              <Skeleton className="h-32 w-full" />
             </CardContent>
           ) : selectedLead.isError ? (
-            <CardContent>
+            <CardContent className="p-4">
               <Alert variant="destructive">
-                <AlertDescription>
+                <AlertDescription className="text-xs">
                   {getApiErrorMessage(selectedLead.error)}
                 </AlertDescription>
               </Alert>
             </CardContent>
           ) : (
             <>
-              <CardHeader>
-                <p className="text-xs font-semibold uppercase tracking-wider text-primary">
-                  {selectedLead.data.leadNumber}
-                </p>
-                <CardTitle className="text-xl">
+              <CardHeader className="border-b bg-card/60 p-4 pb-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-mono font-semibold text-primary">
+                    {selectedLead.data.leadNumber}
+                  </span>
+                  <StatusBadge status={selectedLead.data.stage} />
+                </div>
+                <CardTitle className="text-base font-semibold pt-1">
                   {selectedLead.data.inquiryName}
                 </CardTitle>
-                <CardDescription>
-                  {selectedLead.data.contactName} ·{" "}
-                  {selectedLead.data.phone || selectedLead.data.email}
+                <CardDescription className="text-xs">
+                  {selectedLead.data.contactName}
+                  {selectedLead.data.companyName ? ` (${selectedLead.data.companyName})` : ""}
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                <dl className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <dt className="text-muted-foreground">Stage</dt>
-                    <dd className="mt-1 font-medium">
-                      {formatStage(selectedLead.data.stage)}
-                    </dd>
+
+              <CardContent className="p-4 space-y-4">
+                {/* Contact Links */}
+                <div className="grid grid-cols-1 gap-1.5 rounded-lg border bg-muted/20 p-2.5 text-xs">
+                  {selectedLead.data.phone && (
+                    <a
+                      href={`tel:${selectedLead.data.phone}`}
+                      className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      <Phone className="size-3.5 text-primary" />
+                      <span>{selectedLead.data.phone}</span>
+                    </a>
+                  )}
+                  {selectedLead.data.email && (
+                    <a
+                      href={`mailto:${selectedLead.data.email}`}
+                      className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors truncate"
+                    >
+                      <Mail className="size-3.5 text-primary" />
+                      <span className="truncate">{selectedLead.data.email}</span>
+                    </a>
+                  )}
+                  {selectedLead.data.address && (
+                    <p className="flex items-start gap-2 text-[11px] text-muted-foreground pt-1 border-t">
+                      <Building className="size-3.5 text-muted-foreground shrink-0 mt-0.5" />
+                      <span>{selectedLead.data.address}</span>
+                    </p>
+                  )}
+                </div>
+
+                {/* Classification Pills */}
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-md border p-2 bg-card">
+                    <span className="text-[10px] text-muted-foreground block">
+                      Purpose
+                    </span>
+                    <span className="font-medium text-foreground truncate block">
+                      {selectedLead.data.purposeName}
+                    </span>
                   </div>
-                  <div>
-                    <dt className="text-muted-foreground">Source</dt>
-                    <dd className="mt-1 font-medium">
-                      {selectedLead.data.source}
-                    </dd>
+                  <div className="rounded-md border p-2 bg-card">
+                    <span className="text-[10px] text-muted-foreground block">
+                      Sector
+                    </span>
+                    <span className="font-medium text-foreground truncate block">
+                      {selectedLead.data.sectorName}
+                    </span>
                   </div>
-                </dl>
+                </div>
+
+                {/* Stage Progression Actions */}
                 {["new", "contacted", "on_hold"].includes(
                   selectedLead.data.stage,
                 ) && (
-                  <div className="mt-5 flex flex-wrap gap-2 border-t border-border pt-5">
-                    <Button
-                      disabled={stageChange.isPending}
-                      onClick={() =>
-                        stageChange.mutate({
-                          lead: selectedLead.data,
-                          stage:
-                            selectedLead.data.stage === "contacted"
-                              ? "on_hold"
-                              : "contacted",
-                        })
-                      }
-                      variant="outline"
-                    >
-                      {selectedLead.data.stage === "contacted"
-                        ? "Put on hold"
-                        : "Mark contacted"}
-                    </Button>
-                    <Button
-                      disabled={stageChange.isPending}
-                      onClick={() => {
-                        setLostReason("");
-                        setLostLead(selectedLead.data);
-                      }}
-                      variant="destructive"
-                    >
-                      Mark lost
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        setSelectedCustomerId("");
-                        qualification.reset();
-                        setModal("qualify");
-                      }}
-                    >
-                      Qualify
-                    </Button>
+                  <div className="space-y-2 border-t pt-3">
+                    <Label className="text-xs font-semibold text-muted-foreground">
+                      Pipeline Actions
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        disabled={stageChange.isPending}
+                        onClick={() =>
+                          stageChange.mutate({
+                            lead: selectedLead.data,
+                            stage:
+                              selectedLead.data.stage === "contacted"
+                                ? "on_hold"
+                                : "contacted",
+                          })
+                        }
+                        variant="outline"
+                        className="h-8 text-xs flex-1"
+                      >
+                        {selectedLead.data.stage === "contacted"
+                          ? "Put on hold"
+                          : "Mark contacted"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={stageChange.isPending}
+                        onClick={() => {
+                          setLostReason("");
+                          setLostLead(selectedLead.data);
+                        }}
+                        variant="destructive"
+                        className="h-8 text-xs"
+                      >
+                        Mark lost
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          setSelectedCustomerId("");
+                          qualification.reset();
+                          setModal("qualify");
+                        }}
+                        className="h-8 text-xs w-full"
+                      >
+                        Qualify into Opportunity →
+                      </Button>
+                    </div>
                   </div>
                 )}
+
+                {/* Authorize Design Stage */}
                 {selectedLead.data.stage === "qualified" &&
                   canAuthorizeDesign && (
-                    <div className="mt-5 border-t border-border pt-5">
+                    <div className="space-y-2 border-t pt-3">
                       <Button
-                        className="w-full"
+                        size="sm"
+                        className="w-full h-8 text-xs"
                         onClick={() => setShowAuthorizeDesign(true)}
                       >
-                        Authorize free design
+                        <DraftingCompass className="size-3.5 mr-1.5" />
+                        Authorize Free Design
                       </Button>
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        Creates an engineering handoff while the opportunity
-                        remains commercially unawarded.
+                      <p className="text-[11px] text-muted-foreground leading-tight">
+                        Triggers engineering handoff while opportunity remains unawarded.
                       </p>
                     </div>
                   )}
+
                 {selectedLead.data.stage === "design_authorized" && (
-                  <Alert className="mt-5">
-                    <AlertTitle>Free design authorized</AlertTitle>
-                    <AlertDescription>
-                      The assigned engineering handoff is ready for the P3
-                      design workspace. Commercial award remains independent.
+                  <Alert className="bg-primary/5 border-primary/20">
+                    <ShieldCheck className="size-4 text-primary" />
+                    <AlertTitle className="text-xs font-semibold">
+                      Design Authorized
+                    </AlertTitle>
+                    <AlertDescription className="text-xs text-muted-foreground">
+                      Ready for CAD workspace engineering. Commercial award is independent.
                     </AlertDescription>
                   </Alert>
                 )}
+
                 {stageChange.isError && (
-                  <Alert className="mt-4" variant="destructive">
-                    <AlertDescription>
+                  <Alert variant="destructive">
+                    <AlertDescription className="text-xs">
                       {getApiErrorMessage(stageChange.error)}
                     </AlertDescription>
                   </Alert>
@@ -650,48 +788,67 @@ export function LeadsPage() {
         </Card>
       </div>
 
-      {selectedLeads.size > 0 && (
-        <div className="fixed bottom-4 left-1/2 z-30 flex w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-2xl border border-border/80 bg-background/95 px-3 py-2 shadow-xl backdrop-blur-md sm:bottom-6 sm:w-auto sm:rounded-full">
-          <span className="px-2 text-sm font-medium tabular-nums">
-            {selectedLeads.size} selected
-          </span>
-          {canAssign && (
-            <Button
-              onClick={() => {
-                setBulkAssigneeId("");
-                bulkAssignment.reset();
-                setBulkAction("assign");
-              }}
-              size="sm"
-              variant="outline"
-            >
-              <UserRoundCheck />
-              Assign owner
-            </Button>
-          )}
-          {canWrite && (
-            <Button
-              onClick={() => {
-                bulkReminder.reset();
-                setBulkAction("reminder");
-              }}
-              size="sm"
-            >
-              <BellPlus />
-              Schedule reminder
-            </Button>
-          )}
-          <Button
-            aria-label="Clear selection"
-            onClick={() => setSelectedLeads(new Map())}
-            size="icon-sm"
-            variant="ghost"
+      {/* Floating Animated Bulk Action Bar */}
+      <AnimatePresence>
+        {selectedLeads.size > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="fixed bottom-4 left-1/2 z-30 flex w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 items-center justify-between gap-2 rounded-2xl border border-border/80 bg-background/95 px-3.5 py-2 shadow-2xl backdrop-blur-md"
           >
-            <X />
-          </Button>
-        </div>
-      )}
+            <div className="flex items-center gap-2">
+              <span className="flex size-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+                {selectedLeads.size}
+              </span>
+              <span className="text-xs font-medium text-foreground">Selected</span>
+            </div>
 
+            <div className="flex items-center gap-1.5">
+              {canAssign && (
+                <Button
+                  onClick={() => {
+                    setBulkAssigneeId("");
+                    bulkAssignment.reset();
+                    setBulkAction("assign");
+                  }}
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs"
+                >
+                  <UserRoundCheck className="size-3.5 mr-1" />
+                  Assign
+                </Button>
+              )}
+              {canWrite && (
+                <Button
+                  onClick={() => {
+                    bulkReminder.reset();
+                    setBulkAction("reminder");
+                  }}
+                  size="sm"
+                  className="h-8 text-xs"
+                >
+                  <BellPlus className="size-3.5 mr-1" />
+                  Reminder
+                </Button>
+              )}
+              <Button
+                aria-label="Clear selection"
+                onClick={() => setSelectedLeads(new Map())}
+                size="icon-sm"
+                variant="ghost"
+                className="size-8"
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Bulk Assign Dialog */}
       <Dialog
         onOpenChange={(open) => {
           if (!open) setBulkAction(undefined);
@@ -700,36 +857,39 @@ export function LeadsPage() {
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Assign selected leads</DialogTitle>
-            <DialogDescription>
-              Replace the current owner on {selectedLeads.size} selected lead
-              {selectedLeads.size === 1 ? "" : "s"}. Previous owners lose
-              owner-based visibility.
+            <DialogTitle>Assign Selected Leads</DialogTitle>
+            <DialogDescription className="text-xs">
+              Replace the owner for {selectedLeads.size} selected lead
+              {selectedLeads.size === 1 ? "" : "s"}.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <Label>New owner</Label>
+
+          <div className="mt-4 space-y-1.5">
+            <Label className="text-xs font-semibold">New Assigned Owner</Label>
             <Select onValueChange={setBulkAssigneeId} value={bulkAssigneeId}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Choose an active CRM employee" />
+              <SelectTrigger className="w-full h-9 text-xs">
+                <SelectValue placeholder="Choose active CRM employee…" />
               </SelectTrigger>
               <SelectContent>
                 {assignees.data?.map((assignee) => (
-                  <SelectItem key={assignee.id} value={assignee.id}>
-                    {assignee.name} · {assignee.email}
+                  <SelectItem key={assignee.id} value={assignee.id} className="text-xs">
+                    {assignee.name} ({assignee.email})
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
+
           {bulkAssignment.isError && (
             <ErrorMessage error={bulkAssignment.error} />
           )}
-          <DialogFooter>
+
+          <DialogFooter className="mt-6 border-t pt-3">
             <Button
               onClick={() => setBulkAction(undefined)}
               type="button"
               variant="outline"
+              size="sm"
             >
               Cancel
             </Button>
@@ -737,23 +897,25 @@ export function LeadsPage() {
               disabled={!bulkAssigneeId || bulkAssignment.isPending}
               onClick={() => bulkAssignment.mutate()}
               type="button"
+              size="sm"
             >
               {bulkAssignment.isPending && (
-                <LoaderCircle className="animate-spin" />
+                <Loader2 className="size-3.5 mr-1.5 animate-spin" />
               )}
-              Assign {selectedLeads.size}
+              Assign {selectedLeads.size} Lead{selectedLeads.size === 1 ? "" : "s"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
+      {/* Bulk Reminder Dialog */}
       <Dialog
         onOpenChange={(open) => {
           if (!open) setBulkAction(undefined);
         }}
         open={bulkAction === "reminder"}
       >
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -761,32 +923,40 @@ export function LeadsPage() {
             }}
           >
             <DialogHeader>
-              <DialogTitle>Schedule reminders</DialogTitle>
-              <DialogDescription>
-                Create the same auditable reminder for each of the{" "}
-                {selectedLeads.size} selected leads.
+              <DialogTitle>Schedule Batch Reminders</DialogTitle>
+              <DialogDescription className="text-xs">
+                Create a linked follow-up for each of the {selectedLeads.size} selected leads.
               </DialogDescription>
             </DialogHeader>
-            <div className="mt-5 grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="bulk-reminder-title">Title</Label>
+
+            <div className="mt-4 grid gap-3.5 sm:grid-cols-2">
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="bulk-reminder-title" className="text-xs font-semibold">
+                  Reminder Title
+                </Label>
                 <Input
                   id="bulk-reminder-title"
                   minLength={3}
                   name="title"
-                  placeholder="Follow up with customer"
+                  placeholder="e.g. Follow up on proposal"
+                  className="h-9 text-sm"
                   required
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="bulk-reminder-due">Due at</Label>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="bulk-reminder-due" className="text-xs font-semibold">
+                  Due At
+                </Label>
                 <Input
                   id="bulk-reminder-due"
                   name="dueAt"
-                  required
                   type="datetime-local"
+                  className="h-9 text-sm"
+                  required
                 />
               </div>
+
               <SelectField
                 items={[
                   { label: "One time", value: "none" },
@@ -800,6 +970,7 @@ export function LeadsPage() {
                 required
                 defaultValue="none"
               />
+
               {canAssign && (
                 <div className="sm:col-span-2">
                   <SelectField
@@ -818,20 +989,23 @@ export function LeadsPage() {
                 </div>
               )}
             </div>
+
             {bulkReminder.isError && (
               <ErrorMessage error={bulkReminder.error} />
             )}
-            <DialogFooter className="mt-6">
+
+            <DialogFooter className="mt-6 border-t pt-3">
               <Button
                 onClick={() => setBulkAction(undefined)}
                 type="button"
                 variant="outline"
+                size="sm"
               >
                 Cancel
               </Button>
-              <Button disabled={bulkReminder.isPending} type="submit">
+              <Button disabled={bulkReminder.isPending} type="submit" size="sm">
                 {bulkReminder.isPending && (
-                  <LoaderCircle className="animate-spin" />
+                  <Loader2 className="size-3.5 mr-1.5 animate-spin" />
                 )}
                 Schedule {selectedLeads.size}
               </Button>
@@ -848,16 +1022,18 @@ export function LeadsPage() {
         open={showImport}
         type="open_leads"
       />
+
       <AuthorizeDesignDialog
         lead={selectedLead.data}
         onOpenChange={setShowAuthorizeDesign}
         open={showAuthorizeDesign}
       />
 
+      {/* New Lead Modal */}
       {modal === "create" && (
         <Modal
-          description="Record the enquiry, its purpose, market sector, service, and owner."
-          title="New lead"
+          description="Record inquiry details, market sector classification, service line, and owner."
+          title="New Lead Entry"
           onClose={() => setModal(undefined)}
         >
           <form
@@ -866,10 +1042,10 @@ export function LeadsPage() {
               creation.mutate(new FormData(event.currentTarget));
             }}
           >
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Inquiry / lead name" name="inquiryName" required />
-              <Field label="Company (optional)" name="companyName" />
-              <Field label="Contact name" name="contactName" required />
+            <div className="grid gap-3.5 sm:grid-cols-2">
+              <Field label="Inquiry / Lead Name" name="inquiryName" required />
+              <Field label="Company Name (optional)" name="companyName" />
+              <Field label="Contact Person" name="contactName" required />
               <Field
                 label="Source"
                 name="source"
@@ -885,9 +1061,9 @@ export function LeadsPage() {
                     value: item.id,
                   })) ?? []
                 }
-                label="Service"
+                label="Service Category"
                 name="serviceCategoryId"
-                placeholder="Choose service"
+                placeholder="Choose service…"
                 required
               />
               <SelectField
@@ -897,9 +1073,9 @@ export function LeadsPage() {
                     value: item.id,
                   })) ?? []
                 }
-                label="Lead purpose"
+                label="Lead Purpose"
                 name="purposeId"
-                placeholder="Choose purpose"
+                placeholder="Choose purpose…"
                 required
               />
               <SelectField
@@ -909,9 +1085,9 @@ export function LeadsPage() {
                     value: item.id,
                   })) ?? []
                 }
-                label="Market sector"
+                label="Market Sector"
                 name="sectorId"
-                placeholder="Choose sector"
+                placeholder="Choose sector…"
                 required
               />
               {canAssign && (
@@ -922,33 +1098,46 @@ export function LeadsPage() {
                       value: item.id,
                     })) ?? []
                   }
-                  label="Owner"
+                  label="Assigned Owner"
                   name="ownerUserId"
                   placeholder="Assign to me"
                 />
               )}
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="lead-address">Address (optional)</Label>
-                <Textarea id="lead-address" name="address" />
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="lead-address" className="text-xs font-semibold">
+                  Site / Customer Address (optional)
+                </Label>
+                <Textarea
+                  id="lead-address"
+                  name="address"
+                  rows={2}
+                  className="text-sm"
+                  placeholder="Street, area, city, pincode…"
+                />
               </div>
             </div>
-            <p className="mt-3 text-xs text-muted-foreground">
-              A name and either phone or email are required.
+
+            <p className="mt-3 text-[11px] text-muted-foreground">
+              A contact name and either phone or email are required to create a lead.
             </p>
+
             {duplicates.length > 0 && <DuplicateNotice items={duplicates} />}
             {creation.isError && <ErrorMessage error={creation.error} />}
+
             <ModalActions
               pending={creation.isPending}
-              submit="Create lead"
+              submit="Create Lead"
               onCancel={() => setModal(undefined)}
             />
           </form>
         </Modal>
       )}
+
+      {/* New Service Category Modal */}
       {modal === "category" && (
         <Modal
-          description="Add an enabled service choice for lead capture."
-          title="New service category"
+          description="Add an active service category for ERP quotation and lead capture."
+          title="New Service Category"
           onClose={() => setModal(undefined)}
         >
           <form
@@ -957,29 +1146,33 @@ export function LeadsPage() {
               categoryCreation.mutate(new FormData(event.currentTarget));
             }}
           >
-            <Field label="Code" name="code" placeholder="FIRE_ALARM" required />
-            <div className="mt-4">
-              <Field label="Name" name="name" required />
+            <div className="space-y-3.5">
+              <Field label="Code" name="code" placeholder="FIRE_ALARM" required />
+              <Field label="Display Name" name="name" placeholder="Fire Alarm Systems" required />
             </div>
+
             {categoryCreation.isError && (
               <ErrorMessage error={categoryCreation.error} />
             )}
+
             <ModalActions
               pending={categoryCreation.isPending}
-              submit="Add service"
+              submit="Add Service"
               onCancel={() => setModal(undefined)}
             />
           </form>
         </Modal>
       )}
+
+      {/* Purpose / Sector Modal */}
       {(modal === "purpose" || modal === "sector") && (
         <Modal
           description={
             modal === "purpose"
-              ? "Add a selectable business reason for a lead."
-              : "Add a market sector that can receive its own BOQ template."
+              ? "Add a selectable business reason for enquiries."
+              : "Add a market sector linked to sector-based BOQ templates."
           }
-          title={modal === "purpose" ? "New lead purpose" : "New market sector"}
+          title={modal === "purpose" ? "New Lead Purpose" : "New Market Sector"}
           onClose={() => setModal(undefined)}
         >
           <form
@@ -988,30 +1181,39 @@ export function LeadsPage() {
               classificationCreation.mutate(new FormData(event.currentTarget));
             }}
           >
-            <Field
-              label="Code"
-              name="code"
-              placeholder={modal === "purpose" ? "ANNUAL_RENEWAL" : "EDUCATION"}
-              required
-            />
-            <div className="mt-4">
-              <Field label="Name" name="name" required />
+            <div className="space-y-3.5">
+              <Field
+                label="Classification Code"
+                name="code"
+                placeholder={modal === "purpose" ? "ANNUAL_RENEWAL" : "EDUCATION"}
+                required
+              />
+              <Field
+                label="Classification Name"
+                name="name"
+                placeholder={modal === "purpose" ? "Annual Maintenance Contract" : "Educational Institutions"}
+                required
+              />
             </div>
+
             {classificationCreation.isError && (
               <ErrorMessage error={classificationCreation.error} />
             )}
+
             <ModalActions
               pending={classificationCreation.isPending}
-              submit="Add classification"
+              submit="Add Classification"
               onCancel={() => setModal(undefined)}
             />
           </form>
         </Modal>
       )}
+
+      {/* Qualify Lead Modal */}
       {modal === "qualify" && selectedLead.data && (
         <Modal
-          description="Link an in-scope customer and create an unawarded opportunity."
-          title="Qualify lead"
+          description="Link an in-scope customer account and generate an unawarded opportunity."
+          title="Qualify Lead"
           onClose={() => setModal(undefined)}
         >
           <form
@@ -1020,21 +1222,22 @@ export function LeadsPage() {
               qualification.mutate(new FormData(event.currentTarget));
             }}
           >
-            <SelectField
-              items={
-                customers.data?.items.map((item) => ({
-                  label: item.displayName,
-                  value: item.id,
-                })) ?? []
-              }
-              label="Customer"
-              name="customerId"
-              onValueChange={setSelectedCustomerId}
-              placeholder="Choose an in-scope customer"
-              required
-              value={selectedCustomerId || undefined}
-            />
-            <div className="mt-4">
+            <div className="space-y-3.5">
+              <SelectField
+                items={
+                  customers.data?.items.map((item) => ({
+                    label: item.displayName,
+                    value: item.id,
+                  })) ?? []
+                }
+                label="Customer Account"
+                name="customerId"
+                onValueChange={setSelectedCustomerId}
+                placeholder="Choose in-scope customer…"
+                required
+                value={selectedCustomerId || undefined}
+              />
+
               <SelectField
                 disabled={!selectedCustomer.data}
                 items={
@@ -1042,13 +1245,14 @@ export function LeadsPage() {
                     .filter((item) => item.status === "active")
                     .map((item) => ({ label: item.name, value: item.id })) ?? []
                 }
-                label="Primary contact"
+                label="Primary Contact Person"
                 name="primaryContactId"
-                placeholder="Choose contact"
+                placeholder={
+                  selectedCustomer.data ? "Choose contact person…" : "Select customer first"
+                }
                 required
               />
-            </div>
-            <div className="mt-4">
+
               <SelectField
                 disabled={!selectedCustomer.data}
                 items={
@@ -1056,44 +1260,54 @@ export function LeadsPage() {
                     .filter((item) => item.status === "active")
                     .map((item) => ({ label: item.name, value: item.id })) ?? []
                 }
-                label="Site (optional at qualification)"
+                label="Customer Site (optional)"
                 name="siteId"
-                placeholder="No site selected"
+                placeholder={
+                  selectedCustomer.data ? "Select site location (optional)…" : "Select customer first"
+                }
               />
-            </div>
-            <div className="mt-4">
+
               <Field
                 defaultValue={selectedLead.data.inquiryName}
-                label="Opportunity title"
+                label="Opportunity Title"
                 name="title"
                 required
               />
+
+              <div className="space-y-1.5">
+                <Label htmlFor="qualification-notes" className="text-xs font-semibold">
+                  Qualification Notes
+                </Label>
+                <Textarea
+                  id="qualification-notes"
+                  minLength={3}
+                  name="qualificationNotes"
+                  rows={3}
+                  className="text-sm"
+                  placeholder="Scope scope details, budget expectations, timeline…"
+                  required
+                />
+              </div>
             </div>
-            <div className="mt-4 space-y-2">
-              <Label htmlFor="qualification-notes">Qualification notes</Label>
-              <Textarea
-                id="qualification-notes"
-                minLength={3}
-                name="qualificationNotes"
-                required
-              />
-            </div>
-            <p className="mt-3 text-xs text-muted-foreground">
-              This creates an unawarded opportunity. It does not confirm a
-              quotation, customer PO, or project start.
+
+            <p className="mt-3 text-[11px] text-muted-foreground leading-tight">
+              Creates an unawarded opportunity. Does not confirm quotations or project start.
             </p>
+
             {qualification.isError && (
               <ErrorMessage error={qualification.error} />
             )}
+
             <ModalActions
               pending={qualification.isPending}
-              submit="Create opportunity"
+              submit="Create Opportunity"
               onCancel={() => setModal(undefined)}
             />
           </form>
         </Modal>
       )}
 
+      {/* Mark Lead Lost Modal */}
       <Dialog
         onOpenChange={(open) => {
           if (!open) setLostLead(undefined);
@@ -1113,44 +1327,67 @@ export function LeadsPage() {
               }}
             >
               <DialogHeader>
-                <DialogTitle>Mark lead as lost</DialogTitle>
-                <DialogDescription>
-                  Record why this enquiry will not progress. The history remains
-                  auditable.
+                <DialogTitle>Mark Lead as Lost</DialogTitle>
+                <DialogDescription className="text-xs">
+                  Record why this inquiry will not progress. The record and reason remain permanently audited.
                 </DialogDescription>
               </DialogHeader>
-              <div className="mt-5 space-y-2">
-                <Label htmlFor="lost-reason">Reason</Label>
+
+              <div className="mt-4 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="lost-reason" className="text-xs font-semibold">
+                    Loss Reason <span className="text-destructive">*</span>
+                  </Label>
+                  <span
+                    className={cn(
+                      "text-[10px] font-mono",
+                      lostReason.trim().length >= 3
+                        ? "text-muted-foreground"
+                        : "text-destructive font-medium",
+                    )}
+                  >
+                    {lostReason.trim().length}/1000
+                  </span>
+                </div>
                 <Textarea
                   id="lost-reason"
                   minLength={3}
+                  maxLength={1000}
+                  rows={3}
+                  className="text-sm"
+                  placeholder="Competitor price, project cancelled, non-responsive…"
                   onChange={(event) => setLostReason(event.target.value)}
-                  required
                   value={lostReason}
+                  required
                 />
               </div>
+
               {stageChange.isError && (
                 <ErrorMessage error={stageChange.error} />
               )}
-              <DialogFooter className="mt-5">
+
+              <DialogFooter className="mt-5 border-t pt-3">
                 <Button
                   onClick={() => setLostLead(undefined)}
                   type="button"
                   variant="outline"
+                  size="sm"
                 >
                   Cancel
                 </Button>
                 <Button
-                  disabled={
-                    stageChange.isPending || lostReason.trim().length < 3
-                  }
+                  disabled={stageChange.isPending || lostReason.trim().length < 3}
                   type="submit"
                   variant="destructive"
+                  size="sm"
                 >
-                  {stageChange.isPending && (
-                    <LoaderCircle className="animate-spin" />
+                  {stageChange.isPending ? (
+                    <>
+                      <Loader2 className="size-3.5 mr-1.5 animate-spin" /> Updating…
+                    </>
+                  ) : (
+                    "Mark Lost"
                   )}
-                  Mark lost
                 </Button>
               </DialogFooter>
             </form>
@@ -1165,27 +1402,36 @@ function EmptyLeads() {
   return (
     <div className="grid min-h-48 place-items-center p-6 text-center">
       <div>
-        <CircleDot className="mx-auto text-muted-foreground" />
-        <p className="mt-3 font-medium">No leads in this view</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Create a lead or change the filters.
+        <CircleDot className="mx-auto size-6 text-muted-foreground/40" />
+        <p className="mt-2 text-xs font-semibold text-foreground">No leads in this view</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          Create a new lead or adjust your filter parameters.
         </p>
       </div>
     </div>
   );
 }
+
 function Field({
   label,
   name,
   ...input
 }: { label: string; name: string } & React.ComponentProps<typeof Input>) {
   return (
-    <div className="space-y-2">
-      <Label htmlFor={`lead-${name}`}>{label}</Label>
-      <Input className="min-h-11" id={`lead-${name}`} name={name} {...input} />
+    <div className="space-y-1.5">
+      <Label htmlFor={`lead-${name}`} className="text-xs font-semibold">
+        {label}
+      </Label>
+      <Input
+        id={`lead-${name}`}
+        name={name}
+        className="h-9 text-sm"
+        {...input}
+      />
     </div>
   );
 }
+
 function SelectField({
   label,
   name,
@@ -1200,15 +1446,17 @@ function SelectField({
 } & React.ComponentProps<typeof Select>) {
   const id = `lead-${name}`;
   return (
-    <div className="space-y-2">
-      <Label htmlFor={id}>{label}</Label>
+    <div className="space-y-1.5">
+      <Label htmlFor={id} className="text-xs font-semibold">
+        {label}
+      </Label>
       <Select name={name} {...props}>
-        <SelectTrigger className="min-h-11 w-full" id={id}>
+        <SelectTrigger className="w-full h-9 text-xs" id={id}>
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
           {items.map((item) => (
-            <SelectItem key={item.value} value={item.value}>
+            <SelectItem key={item.value} value={item.value} className="text-xs">
               {item.label}
             </SelectItem>
           ))}
@@ -1217,6 +1465,7 @@ function SelectField({
     </div>
   );
 }
+
 function Modal({
   title,
   description,
@@ -1235,16 +1484,17 @@ function Modal({
       }}
       open
     >
-      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
+          <DialogDescription className="text-xs">{description}</DialogDescription>
         </DialogHeader>
-        {children}
+        <div className="mt-2">{children}</div>
       </DialogContent>
     </Dialog>
   );
 }
+
 function ModalActions({
   pending,
   submit,
@@ -1255,32 +1505,41 @@ function ModalActions({
   onCancel: () => void;
 }) {
   return (
-    <DialogFooter className="mt-6">
-      <Button onClick={onCancel} type="button" variant="outline">
+    <DialogFooter className="mt-6 border-t pt-3">
+      <Button onClick={onCancel} type="button" variant="outline" size="sm">
         Cancel
       </Button>
-      <Button disabled={pending} type="submit">
-        {pending && <LoaderCircle className="animate-spin" />}
-        {submit}
+      <Button disabled={pending} type="submit" size="sm">
+        {pending ? (
+          <>
+            <Loader2 className="size-3.5 mr-1.5 animate-spin" /> Saving…
+          </>
+        ) : (
+          submit
+        )}
       </Button>
     </DialogFooter>
   );
 }
+
 function ErrorMessage({ error }: { error: unknown }) {
   return (
     <Alert className="mt-4" variant="destructive">
-      <AlertDescription>{getApiErrorMessage(error)}</AlertDescription>
+      <AlertDescription className="text-xs">
+        {getApiErrorMessage(error)}
+      </AlertDescription>
     </Alert>
   );
 }
+
 function DuplicateNotice({ items }: { items: DuplicateHint[] }) {
   return (
-    <Alert className="mt-4">
-      <AlertTitle>
-        Possible duplicates found; the records were not merged.
+    <Alert className="mt-4 bg-amber-500/10 border-amber-500/20">
+      <AlertTitle className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+        Possible duplicates detected (records were not merged)
       </AlertTitle>
-      <AlertDescription>
-        <ul className="mt-2 list-disc pl-5">
+      <AlertDescription className="mt-1 text-xs text-muted-foreground">
+        <ul className="list-disc pl-4 space-y-0.5">
           {items.map((item) => (
             <li key={`${item.type}-${item.id}`}>
               {item.label} — {item.reason}

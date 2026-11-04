@@ -1463,6 +1463,299 @@ async function ensurePriceInquiryScenario(
   }
 }
 
+async function ensurePurchaseOrderScenario(
+  client: PoolClient,
+  input: {
+    companyId: string;
+    projectId: string;
+    buyerId: string;
+    managerId: string;
+    adminId: string;
+  },
+) {
+  const reqRow = await client.query<{ id: string }>(
+    `select id from procurement_requisitions where company_id = $1 and requisition_number = 'DEMO-REQ-PO-001'`,
+    [input.companyId],
+  );
+  const reqId = reqRow.rows[0]?.id ?? null;
+
+  const vendorRows = await client.query<{ id: string; code: string; displayName: string }>(
+    `select id, code, display_name as "displayName" from vendors where company_id = $1 and code in ('DEMO-VEN-001', 'DEMO-VEN-002') order by code`,
+    [input.companyId],
+  );
+  if (vendorRows.rows.length < 2) return;
+  const sentinel = vendorRows.rows.find((v) => v.code === 'DEMO-VEN-001')!;
+  const flametech = vendorRows.rows.find((v) => v.code === 'DEMO-VEN-002')!;
+
+  const itemRows = await client.query<{
+    id: string;
+    code: string;
+    name: string;
+    specification: string;
+    unitId: string;
+    unitSymbol: string;
+  }>(
+    `select i.id, i.code, i.name, i.specification, i.unit_id as "unitId", u.symbol as "unitSymbol"
+     from items i
+     join units u on u.id = i.unit_id
+     where i.company_id = $1 and i.code in ('DEMO-SMOKE', 'DEMO-ABC-06', 'DEMO-MS-P65')
+     order by i.code`,
+    [input.companyId],
+  );
+  const smoke = itemRows.rows.find((i) => i.code === 'DEMO-SMOKE');
+  const abc = itemRows.rows.find((i) => i.code === 'DEMO-ABC-06');
+  const pipe = itemRows.rows.find((i) => i.code === 'DEMO-MS-P65');
+  if (!smoke || !abc || !pipe) return;
+
+  // 1. DEMO-PO-001: Issued & Partially Delivered with Inspection
+  const po1 = await one<IdRow>(
+    client,
+    `
+    insert into purchase_orders (
+      company_id, project_id, vendor_id, requisition_id, po_number, title,
+      status, currency, payment_terms, delivery_terms, delivery_location,
+      delivery_due_date, billing_address, shipping_address, notes,
+      current_revision_number, subtotal, tax_amount, grand_total, created_by_user_id, row_version
+    ) values (
+      $1, $2, $3, $4, 'DEMO-PO-001', 'Supply of optical smoke detectors - Sentinel Security',
+      'partially_delivered', 'INR', '30 days from supply against delivery challan',
+      'Site delivery, transit insurance included', 'Demo project site, Ahmedabad',
+      current_date + 14, 'Fire Safety Corp HQ, Ahmedabad', 'Demo project site, Ahmedabad',
+      'Delivery in two lots as per installation phase schedule.',
+      0, '11400.00', '2052.00', '13452.00', $5, 1
+    )
+    on conflict (company_id, po_number) do update
+      set status = excluded.status, subtotal = excluded.subtotal, tax_amount = excluded.tax_amount, grand_total = excluded.grand_total
+    returning id
+  `,
+    [input.companyId, input.projectId, sentinel.id, reqId, input.buyerId],
+  );
+
+  const rev1 = await one<IdRow>(
+    client,
+    `
+    insert into purchase_order_revisions (
+      company_id, purchase_order_id, revision_number, status, subtotal, tax_amount, grand_total,
+      change_reason, prepared_by_user_id, submitted_at, approved_by_user_id, approved_at,
+      approval_notes, issued_at, row_version
+    ) values (
+      $1, $2, 0, 'issued', '11400.00', '2052.00', '13452.00',
+      null, $3, now() - interval '5 days', $4, now() - interval '4 days',
+      'Commercial rates and 18% GST verified against evaluated RFQ offers.', now() - interval '3 days', 1
+    )
+    on conflict (purchase_order_id, revision_number) do update
+      set status = excluded.status, grand_total = excluded.grand_total
+    returning id
+  `,
+    [input.companyId, po1.id, input.buyerId, input.managerId],
+  );
+
+  const poLine1 = await one<IdRow>(
+    client,
+    `
+    insert into purchase_order_lines (
+      company_id, purchase_order_id, revision_id, line_number, item_id,
+      item_code_snapshot, item_name_snapshot, specification_snapshot, brand_offered,
+      unit_id, unit_symbol_snapshot, quantity, unit_rate, tax_percent, tax_amount, line_total,
+      received_quantity, accepted_quantity, rejected_quantity
+    ) values (
+      $1, $2, $3, 1, $4,
+      $5, $6, $7, 'Sentinel',
+      $8, $9, '12.0000', '950.00', '18.00', '2052.00', '13452.00',
+      '6.0000', '5.0000', '1.0000'
+    )
+    on conflict (revision_id, line_number) do update
+      set received_quantity = excluded.received_quantity, accepted_quantity = excluded.accepted_quantity, rejected_quantity = excluded.rejected_quantity
+    returning id
+  `,
+    [
+      input.companyId,
+      po1.id,
+      rev1.id,
+      smoke.id,
+      smoke.code,
+      smoke.name,
+      smoke.specification,
+      smoke.unitId,
+      smoke.unitSymbol,
+    ],
+  );
+
+  // Goods Receipt against DEMO-PO-001
+  const grn1 = await one<IdRow>(
+    client,
+    `
+    insert into goods_receipts (
+      company_id, purchase_order_id, grn_number, vendor_challan_number, vendor_challan_date,
+      received_at, received_by_user_id, status, delivery_location, vehicle_number, transporter_name, notes, row_version
+    ) values (
+      $1, $2, 'DEMO-GRN-001', 'CH-SENT-9921', current_date - 2,
+      now() - interval '2 days', $3, 'partially_rejected', 'Demo project site, Ahmedabad',
+      'GJ-01-AB-1234', 'Gujarat Roadways Logistics', 'Partial first consignment of 6 units received.', 1
+    )
+    on conflict (company_id, grn_number) do update
+      set status = excluded.status
+    returning id
+  `,
+    [input.companyId, po1.id, input.buyerId],
+  );
+
+  await client.query(
+    `
+    insert into goods_receipt_lines (
+      company_id, goods_receipt_id, purchase_order_line_id, line_number,
+      delivered_quantity, accepted_quantity, rejected_quantity, rejection_reason,
+      inspection_notes, inspected_by_user_id, inspected_at
+    ) values (
+      $1, $2, $3, 1,
+      '6.0000', '5.0000', '1.0000', 'Physical hairline casing crack observed during continuity and bench test.',
+      '5 detectors passed continuity and LED blink bench check; 1 unit marked and returned with delivery vehicle.', $4, now() - interval '1 day'
+    )
+    on conflict (goods_receipt_id, line_number) do update
+      set accepted_quantity = excluded.accepted_quantity, rejected_quantity = excluded.rejected_quantity
+  `,
+    [input.companyId, grn1.id, poLine1.id, input.managerId],
+  );
+
+  // 2. DEMO-PO-002: Approved awaiting PDF issuance
+  const po2 = await one<IdRow>(
+    client,
+    `
+    insert into purchase_orders (
+      company_id, project_id, vendor_id, po_number, title,
+      status, currency, payment_terms, delivery_terms, delivery_location,
+      delivery_due_date, billing_address, shipping_address, notes,
+      current_revision_number, subtotal, tax_amount, grand_total, created_by_user_id, row_version
+    ) values (
+      $1, $2, $3, 'DEMO-PO-002', 'Supply of 6kg ABC fire extinguishers - FlameTech',
+      'approved', 'INR', '50% advance, balance on delivery inspection',
+      'Ex-works delivery', 'Demo project site, Ahmedabad',
+      current_date + 7, 'Fire Safety Corp HQ, Ahmedabad', 'Demo project site, Ahmedabad',
+      'Include calibration test certificate for cylinder hydro-testing.',
+      0, '8000.00', '1440.00', '9440.00', $4, 1
+    )
+    on conflict (company_id, po_number) do update
+      set status = excluded.status, subtotal = excluded.subtotal, tax_amount = excluded.tax_amount, grand_total = excluded.grand_total
+    returning id
+  `,
+    [input.companyId, input.projectId, flametech.id, input.buyerId],
+  );
+
+  const rev2 = await one<IdRow>(
+    client,
+    `
+    insert into purchase_order_revisions (
+      company_id, purchase_order_id, revision_number, status, subtotal, tax_amount, grand_total,
+      change_reason, prepared_by_user_id, submitted_at, approved_by_user_id, approved_at,
+      approval_notes, row_version
+    ) values (
+      $1, $2, 0, 'approved', '8000.00', '1440.00', '9440.00',
+      null, $3, now() - interval '1 day', $4, now() - interval '2 hours',
+      'Approved for issuance to vendor FlameTech.', 1
+    )
+    on conflict (purchase_order_id, revision_number) do update
+      set status = excluded.status, grand_total = excluded.grand_total
+    returning id
+  `,
+    [input.companyId, po2.id, input.buyerId, input.managerId],
+  );
+
+  await client.query(
+    `
+    insert into purchase_order_lines (
+      company_id, purchase_order_id, revision_id, line_number, item_id,
+      item_code_snapshot, item_name_snapshot, specification_snapshot, brand_offered,
+      unit_id, unit_symbol_snapshot, quantity, unit_rate, tax_percent, tax_amount, line_total
+    ) values (
+      $1, $2, $3, 1, $4,
+      $5, $6, $7, 'FlameTech',
+      $8, $9, '10.0000', '800.00', '18.00', '1440.00', '9440.00'
+    )
+    on conflict (revision_id, line_number) do update
+      set unit_rate = excluded.unit_rate, line_total = excluded.line_total
+  `,
+    [
+      input.companyId,
+      po2.id,
+      rev2.id,
+      abc.id,
+      abc.code,
+      abc.name,
+      abc.specification,
+      abc.unitId,
+      abc.unitSymbol,
+    ],
+  );
+
+  // 3. DEMO-PO-003: Draft direct PO
+  const po3 = await one<IdRow>(
+    client,
+    `
+    insert into purchase_orders (
+      company_id, project_id, vendor_id, po_number, title,
+      status, currency, payment_terms, delivery_terms, delivery_location,
+      delivery_due_date, billing_address, shipping_address, notes,
+      current_revision_number, subtotal, tax_amount, grand_total, created_by_user_id, row_version
+    ) values (
+      $1, $2, $3, 'DEMO-PO-003', 'Draft PO for MS Heavy Piping 65mm',
+      'draft', 'INR', '30 days net',
+      'Site delivery', 'Demo project site, Ahmedabad',
+      current_date + 21, 'Fire Safety Corp HQ, Ahmedabad', 'Demo project site, Ahmedabad',
+      'Awaiting thickness test verification before submitting for approval.',
+      0, '6900.00', '1242.00', '8142.00', $4, 1
+    )
+    on conflict (company_id, po_number) do update
+      set status = excluded.status, subtotal = excluded.subtotal, tax_amount = excluded.tax_amount, grand_total = excluded.grand_total
+    returning id
+  `,
+    [input.companyId, input.projectId, sentinel.id, input.buyerId],
+  );
+
+  const rev3 = await one<IdRow>(
+    client,
+    `
+    insert into purchase_order_revisions (
+      company_id, purchase_order_id, revision_number, status, subtotal, tax_amount, grand_total,
+      change_reason, prepared_by_user_id, row_version
+    ) values (
+      $1, $2, 0, 'draft', '6900.00', '1242.00', '8142.00',
+      null, $3, 1
+    )
+    on conflict (purchase_order_id, revision_number) do update
+      set status = excluded.status, grand_total = excluded.grand_total
+    returning id
+  `,
+    [input.companyId, po3.id, input.buyerId],
+  );
+
+  await client.query(
+    `
+    insert into purchase_order_lines (
+      company_id, purchase_order_id, revision_id, line_number, item_id,
+      item_code_snapshot, item_name_snapshot, specification_snapshot, brand_offered,
+      unit_id, unit_symbol_snapshot, quantity, unit_rate, tax_percent, tax_amount, line_total
+    ) values (
+      $1, $2, $3, 1, $4,
+      $5, $6, $7, 'Sentinel',
+      $8, $9, '10.0000', '690.00', '18.00', '1242.00', '8142.00'
+    )
+    on conflict (revision_id, line_number) do update
+      set unit_rate = excluded.unit_rate, line_total = excluded.line_total
+  `,
+    [
+      input.companyId,
+      po3.id,
+      rev3.id,
+      pipe.id,
+      pipe.code,
+      pipe.name,
+      pipe.specification,
+      pipe.unitId,
+      pipe.unitSymbol,
+    ],
+  );
+}
+
 async function seedCurrentWorkflows(client: PoolClient, input: {
   companyId: string; companyName: string; adminId: string; managerId: string; executiveId: string;
   designerId: string; headId: string; purchaseId: string; purchaseManagerId: string; serviceCategoryId: string;
@@ -2400,6 +2693,13 @@ async function seed() {
     await ensurePriceInquiryScenario(client, {
       companyId: company.id,
       userId: purchaseExecutiveId,
+    });
+    await ensurePurchaseOrderScenario(client, {
+      companyId: company.id,
+      projectId: procurementProject.id,
+      buyerId: purchaseExecutiveId,
+      managerId: purchaseManagerId,
+      adminId,
     });
     await ensureQuotationScenario(client, {
       companyId: company.id,

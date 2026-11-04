@@ -9,11 +9,20 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { publicPriceInquiryQuery, useSubmitPublicPriceResponse, type InquiryItem } from '@/api/priceInquiry';
 
 type ResponseRow = {
   itemRef: InquiryItem;
   unitRate: string;
+  brandOffered: string;
+  isCustomBrand: boolean;
   currency: string;
   leadTimeDays: string;
   notes: string;
@@ -32,15 +41,24 @@ export function PublicPriceSubmissionPage() {
   useEffect(() => {
     if (data?.inquiry?.items) {
       setRows(
-        (data.inquiry.items as InquiryItem[]).map((item) => ({
-          itemRef: item,
-          unitRate: '',
-          currency: 'INR',
-          leadTimeDays: '',
-          notes: '',
-          moq: '',
-          validUntil: '',
-        })),
+        (data.inquiry.items as InquiryItem[]).map((item) => {
+          const defaultBrand =
+            item.eligibleBrands?.find((b) => b.isPreferred)?.name ??
+            item.eligibleBrands?.[0]?.name ??
+            item.brandOffered ??
+            "";
+          return {
+            itemRef: item,
+            unitRate: "",
+            brandOffered: defaultBrand,
+            isCustomBrand: false,
+            currency: "INR",
+            leadTimeDays: "",
+            notes: "",
+            moq: "",
+            validUntil: "",
+          };
+        }),
       );
     }
   }, [data]);
@@ -58,15 +76,28 @@ export function PublicPriceSubmissionPage() {
       return;
     }
 
-    const responses = validRows.map((r) => ({
-      itemRef: r.itemRef,
-      unitRate: r.unitRate.trim(),
-      currency: r.currency || 'INR',
-      leadTimeDays: r.leadTimeDays ? parseInt(r.leadTimeDays, 10) : undefined,
-      notes: r.notes.trim() || undefined,
-      moq: r.moq.trim() || undefined,
-      validUntil: r.validUntil || undefined,
-    }));
+    const responses = validRows.map((r) => {
+      const brand = r.brandOffered?.trim();
+      const combinedNotes = [
+        brand ? `Brand: ${brand}` : null,
+        r.notes.trim() || null,
+      ]
+        .filter(Boolean)
+        .join(' · ');
+
+      return {
+        itemRef: {
+          ...r.itemRef,
+          brandOffered: brand || undefined,
+        },
+        unitRate: r.unitRate.trim(),
+        currency: r.currency || 'INR',
+        leadTimeDays: r.leadTimeDays ? parseInt(r.leadTimeDays, 10) : undefined,
+        notes: combinedNotes || undefined,
+        moq: r.moq.trim() || undefined,
+        validUntil: r.validUntil || undefined,
+      };
+    });
 
     try {
       await submitMutation.mutateAsync({ responses, saveToPriceList: true });
@@ -252,6 +283,65 @@ export function PublicPriceSubmissionPage() {
 
                   {/* Input Fields */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-1">
+                    {/* Brand / Make Selection */}
+                    {row.itemRef.eligibleBrands && row.itemRef.eligibleBrands.length > 0 ? (
+                      <div className="sm:col-span-2 space-y-1">
+                        <Label className="text-xs font-medium">
+                          Brand / Make <span className="text-muted-foreground text-[11px]">(from catalogue)</span>
+                        </Label>
+                        <Select
+                          value={row.isCustomBrand ? "__other__" : (row.brandOffered || row.itemRef.eligibleBrands[0]?.name || "")}
+                          onValueChange={(val) => {
+                            if (val === "__other__") {
+                              setRows((prev) =>
+                                prev.map((r, i) =>
+                                  i === idx ? { ...r, isCustomBrand: true, brandOffered: "" } : r,
+                                ),
+                              );
+                            } else {
+                              setRows((prev) =>
+                                prev.map((r, i) =>
+                                  i === idx ? { ...r, isCustomBrand: false, brandOffered: val } : r,
+                                ),
+                              );
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="text-xs">
+                            <SelectValue placeholder="Select Brand / Make" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {row.itemRef.eligibleBrands.map((b) => (
+                              <SelectItem key={b.id} value={b.name} className="text-xs">
+                                {b.name} {b.model ? `· ${b.model}` : ""} {b.isPreferred ? "★ (Preferred)" : ""}
+                              </SelectItem>
+                            ))}
+                            <SelectItem value="__other__" className="text-xs">
+                              Other / Alternative Make…
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {row.isCustomBrand && (
+                          <Input
+                            placeholder="Type alternative brand / manufacturer…"
+                            value={row.brandOffered}
+                            onChange={(e) => updateRow(idx, "brandOffered", e.target.value)}
+                            className="text-xs mt-1.5"
+                          />
+                        )}
+                      </div>
+                    ) : (
+                      <div className="sm:col-span-2 space-y-1">
+                        <Label className="text-xs font-medium">Brand / Make</Label>
+                        <Input
+                          placeholder="e.g. Manufacturer / Make"
+                          value={row.brandOffered}
+                          onChange={(e) => updateRow(idx, "brandOffered", e.target.value)}
+                          className="text-xs"
+                        />
+                      </div>
+                    )}
+
                     <div className="space-y-1">
                       <Label className="text-xs font-medium">
                         Unit Rate (₹) <span className="text-destructive">*</span>
@@ -301,10 +391,10 @@ export function PublicPriceSubmissionPage() {
 
                     <div className="sm:col-span-2 md:col-span-4 space-y-1">
                       <Label className="text-xs font-medium">
-                        Brand / Make / Warranty Notes (optional)
+                        Warranty & Commercial Notes (optional)
                       </Label>
                       <Textarea
-                        placeholder="Specify make, model, warranty terms, or exclusions…"
+                        placeholder="Specify warranty terms, exclusions, delivery conditions…"
                         value={row.notes}
                         onChange={(e) => updateRow(idx, 'notes', e.target.value)}
                         rows={1}

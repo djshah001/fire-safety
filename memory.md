@@ -1,5 +1,84 @@
 # Fire Safety — Decision and Status Memory
 
+## Phase 4: Purchase Orders (PO) & Goods Receipts (GRN) Lifecycle — 2026-11-04
+
+- **Context & Scope**:
+  - Implemented Phase 4 Checkpoints 3 & 4 covering the complete procurement order issuance, immutable revisions, PDF generation, site delivery tracking, and receiving inspection workflow.
+  - Procurement pilot tracks PO line deliveries, inspection, rejection, and returns. Warehouse inventory ledger/reservations/consumption remain later (P6). Receipt totals are not presented as stock on hand. Tally remains the accounting source during pilot.
+- **Database Schema & Migrations (`server/drizzle/0024_romantic_venom.sql`)**:
+  - Created enums: `purchase_order_status` (`draft`, `pending_approval`, `approved`, `issued`, `partially_delivered`, `delivered`, `closed`, `cancelled`), `purchase_order_revision_status` (`draft`, `submitted`, `approved`, `issued`, `superseded`, `cancelled`), and `goods_receipt_status` (`draft`, `inspected`, `accepted`, `partially_rejected`, `rejected`).
+  - Created tables:
+    - `purchase_orders`: Company-scoped, project and vendor linked, with atomic `po_number`, payment/delivery terms, subtotal/tax/grand totals, currency validation, and row-version optimistic concurrency.
+    - `purchase_order_revisions`: Sequential revisions starting at `R00`, tracking preparer, submitter, approver, approval notes, issued timestamp, private PDF storage ID, and SHA-256 integrity checksum. Mandatory non-empty change reason enforced for amendments (`R01+`).
+    - `purchase_order_lines`: Exact line items with item snapshots, approved brand/make, 4-decimal quantity, unit rate, tax breakdown, line total, and real-time accumulated `received_quantity`, `accepted_quantity`, and `rejected_quantity`.
+    - `goods_receipts`: Tracks inbound shipments with atomic `grn_number`, vendor challan number/date, receiving user, transporter, vehicle number, and status.
+    - `goods_receipt_lines`: Line shipments with delivered quantity, inspected accepted vs rejected quantities (`delivered >= accepted + rejected`), and mandatory rejection reason when `rejected_quantity > 0`.
+  - Cleaned migration 0024 and applied to local PostgreSQL (`drizzle-kit migrate` & `drizzle-kit check` PASS).
+- **Backend Architecture & Security**:
+  - `server/src/core/security/permissions.ts`: Added `procurement.purchase_order.*` (`read`, `create`, `approve`, `issue`, `amend`) and `procurement.goods_receipt.*` (`read`, `manage`, `inspect`). Independent approval invariant enforced (no self-approval for non-administrators, audited overrides for administrators).
+  - `server/src/modules/procurement/purchaseOrder.service.ts`:
+    - `createFromRequisition()`: Generates an authoritative PO directly from a selected vendor offer, carrying forward normalized rates, catalogue brand/make, and technical specifications.
+    - `createDirect()`: Supports direct commercial purchase order creation against project scope.
+    - `submitRevision()`, `approveRevision()`: Enforces contributor tracking and approval state transitions.
+    - `issuePurchaseOrder()`: Renders signed commercial PDF via Puppeteer in isolated Chrome context (`purchaseOrder.template.ts`, `purchaseOrder.pdf.ts`), stores private artifact, computes SHA-256 checksum, and transitions PO to `issued`.
+    - `amendPurchaseOrder()`: Creates next immutable revision `R(n+1)` with mandatory audit change reason, preserving all historical issued baselines.
+    - `createGoodsReceipt()`, `inspectGoodsReceipt()`: Records shipments, updates line received/accepted/rejected balances, and advances PO status to `partially_delivered` or `delivered`.
+  - `server/src/modules/procurement/purchaseOrder.routes.ts`: Mounted at `/api/v1/procurement/purchase-orders` and `/api/v1/procurement/goods-receipts/:grnId/inspect`.
+- **Frontend Architecture & UI Components**:
+  - `client/src/api/purchaseOrders.ts`: Typed TypeScript DTOs and TanStack Query options/factories (`purchaseOrdersQuery`, `purchaseOrderWorkspaceQuery`, mutations).
+  - `client/src/components/ui/tabs.tsx`: Accessible Radix UI tab primitive.
+  - `client/src/features/procurement/PurchaseOrdersPage.tsx`: Directory view utilizing `ServerDataTable`, `ListToolbar`, status filtering (`draft`, `pending_approval`, `approved`, `issued`, `partially_delivered`, `delivered`, `closed`, `cancelled`), tabular-nums grand totals, and deep links.
+  - `client/src/features/procurement/PurchaseOrderWorkspacePage.tsx`: Full operational workspace with header status badges, action dialogs (submit, approve, issue PDF, amend, cancel), Line Items tab with real-time fulfillment progress bar and status tags, Goods Receipts & Inspection tab with line-by-line inspection cards, and Revision History timeline.
+  - `client/src/features/procurement/GoodsReceiptSheet.tsx`: Side-sheet for receiving shipments with challan details and line delivery inputs.
+  - `client/src/features/procurement/RequisitionWorkspacePage.tsx`: Added "Generate Purchase Order" CTA in the Selection decision card with a dedicated dialog pre-filling vendor and commercial terms.
+  - `client/src/app/App.tsx` & `client/src/app/AppShell.tsx`: Configured routes (`/procurement/purchase-orders`, `/procurement/purchase-orders/:poId`) and sidebar navigation.
+- **Demo Seeding & Automated Verification**:
+  - `server/src/scripts/seedDemo.ts`: Seeded `DEMO-PO-001` (partially delivered with `DEMO-GRN-001` and inspected line items), `DEMO-PO-002` (approved ready to issue), and `DEMO-PO-003` (draft direct PO).
+  - `npm run seed:demo --workspace @fire-safety/server`: Exit code 0.
+  - `npm run typecheck --workspace @fire-safety/server`: 0 errors.
+  - `npm run lint --workspace @fire-safety/server`: 0 errors, 0 warnings.
+  - `npm run test --workspace @fire-safety/server`: 22/22 test files, 92/92 tests passed.
+  - `npm run typecheck --workspace @fire-safety/client`: 0 errors.
+  - `npm run lint --workspace @fire-safety/client`: 0 errors, 0 warnings.
+  - `npm run build --workspace @fire-safety/client`: Built cleanly in 9.22s.
+
+- **Context & Requirement**:
+  - Previously, brand/make in RFQ offer recording and vendor price inquiries required raw, free-form text input (`brandOffered: string`), even though item brands/makes (`brands`, `item_brands`, `item_brand_offerings`) were already systematically defined in Master Data.
+  - *User Requirement*: "since we have defined brand/make of an item previously in items, why dont we just use them in PO for vendors to select".
+- **Backend Architecture & Domain Enrichment**:
+  - `server/src/modules/procurement/procurement.repository.ts`:
+    - Added `listBrandsForItems(companyId, itemIds)` querying approved brands associated with catalogue items via `item_brands` and `brands`, joined with `item_brand_offerings` to extract `name`, `code`, `model` (`manufacturerModel`), `sku` (`manufacturerSku`), and `isPreferred`.
+  - `server/src/modules/procurement/procurement.service.ts`:
+    - In `get(principal, requisitionId)`, batched demand item IDs from `rfqLines`, invoked `listBrandsForItems`, and dynamically attached `eligibleBrands: EligibleBrand[]` to each RFQ line.
+  - `server/src/modules/procurement/priceInquiry.service.ts`:
+    - Implemented `enrichInquiryItemsWithBrands(items, companyId)` to dynamically fetch and attach approved catalogue makes to inquiry lines.
+    - Both internal `getInquiry` and public self-fill `getPublicInquiry` now return lines enriched with `eligibleBrands`, enabling both internal buyers and external vendors to view and select from catalogue makes.
+  - `server/src/modules/procurement/priceInquiry.schemas.ts`:
+    - Enriched `inquiryItemSchema` and response models with `brandOffered` and `eligibleBrands`.
+- **Frontend Architecture & UX Enhancement**:
+  - `client/src/api/procurement.ts` & `client/src/api/priceInquiry.ts`:
+    - Added `EligibleBrand` type (`{ id, name, code, model, sku, isPreferred }`).
+    - Extended `RfqLine` and `InquiryItem` with `eligibleBrands?: EligibleBrand[]` and `brandOffered?: string`.
+  - `client/src/features/procurement/RequisitionWorkspacePage.tsx`:
+    - Replaced free-text brand entry in `ActionDialog` (when `modal === "offer"`) with a smart dropdown selecting from `line.eligibleBrands` (decorated with `★ (Preferred)` indicator and model name) plus an `"Other / Alternative brand..."` option.
+    - Selecting an approved make automatically sets technical equivalence to `'equivalent'`.
+    - Selecting `"Other / Alternative brand..."` reveals a custom input and defaults equivalence to `'deviation'`.
+    - `PriceInquirySheet` now passes `itemId` and pre-populated `eligibleBrands` from requisition lines.
+  - `client/src/features/procurement/PublicPriceSubmissionPage.tsx`:
+    - Upgraded the public vendor quotation form (`/vendor-quote/:token`) with the brand/make selector.
+    - Renders approved catalogue brands as a styled dropdown; selecting an approved brand defaults to preferred/standard offerings, while custom alternative makes toggle an open input field.
+  - `client/src/features/procurement/PriceInquirySheet.tsx`:
+    - Automatically snapshots `item.brands` into `eligibleBrands` when catalogue items are added.
+    - Displays approved makes badges (`Approved makes: Sentinel, Velocity`) directly on line-item cards.
+- **Verification & Status**:
+  - `npm run typecheck --workspace @fire-safety/server`: 0 errors.
+  - `npm run typecheck --workspace @fire-safety/client`: 0 errors (`tsc -b` passed).
+  - `npm run lint --workspace @fire-safety/client`: 0 errors across all files.
+  - `npm run build --workspace @fire-safety/client`: Built 2,750 modules cleanly into `/dist` in 7.20s.
+  - `npm run test --workspace @fire-safety/server -- src/modules/procurement/`: 2 suites, 10 tests passed.
+  - `npm run test --workspace @fire-safety/server -- src/app.test.ts`: 6 tests passed.
+  - `npm run seed:demo --workspace @fire-safety/server`: Seed completed cleanly with 0 errors.
+
 ## Removal of Technical Reviews Requirement & PO / Price Inquiry Data Seeding — 2026-11-03
 
 - **Technical Reviews Requirement Removed**:

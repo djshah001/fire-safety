@@ -18,7 +18,20 @@ export type DemandLine = {
   specificationSnapshot: string; unitId: string; unitSymbolSnapshot: string; quantity: string;
 };
 
-export type RfqLine = DemandLine & { rfqId: string; requisitionLineId: string };
+export type EligibleBrand = {
+  id: string;
+  name: string;
+  code: string;
+  model: string | null;
+  sku: string | null;
+  isPreferred: boolean;
+};
+
+export type RfqLine = DemandLine & {
+  rfqId: string;
+  requisitionLineId: string;
+  eligibleBrands?: EligibleBrand[];
+};
 
 export type VendorOfferLine = {
   id: string; vendorOfferId: string; rfqLineId: string; lineNumber: number; unitRate: string; lineTotal: string;
