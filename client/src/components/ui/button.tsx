@@ -59,7 +59,7 @@ function Button({
       data-size={size}
       className={cn(
         buttonVariants({ variant, size, className }),
-        "cursor-pointer hover:scale-[1.08] ease-in-out focus:scale-95 transition-transform",
+        "cursor-pointer hover:scale-[1.01] ease-in-out focus:scale-95 transition-transform",
       )}
       {...props}
     />

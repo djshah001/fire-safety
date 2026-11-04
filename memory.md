@@ -1,5 +1,178 @@
 # Fire Safety — Decision and Status Memory
 
+## Removal of Technical Reviews Requirement & PO / Price Inquiry Data Seeding — 2026-11-03
+
+- **Technical Reviews Requirement Removed**:
+  - *User Decision*: "we dont require technical reviews".
+  - *Backend Service (`server/src/modules/procurement/procurement.service.ts`)*: In `selectOffer()`, removed the blocking requirement that technical deviations or unknown equivalence lines must await engineering design-head approval before offer selection. Purchase managers can now directly select compliant offers with full commercial discretion without being blocked by technical substitution review queues.
+  - *Frontend Navigation (`client/src/app/AppShell.tsx`)*: Removed the "Technical reviews" (`/procurement/substitution-reviews`) link from the procurement navigation group in the sidebar.
+  - *Requisition Workspace (`client/src/features/procurement/RequisitionWorkspacePage.tsx`)*:
+    - Removed the "Technical review pending" destructive badge on vendor offer cards, replacing it with an informational `<Badge variant="outline">Alternative offered</Badge>` when substitutions exist.
+    - Removed `" · technical review pending"` from the select offer dropdown list, allowing immediate selection.
+    - Updated modal guidance text to reflect that lowest price is not mandatory without claiming technical deviations remain blocked.
+    - Cleaned up unused variable declarations (`pendingTechnical`, `rejectedTechnical`) to maintain 0 linter warnings.
+  - *Test Suite (`server/src/p4-procurement.integration.test.ts`)*: Updated integration test assertion to reflect the removal of the 409 Conflict check on offer selection with technical substitutions.
+- **Seeded Complete PO Data & Price Inquiry Matrix**:
+  - *Awarded PO Scenario (`server/src/scripts/seedDemo.ts`)*:
+    - Requisition `DEMO-REQ-PO-001` ("Demo awarded purchase order (PO)") seeded with status `'selected'`.
+    - RFQ `DEMO-RFQ-PO-001` seeded with status `'selected'` and closed comparisons.
+    - Decision recorded in `procurement_selection_decisions` awarding the PO to Sentinel Fire Solutions (`DEMO-VEN-001`) with formal purchase manager selection reason ("Awarded PO: Lowest compliant commercial proposal with 24-month warranty and immediate site delivery.") and signature.
+  - *Vendor Price Inquiry Scenario (`DEMO-PRI-001`)*:
+    - Seeded `DEMO-PRI-001` ("Q4 Detector & Extinguisher Rate Comparison Inquiry") with 3 equipment demand lines (Addressable Smoke Detectors, 6kg ABC Extinguishers, 65mm MS Fire Pipe).
+    - Seeded baseline historical rates in `vendor_price_lists` for both Sentinel (`DEMO-VEN-001`) and FlameTech (`DEMO-VEN-002`).
+    - Seeded two invitations in `vendor_price_inquiry_invitations` with status `'responded'`, active tokens, and verified phone numbers.
+    - Seeded completed vendor quotation responses in `vendor_price_inquiry_responses` with quoted unit rates, lead times (3–10 days), and notes, providing immediate old-vs-new rate percentage deltas (-3.2%, -3.7%, +1.3%) in `PriceComparisonSheet`.
+- **Runtime Error Resolution (`PriceComparisonSheet.tsx`)**:
+  - Safely extracted `invitations = data?.invitations ?? []`, `responses = data?.responses ?? []`, `priceListData = data?.priceListData ?? []`, and `inquiryItems = data?.inquiry?.items ?? []` at component level to eliminate any possibility of `TypeError: Cannot read properties of undefined (reading 'filter' / 'map')`.
+- **Verification**:
+  - `seed:demo`: Executed against PostgreSQL database; created `DEMO-REQ-PO-001`, `DEMO-PRI-001`, 3 invitations, 6 vendor responses, and selection decisions cleanly.
+  - `tsc -b` on client: 0 errors.
+  - `tsc --noEmit` on server: 0 errors.
+  - `oxlint src` on client: 0 errors, 0 warnings across 91 files.
+  - `vite build` on client: 2,750 modules transformed cleanly into `/dist`.
+  - Server procurement tests (`vitest run src/modules/procurement/`): 2 suites, 10 tests passed.
+
+
+## Alignment of All Operational Sheets with Updated Sheet Primitive — 2026-11-03
+
+- **Updated Primitive Baseline (`client/src/components/ui/sheet.tsx`)**:
+  - `SheetOverlay`: standard 60% black with blur backdrop (`bg-black/60 backdrop-blur-xs duration-300`).
+  - `SheetContent`: `shadow-2xl duration-300 ease-in-out data-[state=open]:animate-in data-[state=closed]:animate-out`, with `side="right"` defaulting to `sm:max-w-4xl` and full-width sliding (`data-[state=closed]:slide-out-to-right-full data-[state=open]:slide-in-from-right-full`).
+  - Styled close button with `<XIcon className="h-4 w-4" />` and hover transitions.
+  - `SheetFooter` with `mt-auto flex flex-col gap-2 p-4`.
+- **Synchronized Consuming Sheets**:
+  - `PriceComparisonSheet.tsx`: Updated `SheetContent` to `side="right" className="w-full sm:max-w-5xl h-full flex flex-col p-0 gap-0"`. Implemented pinned `SheetHeader` with `pr-14` (clearing the close button), scrollable body (`flex-1 overflow-y-auto px-6 py-5`), and pinned `SheetFooter` showing live vendor response tallies with a "Close" button.
+  - `VendorDetailSheet.tsx`: Expanded width from `sm:max-w-2xl` to `sm:max-w-4xl h-full flex flex-col p-0 gap-0` to provide proper space for contact lists, bank accounts, documents, and price lists. Added pinned `SheetHeader` (`pr-14`), pinned sub-navigation tabs (`shrink-0`), scrollable body (`flex-1 overflow-y-auto`), and pinned `SheetFooter` displaying the vendor code badge and "Close" action.
+  - `ListToolbar.tsx`: Constrained filter sheet to `sm:max-w-md h-full flex flex-col p-0 gap-0` so search/status filters remain a focused right-hand drawer. Added pinned header (`pr-14`), scrollable filter options body, and pinned `SheetFooter` with "Clear filters".
+  - `PriceInquirySheet.tsx`: Updated pinned `SheetHeader` to include `pr-14` padding to prevent title/badge overlap with the close button.
+- **Verification**: `oxlint` passed with 0 errors and 0 warnings; `vite build` completed cleanly into `/dist`.
+
+## Fix: React Dispatcher / Vite Dependency Cache De-duplication — 2026-11-03
+
+- **Issue**: `TypeError: Cannot read properties of null (reading 'useState')` in `useIsMobile()` at `SidebarProvider` (`sidebar.tsx:36`).
+- **Root Cause**: Running `npm install` at root while the Vite dev server had active memory/disk pre-bundles led to mismatched dependency versions (`react.js?v=473db6de` vs `react-dom_client.js?v=af89d65b`). The active rendering dispatcher set by `react-dom` was on a different internal React reference than the one imported by `use-mobile.ts`, leaving `dispatcher` as `null`.
+- **Fix**:
+  - In `client/vite.config.ts`, added `resolve.dedupe: ['react', 'react-dom']` and `optimizeDeps: { include: ['react', 'react-dom'] }` to enforce a single deduped React instance across all workspace libraries (`framer-motion`, `cmdk`, `radix-ui`, etc.).
+  - Purged the stale `.vite` dependency pre-bundle caches (`client/node_modules/.vite` and `node_modules/.vite`).
+  - Refactored `client/src/hooks/use-mobile.ts` to use direct named imports `{ useState, useEffect }` from `"react"`.
+- **Verification**: `npm run typecheck --workspace @fire-safety/client` passed with 0 errors; `npm run build --workspace @fire-safety/client` built in 5.36s with 0 errors.
+
+## PO Price Inquiry UI/UX Overhaul & Standardized Component Architecture — 2026-11-03
+
+- **Slide-out Sheet (`PriceInquirySheet.tsx`)**:
+  - Replaced modal `<Dialog>` with Shadcn's `<Sheet side="right" className="w-full sm:max-w-3xl sm:max-h-none h-full flex flex-col p-0 gap-0 border-l bg-background shadow-2xl">`. Pushes the price inquiry flow to a right-aligned side panel providing 100vh of vertical space without modal claustrophobia.
+  - Implemented pinned chrome: fixed `SheetHeader` with inquiry title, step badges, and description; 100vh scrollable body (`flex-1 overflow-y-auto px-6 py-5`); and fixed `SheetFooter` (`px-6 py-4 border-t bg-card shrink-0`) with Save/Cancel/Back action buttons.
+  - Maintained 100% backward compatibility via `PriceInquiryDialog.tsx` re-exporting `PriceInquirySheet`.
+- **Two-Tier Item Rows**:
+  - Redesigned the line item row layout from a cramped 6-column single line to a spacious two-tier card:
+    - *Tier 1 (Top)*: Item Name (`flex-1`), Quantity (`w-24`), Unit (`w-24`), and accessible Delete action button wrapped in a Radix `<Tooltip>`.
+    - *Tier 2 (Bottom)*: Full-width "Specification / Brand / Model Requirement (optional)" subtly layered underneath with muted styling and placeholder guidance.
+- **Framer Motion Micro-Interactions**:
+  - Installed `framer-motion@14.9.0` (with `motion-dom` dependencies resolved).
+  - Wrapped dynamic line items in `<AnimatePresence initial={false}>` with smooth slide & fade height transitions (`initial={{ opacity: 0, height: 0, y: -8 }}`, `animate={{ opacity: 1, height: "auto", y: 0 }}`, `exit={{ opacity: 0, height: 0, y: -8 }}`) when adding or removing items.
+  - Added staggered entrance animations (`staggerChildren: 0.08`, `y: 12 -> 0`) for invited vendor cards.
+- **Designed Empty State**:
+  - Added a styled dashed empty state (`border-dashed border-2 rounded-xl p-8 text-center bg-muted/10`) featuring `PackageSearch` icon, clear title ("No items in this inquiry yet"), instructional subtext, and prominent CTA ("Add custom item") when `items.length === 0`.
+- **Searchable Combobox (`cmdk` + Popover)**:
+  - Installed `cmdk@1.1.1` and created repository-owned `client/src/components/ui/command.tsx` and `client/src/components/ui/popover.tsx`.
+  - Catalogue Item Combobox: Search and filter 40+ catalogue items by name, code, unit, and specification; selecting an item instantly appends it as a new line item with a toast notification.
+  - Vendor Combobox: Search active vendors by company name, vendor code, or trade name; selecting automatically pre-populates the WhatsApp phone number from `vendor.primaryContact.phone`.
+- **React Hook Form + Zod Inline Validation**:
+  - Replaced manual `useState` and toast-only validation with `useForm` and `useFieldArray` backed by `zodResolver(inquiryFormSchema)`.
+  - Flags invalid inputs with red borders (`border-destructive focus-visible:ring-destructive`) and renders inline error messages directly underneath invalid fields (`<p className="text-[11px] text-destructive">`).
+- **Shadcn Primitives & Theme Compliance**:
+  - Replaced raw `<input type="checkbox">` in `PriceInquirySheet.tsx` and `PriceComparisonSheet.tsx` with repository-owned Shadcn `<Checkbox>`.
+  - Accessible icon buttons: All icon-only buttons (`Trash2`, `Copy`, `MessageSquare`, `ExternalLink`, `Send`) wrapped in Shadcn `<Tooltip>` with `aria-label`.
+  - Real-time status indicators: Replaced static badges with animated pulsing colored dots (emerald green ping for responded/active, amber ping for sent/pending, slate for draft).
+- **Route Error Boundary (`RouteErrorPage.tsx`)**:
+  - Built comprehensive `RouteErrorPage` displaying status code, human-readable error title, user actions (Retry / Back to Dashboard), and expandable developer stack trace in `DEV` mode. Wired as `errorElement` in `App.tsx` on root and protected layouts.
+- **Verification**:
+  - Client and Server TypeScript: `npm run typecheck` passed with 0 errors across both workspaces.
+  - Linter: `npm run lint` reported 0 warnings and 0 errors across 91 files (`oxlint`).
+  - Production build: `npm run build --workspace @fire-safety/client` built in 6.44s with 0 errors.
+  - Server test suite: 20 test files and 83 tests passing (`vitest run`).
+
+## Vendor Price Inquiries with WhatsApp links, self-fill portal, and price comparison — 2026-11-03
+
+- **Database & Migration (`0023_vendor_price_inquiry.sql`)**:
+  - Added `vendor_price_inquiries`: sequential inquiry code (`PRI-000001`), title, description, items JSONB snapshot (`itemId`, `itemName`, `itemCode`, `unit`, `quantity`, `specification`), status (`draft`/`active`/`closed`), response due date, creator, company isolation.
+  - Added `vendor_price_inquiry_invitations`: per-vendor crypto tokens (64-char), WhatsApp phone number, status (`pending`/`sent`/`responded`/`expired`), MSG91 message ID, timestamps.
+  - Added `vendor_price_inquiry_responses`: per-vendor quoted unit rates, currency, lead time days, minimum order quantity, notes, validity date, submitted timestamp.
+  - Schema added to `server/src/infrastructure/database/schema/masters.ts` and migrated to Postgres database.
+- **Backend Service & API Routes**:
+  - `priceInquiry.service.ts` & `priceInquiry.schemas.ts`: sequential code generation, inquiry creation, vendor invitation with token and optional MSG91 WhatsApp dispatch, response submission with automatic sync to `vendorPriceLists` for historical records.
+  - Authenticated API router `createPriceInquiryRouter()` at `/api/v1/procurement/price-inquiries`: `GET /`, `POST /`, `GET /:id`, `POST /:id/invite`, `POST /:id/invitations/:invitationId/send-msg91`.
+  - Public API router `createPublicPriceInquiryRouter()` at `/api/v1/vendor-price`: `GET /:token` (retrieve inquiry details), `POST /:token/submit` (public vendor rates submission).
+  - Extended `msg91WhatsAppService.sendVendorPriceInquiry()` to format and deliver inquiry links via WhatsApp.
+- **Frontend UI & Components**:
+  - `client/src/api/priceInquiry.ts`: Typed queries and mutations (`priceInquiriesQuery`, `priceInquiryDetailQuery`, `publicPriceInquiryQuery`, `useCreatePriceInquiry`, `useInviteVendor`, `useSendMsg91`, `useSubmitPublicPriceResponse`).
+  - `PriceInquiryDialog.tsx`: Multi-step dialog to create an inquiry with items from database catalogue, requisition lines, or custom items, then invite vendors via MSG91 WhatsApp, direct WhatsApp chat link (`wa.me`), or copyable self-fill link.
+  - `PublicPriceSubmissionPage.tsx`: Mobile-friendly public submission portal mounted at `/vendor-price/:token` where invited vendors enter quoted unit rates, lead time, MOQ, and specifications with instant validation.
+  - `PriceComparisonSheet.tsx`: Sliding side-sheet showing a complete comparison matrix of invited vendors, their quoted unit rates vs previous price list rates on file, percentage delta badges (`New`, `0%`, `+X%`, `-X%`), lead times, notes, and invitation statuses.
+  - Integrated into `RequisitionsPage.tsx` and `RequisitionWorkspacePage.tsx`: one-click "Inquire Vendor Prices" from PO demand lines or header toolbar, plus active inquiries list with "View & Compare Prices".
+- **Verification**:
+  - Root workspace typecheck (`tsc -b` on client and `tsc --noEmit` on server): Passed with 0 errors.
+  - Root workspace lint (`oxlint` across 205 files): Passed with 0 warnings and 0 errors.
+  - Client production build (`vite build`): Built 2,324 modules into `/dist` cleanly.
+  - Server unit tests (`vitest run`): 4 new price inquiry schema unit tests passed. All 19 unit suites (73 tests) passed.
+
+## MSG91 WhatsApp integration, vendor document uploads, and complete catalogue items display — 2026-11-03
+
+- **MSG91 WhatsApp Integration**: Added `Msg91WhatsAppService` in `server/src/infrastructure/notifications/msg91.ts` connecting to MSG91 Outbound WhatsApp Template API with `MSG91_AUTH_KEY`, `MSG91_WHATSAPP_INTEGRATED_NUMBER`, and `MSG91_WHATSAPP_TEMPLATE_NAME` configuration. Added backend endpoint `POST /api/v1/masters/vendors/invitations/:id/send-msg91` with transactional audit logging. Updated `VendorInvitationDialog.tsx` with automated MSG91 delivery, manual fallback to WhatsApp Web/App (`wa.me`), copyable links, and delivery status tracking.
+- **Vendor Document Uploads**: Enabled full multi-document upload support across both internal and external onboarding:
+  - `PublicVendorRegistrationPage.tsx`: Section 7 allows vendors to attach GST certificate, PAN copy, cancelled cheque/bank letter, product catalogue, and ISO/CE/UL certifications with automated post-submission upload.
+  - `VendorFormDialog.tsx`: Added Tab 9 ("Documents") allowing internal employees to attach GST certificate, PAN copy, cancelled cheque, catalogue, and certifications during vendor creation/updating, uploaded automatically upon save.
+- **Displaying All Database Items**:
+  - `MasterDataPage.tsx`: For `/masters/items`, defaults `pageSize` to 100 so all 44 catalogue items in the database show up immediately without pagination cutoff.
+  - `ServerDataTable.tsx` & `masters.schemas.ts`: Expanded page size options to include 200 and 500 (`pageSize: max(500)`).
+  - `VendorDetailSheet.tsx`: Added `masterLookupsQuery('items')` catalogue item selector when registering vendor price list items, enabling quick linking of database items with auto-filled names and SKUs.
+- **Bugfixes & Synchronization**:
+  - `VendorFormDialog.tsx`: Added `useEffect` watching `[open, vendor]` to synchronize form state on modal open/close and vendor change, preventing stale values between Add and Edit operations. Added active bank account banner on the Bank tab.
+  - `masters.schemas.ts` & `masters.service.ts`: Updated `vendorUpdateSchema` so `bankAccounts`, `additionalContacts`, and `additionalAddresses` are optional on update instead of defaulting to empty arrays, and guarded deletion so existing bank accounts are preserved when not modified. Masked accounts are never re-submitted.
+  - `PublicVendorRegistrationPage.tsx`: Wrapped invitation pre-fill in `useEffect` to prevent state mutation during render.
+  - `VendorInvitationDialog.tsx`: Added `useEffect` resetting invitation state upon dialog close.
+- **Verification**:
+  - Root workspace typecheck (`tsc -b` on client and `tsc --noEmit` on server): Passed with 0 errors.
+  - Root workspace lint (`oxlint` across 197 files): Passed with 0 warnings and 0 errors.
+  - Server masters unit tests (`vitest run`): Passed with 0 errors.
+  - Client production build (`tsc -b && vite build`): Built 2,320 modules cleanly into `/dist`.
+
+## Comprehensive vendor registration, WhatsApp onboarding, price list, and banking details — 2026-11-02
+
+Implemented full vendor registration, dual onboarding (internal employee entry + external WhatsApp self-registration link), masked bank accounts, document vault, and vendor-specific price lists.
+
+### Database & Schema (Migration `0022_sour_owl.sql`)
+- Enriched `vendors` with: `tradeName`, `vendorType` (`material_supplier`, `manufacturer`, `distributor_dealer`, `service_provider`, `installation_contractor`, `labour_contractor`, `transport_logistics`, `other`), `supplierCategories` (jsonb array), `website`, `companyDescription`, `gstStatus` (`registered`/`unregistered`), `gstin`, `pan`, `brandsSupplied` (jsonb array), `deliveryLocations`, `typicalLeadTimeDays`, `minimumOrderValue`, `paymentTerms`, `creditPeriodDays`, `creditLimit`, `preferredCurrency`, `assignedBuyerUserId`, `internalNotes`, `approvalStatus` (`draft`, `pending_approval`, `active`, `rejected`), `isArchived`, `approvedByUserId`, `approvedAt`.
+- Added child tables:
+  - `vendorAddresses`: Supports multiple office/warehouse addresses with type and one default flag.
+  - `vendorBankAccounts`: Multi-account support with default flag, account confirmation check, and read masking (`••••••••1234`).
+  - `vendorDocuments`: Document vault tracking GST certificate, PAN copy, cancelled cheque, catalogue, certifications.
+  - `vendorPriceLists`: Vendor-specific product codes, prices, lead times, and minimum order quantities.
+  - `vendorOnboardingInvitations`: Tokenized invitations for WhatsApp self-registration with expiration tracking.
+- Added `alternatePhone` to `vendorContacts`.
+
+### Backend API & Services
+- Sequential vendor code generation: `VEN-000001` auto-generated sequentially per company.
+- Duplicate detection: Checks GSTIN uniqueness (blocks on duplicate registered GSTIN) and flags matching company names or phone numbers with warnings.
+- Public Onboarding API (`/api/v1/vendor-onboarding`): Public token-secured endpoints for external vendors (`GET /:token`, `POST /:token/submit`, `POST /:token/documents`) allowing complete form submission and document uploads without credentials.
+- Internal Masters API (`/api/v1/masters/vendors`): Extended with `GET /:id` (full vendor detail with masked bank accounts), duplicate checking (`POST /check-duplicates`), WhatsApp invitation creation (`POST /invitations`), archiving (`POST /:id/archive`), approval (`POST /:id/approve`), price list item CRUD, and document management.
+- Formatting and validation: Strict Zod schemas enforcing 15-char GSTIN, 10-char PAN, 11-char IFSC, E.164 phone normalization, and bank account number confirmation matching.
+
+### Frontend UI (Shadcn + Radix)
+- `VendorFormDialog.tsx`: Multi-section tabbed dialog for internal vendor registration (Basic Details, Primary Contact, Address, Tax & Legal, Supply Details, Commercial & Bank Details). Includes PAN extraction from GSTIN, debounced duplicate checks with warnings, and account confirmation.
+- `VendorInvitationDialog.tsx`: WhatsApp registration modal with WhatsApp direct chat link (`https://wa.me/...`) and copyable self-registration URL.
+- `PublicVendorRegistrationPage.tsx`: Standalone, mobile-friendly registration portal mounted at `/vendor-registration/:token` for vendors to self-register and upload documents.
+- `VendorDetailSheet.tsx`: Comprehensive sliding drawer displaying Overview, multi-contact/address directory, masked bank accounts, price list manager (with item addition and deletion), document attachments, and approval/archive workflows.
+- `MasterDataPage.tsx`: Enhanced vendor directory with dedicated columns (Vendor Code, Company Name & Trade Name, Vendor Type badge, Primary Contact, GSTIN status, Approval/Archived status badges, and quick actions: View Details, Edit, Deactivate). Header provides "Invite via WhatsApp" and "+ Add vendor" actions.
+
+### Verification
+- Database migrations: `drizzle/0022_sour_owl.sql` applied cleanly to Postgres; `npm run db:check` reports "Everything's fine 🐶🔥".
+- Seed check: `npm run seed:demo --workspace @fire-safety/server` passed cleanly.
+- Unit & Integration tests: All 85 server tests across 20 suites passed (`vitest run`).
+- Code hygiene: `npm run lint` reported 0 warnings and 0 errors across 196 files (both client and server).
+- Type safety: `npm run typecheck` passed with 0 errors across both client and server.
+- Production build: Client production build (`tsc -b && vite build`) built all 2,320 modules cleanly into `/dist`.
+
 ## Corrected quotation PDF and Excel layout — 2026-10-31
 
 Latest user image supersedes the interim seven-column design. Implemented eleven visible columns in both formats: serial, description, make/model, unit, quantity, supply, installation, markup amount, miscellaneous, rate and amount. Common descriptions/specifications have compact size subrows; identical makes share merged cells while distinct selections remain separate. This is presentation-only grouping, not completion of the pending persisted technical-group feature. Percentages remain data-driven: a uniform percentage is the heading; mixed PDF percentages are labelled beside amounts. Markup still excludes miscellaneous and multiplies quantity only once.

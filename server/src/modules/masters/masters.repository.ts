@@ -1,6 +1,23 @@
 import { and, asc, count, desc, eq, ilike, inArray, lte, or, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
-import { brands, itemBrandOfferings, itemBrands, itemCategories, itemFamilies, itemFamilySpecifications, itemRateVersions, items, units, vendorContacts, vendors } from '../../infrastructure/database/schema/index.js';
+import {
+  brands,
+  itemBrandOfferings,
+  itemBrands,
+  itemCategories,
+  itemFamilies,
+  itemFamilySpecifications,
+  itemRateVersions,
+  items,
+  units,
+  vendorAddresses,
+  vendorBankAccounts,
+  vendorContacts,
+  vendorDocuments,
+  vendorOnboardingInvitations,
+  vendorPriceLists,
+  vendors,
+} from '../../infrastructure/database/schema/index.js';
 import type { MasterListQuery } from './masters.schemas.js';
 
 function direction(input: MasterListQuery) {
@@ -134,7 +151,17 @@ export function createMastersRepository(executor: DatabaseExecutor) {
       const where = and(
         eq(vendors.companyId, companyId),
         input.status ? eq(vendors.status, input.status) : undefined,
-        input.search ? or(ilike(vendors.code, `%${input.search}%`), ilike(vendors.displayName, `%${input.search}%`), ilike(vendors.legalName, `%${input.search}%`), ilike(vendorContacts.name, `%${input.search}%`)) : undefined,
+        input.approvalStatus ? eq(vendors.approvalStatus, input.approvalStatus) : undefined,
+        input.isArchived !== undefined ? eq(vendors.isArchived, input.isArchived) : undefined,
+        input.vendorType ? eq(vendors.vendorType, input.vendorType) : undefined,
+        input.search ? or(
+          ilike(vendors.code, `%${input.search}%`),
+          ilike(vendors.displayName, `%${input.search}%`),
+          ilike(vendors.legalName, `%${input.search}%`),
+          ilike(vendors.gstin, `%${input.search}%`),
+          ilike(vendorContacts.name, `%${input.search}%`),
+          ilike(vendorContacts.phone, `%${input.search}%`),
+        ) : undefined,
       );
       const sortColumn = input.sort === 'code' ? vendors.code : input.sort === 'status' ? vendors.status : input.sort === 'updatedAt' ? vendors.updatedAt : vendors.displayName;
       const contactJoin = and(eq(vendorContacts.vendorId, vendors.id), eq(vendorContacts.isPrimary, true), eq(vendorContacts.status, 'active'));
@@ -143,7 +170,13 @@ export function createMastersRepository(executor: DatabaseExecutor) {
           id: vendors.id,
           code: vendors.code,
           displayName: vendors.displayName,
+          tradeName: vendors.tradeName,
+          vendorType: vendors.vendorType,
+          supplierCategories: vendors.supplierCategories,
           legalName: vendors.legalName,
+          gstStatus: vendors.gstStatus,
+          gstin: vendors.gstin,
+          pan: vendors.pan,
           taxIdentifier: vendors.taxIdentifier,
           addressLine1: vendors.addressLine1,
           addressLine2: vendors.addressLine2,
@@ -151,14 +184,27 @@ export function createMastersRepository(executor: DatabaseExecutor) {
           state: vendors.state,
           postalCode: vendors.postalCode,
           country: vendors.country,
+          paymentTerms: vendors.paymentTerms,
+          creditPeriodDays: vendors.creditPeriodDays,
+          creditLimit: vendors.creditLimit,
+          preferredCurrency: vendors.preferredCurrency,
+          typicalLeadTimeDays: vendors.typicalLeadTimeDays,
+          minimumOrderValue: vendors.minimumOrderValue,
+          assignedBuyerUserId: vendors.assignedBuyerUserId,
+          internalNotes: vendors.internalNotes,
+          approvalStatus: vendors.approvalStatus,
+          isArchived: vendors.isArchived,
+          approvedAt: vendors.approvedAt,
           status: vendors.status,
           rowVersion: vendors.rowVersion,
           updatedAt: vendors.updatedAt,
+          createdAt: vendors.createdAt,
           primaryContact: {
             id: vendorContacts.id,
             name: vendorContacts.name,
             jobTitle: vendorContacts.jobTitle,
             phone: vendorContacts.phone,
+            alternatePhone: vendorContacts.alternatePhone,
             email: vendorContacts.email,
           },
         }).from(vendors).leftJoin(vendorContacts, contactJoin).where(where)
@@ -358,27 +404,232 @@ export function createMastersRepository(executor: DatabaseExecutor) {
       return row;
     },
 
+    async getNextVendorCode(companyId: string): Promise<string> {
+      const rows = await executor.select({ code: vendors.code }).from(vendors).where(eq(vendors.companyId, companyId));
+      let maxSeq = 0;
+      for (const row of rows) {
+        const match = /^VEN-(\d+)$/i.exec(row.code);
+        if (match && match[1]) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num > maxSeq) {
+            maxSeq = num;
+          }
+        }
+      }
+      return `VEN-${String(maxSeq + 1).padStart(6, '0')}`;
+    },
+
+    async findVendor(companyId: string, id: string) {
+      const [row] = await executor.select().from(vendors).where(and(eq(vendors.companyId, companyId), eq(vendors.id, id))).limit(1);
+      return row;
+    },
+
+    async findVendorByGstin(companyId: string, gstin: string, excludeId?: string) {
+      const where = and(
+        eq(vendors.companyId, companyId),
+        eq(vendors.gstin, gstin),
+        excludeId ? sql`${vendors.id} <> ${excludeId}` : undefined,
+      );
+      const [row] = await executor.select().from(vendors).where(where).limit(1);
+      return row;
+    },
+
+    async findVendorDuplicates(companyId: string, gstin?: string, nameNormalized?: string, phoneNormalized?: string, excludeId?: string) {
+      const gstinMatch = gstin ? await executor.select({ id: vendors.id, code: vendors.code, displayName: vendors.displayName, gstin: vendors.gstin })
+        .from(vendors).where(and(eq(vendors.companyId, companyId), eq(vendors.gstin, gstin), excludeId ? sql`${vendors.id} <> ${excludeId}` : undefined)).limit(1) : [];
+
+      const nameMatches = nameNormalized ? await executor.select({ id: vendors.id, code: vendors.code, displayName: vendors.displayName })
+        .from(vendors).where(and(eq(vendors.companyId, companyId), eq(vendors.displayNameNormalized, nameNormalized), excludeId ? sql`${vendors.id} <> ${excludeId}` : undefined)).limit(5) : [];
+
+      const phoneMatches = phoneNormalized ? await executor.select({ id: vendors.id, code: vendors.code, displayName: vendors.displayName, contactPhone: vendorContacts.phone })
+        .from(vendors).innerJoin(vendorContacts, eq(vendorContacts.vendorId, vendors.id))
+        .where(and(eq(vendors.companyId, companyId), eq(vendorContacts.phoneNormalized, phoneNormalized), excludeId ? sql`${vendors.id} <> ${excludeId}` : undefined)).limit(5) : [];
+
+      return {
+        gstinMatch: gstinMatch[0],
+        nameMatches,
+        phoneMatches,
+      };
+    },
+
+    async getVendorDetail(companyId: string, id: string) {
+      const [vendor] = await executor.select().from(vendors).where(and(eq(vendors.companyId, companyId), eq(vendors.id, id))).limit(1);
+      if (!vendor) return undefined;
+
+      const [contactsList, addressesList, bankAccountsList, documentsList, priceListsList] = await Promise.all([
+        executor.select().from(vendorContacts).where(and(eq(vendorContacts.companyId, companyId), eq(vendorContacts.vendorId, id))).orderBy(desc(vendorContacts.isPrimary), asc(vendorContacts.name)),
+        executor.select().from(vendorAddresses).where(and(eq(vendorAddresses.companyId, companyId), eq(vendorAddresses.vendorId, id))).orderBy(desc(vendorAddresses.isDefault), asc(vendorAddresses.createdAt)),
+        executor.select().from(vendorBankAccounts).where(and(eq(vendorBankAccounts.companyId, companyId), eq(vendorBankAccounts.vendorId, id))).orderBy(desc(vendorBankAccounts.isDefault), asc(vendorBankAccounts.createdAt)),
+        executor.select().from(vendorDocuments).where(and(eq(vendorDocuments.companyId, companyId), eq(vendorDocuments.vendorId, id))).orderBy(desc(vendorDocuments.uploadedAt)),
+        executor.select({
+          id: vendorPriceLists.id,
+          companyId: vendorPriceLists.companyId,
+          vendorId: vendorPriceLists.vendorId,
+          itemId: vendorPriceLists.itemId,
+          vendorProductCode: vendorPriceLists.vendorProductCode,
+          vendorProductName: vendorPriceLists.vendorProductName,
+          description: vendorPriceLists.description,
+          unitRate: vendorPriceLists.unitRate,
+          currency: vendorPriceLists.currency,
+          leadTimeDays: vendorPriceLists.leadTimeDays,
+          minimumOrderQuantity: vendorPriceLists.minimumOrderQuantity,
+          effectiveFrom: vendorPriceLists.effectiveFrom,
+          createdAt: vendorPriceLists.createdAt,
+          updatedAt: vendorPriceLists.updatedAt,
+          itemCode: items.code,
+          itemName: items.name,
+        }).from(vendorPriceLists).leftJoin(items, eq(items.id, vendorPriceLists.itemId)).where(and(eq(vendorPriceLists.companyId, companyId), eq(vendorPriceLists.vendorId, id))).orderBy(asc(vendorPriceLists.vendorProductName)),
+      ]);
+
+      const maskedBankAccounts = bankAccountsList.map((acc) => ({
+        ...acc,
+        accountNumberMasked: acc.accountNumber.length > 4 ? `••••••••${acc.accountNumber.slice(-4)}` : '••••••••',
+      }));
+
+      return {
+        ...vendor,
+        contacts: contactsList,
+        addresses: addressesList,
+        bankAccounts: maskedBankAccounts,
+        documents: documentsList,
+        priceList: priceListsList,
+      };
+    },
+
     async createVendor(input: typeof vendors.$inferInsert) {
       const [row] = await executor.insert(vendors).values(input).returning();
       return row;
     },
+
     async createVendorContact(input: typeof vendorContacts.$inferInsert) {
       const [row] = await executor.insert(vendorContacts).values(input).returning();
       return row;
     },
+
+    async deleteVendorContacts(vendorId: string) {
+      await executor.delete(vendorContacts).where(eq(vendorContacts.vendorId, vendorId));
+    },
+
+    async createVendorAddress(input: typeof vendorAddresses.$inferInsert) {
+      const [row] = await executor.insert(vendorAddresses).values(input).returning();
+      return row;
+    },
+
+    async deleteVendorAddresses(vendorId: string) {
+      await executor.delete(vendorAddresses).where(eq(vendorAddresses.vendorId, vendorId));
+    },
+
+    async createVendorBankAccount(input: typeof vendorBankAccounts.$inferInsert) {
+      const [row] = await executor.insert(vendorBankAccounts).values(input).returning();
+      return row;
+    },
+
+    async deleteVendorBankAccounts(vendorId: string) {
+      await executor.delete(vendorBankAccounts).where(eq(vendorBankAccounts.vendorId, vendorId));
+    },
+
+    async createVendorDocument(input: typeof vendorDocuments.$inferInsert) {
+      const [row] = await executor.insert(vendorDocuments).values(input).returning();
+      return row;
+    },
+
+    async listVendorDocuments(companyId: string, vendorId: string) {
+      return executor.select().from(vendorDocuments).where(and(eq(vendorDocuments.companyId, companyId), eq(vendorDocuments.vendorId, vendorId))).orderBy(desc(vendorDocuments.uploadedAt));
+    },
+
+    async deleteVendorDocument(companyId: string, documentId: string) {
+      const [row] = await executor.delete(vendorDocuments).where(and(eq(vendorDocuments.companyId, companyId), eq(vendorDocuments.id, documentId))).returning();
+      return row;
+    },
+
+    async createVendorPriceListItem(input: typeof vendorPriceLists.$inferInsert) {
+      const [row] = await executor.insert(vendorPriceLists).values(input).returning();
+      return row;
+    },
+
+    async listVendorPriceList(companyId: string, vendorId: string) {
+      return executor.select({
+        id: vendorPriceLists.id,
+        companyId: vendorPriceLists.companyId,
+        vendorId: vendorPriceLists.vendorId,
+        itemId: vendorPriceLists.itemId,
+        vendorProductCode: vendorPriceLists.vendorProductCode,
+        vendorProductName: vendorPriceLists.vendorProductName,
+        description: vendorPriceLists.description,
+        unitRate: vendorPriceLists.unitRate,
+        currency: vendorPriceLists.currency,
+        leadTimeDays: vendorPriceLists.leadTimeDays,
+        minimumOrderQuantity: vendorPriceLists.minimumOrderQuantity,
+        effectiveFrom: vendorPriceLists.effectiveFrom,
+        createdAt: vendorPriceLists.createdAt,
+        updatedAt: vendorPriceLists.updatedAt,
+        itemCode: items.code,
+        itemName: items.name,
+      }).from(vendorPriceLists).leftJoin(items, eq(items.id, vendorPriceLists.itemId)).where(and(eq(vendorPriceLists.companyId, companyId), eq(vendorPriceLists.vendorId, vendorId))).orderBy(asc(vendorPriceLists.vendorProductName));
+    },
+
+    async updateVendorPriceListItem(companyId: string, vendorId: string, priceListId: string, values: Partial<typeof vendorPriceLists.$inferInsert>, now: Date) {
+      const [row] = await executor.update(vendorPriceLists).set({ ...values, updatedAt: now })
+        .where(and(eq(vendorPriceLists.companyId, companyId), eq(vendorPriceLists.vendorId, vendorId), eq(vendorPriceLists.id, priceListId))).returning();
+      return row;
+    },
+
+    async deleteVendorPriceListItem(companyId: string, vendorId: string, priceListId: string) {
+      const [row] = await executor.delete(vendorPriceLists)
+        .where(and(eq(vendorPriceLists.companyId, companyId), eq(vendorPriceLists.vendorId, vendorId), eq(vendorPriceLists.id, priceListId))).returning();
+      return row;
+    },
+
+    async createVendorOnboardingInvitation(input: typeof vendorOnboardingInvitations.$inferInsert) {
+      const [row] = await executor.insert(vendorOnboardingInvitations).values(input).returning();
+      return row;
+    },
+
+    async findVendorOnboardingInvitationByToken(token: string) {
+      const [row] = await executor.select().from(vendorOnboardingInvitations).where(eq(vendorOnboardingInvitations.token, token)).limit(1);
+      return row;
+    },
+
+    async findVendorOnboardingInvitationById(companyId: string, id: string) {
+      const [row] = await executor.select().from(vendorOnboardingInvitations).where(and(
+        eq(vendorOnboardingInvitations.companyId, companyId),
+        eq(vendorOnboardingInvitations.id, id),
+      )).limit(1);
+      return row;
+    },
+
+    async updateVendorOnboardingInvitation(token: string, values: Partial<typeof vendorOnboardingInvitations.$inferInsert>, now: Date) {
+      const [row] = await executor.update(vendorOnboardingInvitations).set({ ...values, updatedAt: now }).where(eq(vendorOnboardingInvitations.token, token)).returning();
+      return row;
+    },
+
     async updateVendor(companyId: string, id: string, expectedVersion: number, values: Omit<Partial<typeof vendors.$inferInsert>, 'id' | 'companyId' | 'createdByUserId'>, now: Date) {
       const [row] = await executor.update(vendors).set({ ...values, rowVersion: sql`${vendors.rowVersion} + 1`, updatedAt: now })
         .where(and(eq(vendors.companyId, companyId), eq(vendors.id, id), eq(vendors.rowVersion, expectedVersion))).returning();
       return row;
     },
+
     async updatePrimaryVendorContact(companyId: string, vendorId: string, values: Omit<Partial<typeof vendorContacts.$inferInsert>, 'id' | 'companyId' | 'vendorId' | 'createdByUserId'>, now: Date) {
       const [row] = await executor.update(vendorContacts).set({ ...values, rowVersion: sql`${vendorContacts.rowVersion} + 1`, updatedAt: now })
         .where(and(eq(vendorContacts.companyId, companyId), eq(vendorContacts.vendorId, vendorId), eq(vendorContacts.isPrimary, true), eq(vendorContacts.status, 'active'))).returning();
       return row;
     },
+
     async deactivateVendor(companyId: string, id: string, expectedVersion: number, now: Date) {
       const [row] = await executor.update(vendors).set({ status: 'inactive', rowVersion: sql`${vendors.rowVersion} + 1`, updatedAt: now })
         .where(and(eq(vendors.companyId, companyId), eq(vendors.id, id), eq(vendors.rowVersion, expectedVersion), eq(vendors.status, 'active'))).returning();
+      return row;
+    },
+
+    async archiveVendor(companyId: string, id: string, expectedVersion: number, now: Date) {
+      const [row] = await executor.update(vendors).set({ isArchived: true, status: 'inactive', rowVersion: sql`${vendors.rowVersion} + 1`, updatedAt: now })
+        .where(and(eq(vendors.companyId, companyId), eq(vendors.id, id), eq(vendors.rowVersion, expectedVersion))).returning();
+      return row;
+    },
+
+    async approveVendor(companyId: string, id: string, expectedVersion: number, approvedByUserId: string, now: Date) {
+      const [row] = await executor.update(vendors).set({ approvalStatus: 'active', status: 'active', approvedByUserId, approvedAt: now, rowVersion: sql`${vendors.rowVersion} + 1`, updatedAt: now })
+        .where(and(eq(vendors.companyId, companyId), eq(vendors.id, id), eq(vendors.rowVersion, expectedVersion))).returning();
       return row;
     },
   };

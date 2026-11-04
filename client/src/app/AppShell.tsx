@@ -377,7 +377,6 @@ export function AppShell({ user }: { user: CurrentUser }) {
 
   const procurement: NavItem[] = [
     { to: "/procurement/requisitions", label: "Requisitions & sourcing", icon: ClipboardList, visible: user.permissions.includes("procurement.sourcing.read") },
-    { to: "/procurement/substitution-reviews", label: "Technical reviews", icon: ShieldCheck, visible: user.permissions.includes("procurement.substitution.review") },
   ];
 
   const overview: NavItem = {

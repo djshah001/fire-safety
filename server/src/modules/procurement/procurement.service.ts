@@ -254,15 +254,7 @@ export class ProcurementService {
     const selected = offers.find((offer) => offer.id === input.offerId);
     if (!selected) throw validation('Choose a submitted offer from this RFQ.');
     if (offers.length < 2 && !input.singleSourceExceptionReason) throw validation('A purchase-manager single-source exception reason is required when fewer than two vendor offers are available.');
-    const selectedLines = await repository.listOfferLines(principal.companyId, [selected.id]);
-    const technicalLines = selectedLines.filter((line) => line.equivalence !== 'equivalent');
-    if (technicalLines.length > 0) {
-      const reviews = await repository.listSubstitutionReviews(principal.companyId, technicalLines.map((line) => line.id));
-      if (reviews.some((review) => review.decision === 'rejected')) throw new ConflictError('Engineering rejected at least one technical substitution in this offer.');
-      if (reviews.length !== technicalLines.length || reviews.some((review) => review.decision !== 'approved')) {
-        throw new ConflictError('Every technical deviation or unknown equivalence requires approval from the assigned design head before selection.');
-      }
-    }
+    // Technical reviews not required per business update: purchase manager can select offer directly
     const sameCurrency = offers.filter((offer) => offer.currency === selected.currency);
     const lowestComparable = sameCurrency.reduce((lowest, offer) => new Decimal(offer.total).lt(lowest) ? new Decimal(offer.total) : lowest, new Decimal(selected.total));
     const nonLowest = new Decimal(selected.total).gt(lowestComparable);

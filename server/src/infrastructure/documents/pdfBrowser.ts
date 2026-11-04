@@ -33,9 +33,14 @@ function release() {
 
 async function browser() {
   if (!browserPromise) {
-    const launched = puppeteer.launch({ headless: true, timeout: env.PDF_RENDER_TIMEOUT_MS,
+    const launched = puppeteer.launch({
+      headless: true,
+      timeout: env.PDF_RENDER_TIMEOUT_MS,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
       ...(env.PUPPETEER_EXECUTABLE_PATH ? { executablePath: env.PUPPETEER_EXECUTABLE_PATH } : {}),
-      handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false,
     });
     browserPromise = launched;
     try {

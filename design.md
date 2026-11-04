@@ -163,11 +163,42 @@ An approval panel shows author, exact revision, current step, eligible approver,
 
 ### Component implementation rule
 
-Use the actual repository-owned shadcn component layer in `client/src/components/ui`, not only shadcn-compatible colors and utility classes. All applicable screens use the shared shadcn `Button`, `Input`, `Textarea`, `Select`, `Checkbox`, `Dialog`, `Sheet`, `Alert`, `Badge`, `Card`, `Table`, `Tooltip`, `Separator` and `Skeleton` primitives rather than page-local imitations. Extend variants centrally when needed. Add missing components only after inspecting `client/components.json`; retain preset `b2pkVETXH`, the Radix base, Vite aliases and the exact light/dark tokens above. Native controls are limited to cases without a suitable shadcn primitive or a documented semantic/accessibility need.
+Use the actual repository-owned shadcn component layer in `client/src/components/ui`, not only shadcn-compatible colors and utility classes. All applicable screens use the shared shadcn `Button`, `Input`, `Textarea`, `Select`, `Checkbox`, `Dialog`, `Sheet`, `Popover`, `Command`, `Alert`, `Badge`, `Card`, `Table`, `Tooltip`, `Separator` and `Skeleton` primitives rather than page-local imitations. Extend variants centrally when needed. Add missing components only after inspecting `client/components.json`; retain preset `b2pkVETXH`, the Radix base, Vite aliases and the exact light/dark tokens above. Native controls (such as raw `<input type="checkbox">`) are strictly eliminated in favor of repository-owned Shadcn primitives.
 
-Dialogs and sheets own focus trapping, Escape dismissal and focus restoration. Use their title/description primitives for accessible naming. Icon-only actions use shadcn buttons plus accessible labels/tooltips. Loading, error and status treatments use the shared skeleton, alert and badge components so later modules remain visually and behaviorally consistent.
+### Standardized Design System Pillars
 
-Build `ServerDataTable`, `ListToolbar`, `ScopedEntityPicker`, `LineItemEditor`, `DecimalInput`, `DocumentVersionPanel`, `ApprovalPanel`, `ActivityTimeline`, `WorkflowStatusBadge`, `MissingRequirementsPanel`, `ImportWizard` and `ConflictDialog` when their first module needs them.
+#### 1. Shared Operational Components
+- **ServerDataTable & ListToolbar**: URL-synchronized search, allowlisted server sorting, status filters, bounded server pagination, sticky headers, tabular figures, and a dedicated Sheet filter drawer.
+- **Bulk Selection Bar**: Explicit per-row and current-page checkboxes with a floating Shadcn action bar; never implies "all filtered records" are selected.
+- **LineItemEditor & Two-Tier Item Rows**: Replaces cramped single-line 6-column tables. Formats line items into two tiers:
+  - *Tier 1 (Top)*: Item Name (`flex-1`), Quantity (`w-24`), Unit (`w-24`), and accessible Delete action button wrapped in a Shadcn `Tooltip`.
+  - *Tier 2 (Bottom)*: Full-width specification / brand / model requirement subtly layered underneath with smaller text and muted styling.
+- **Searchable Combobox / ScopedEntityPicker**: Replaces standard `<Select>` dropdowns with a `cmdk`-backed `Command` palette inside a Radix `Popover` for entity lists exceeding 15 items (e.g., Catalogue Items, Vendors, Customers, Assignees). Supports real-time typing, keyboard navigation, and immediate item appending.
+- **DecimalInput**: Enforces `NUMERIC(18,2)` / `NUMERIC(18,4)` precision and Indian number grouping without float round-trip corruption.
+- **ApprovalPanel & DocumentVersionPanel**: Displays author, exact revision (R02), current workflow step, required evidence (3–1,000 chars), and audited override controls for administrators.
+- **ConflictDialog & MissingRequirementsPanel**: Traps 409 stale-version conflicts with explicit review/reload choices and renders structured 422 blockers inline.
+- **ActivityTimeline & ImportWizard**: Standardizes immutable CRM/audit timelines and handles staged Excel imports with row-level validation previews.
+- **Designed Empty States**: When collections are empty (`items.length === 0`), render a dashed border container (`border-dashed border-2 rounded-xl p-8`) with a themed icon (`PackageSearch`), clear heading, instructional subtext, and an actionable CTA button.
+
+#### 2. Forms, Validation & Mutation Architecture
+- **React Hook Form + Zod**: Universal adoption of `useForm` with `zodResolver` and `useFieldArray`. Deprecate manual `useState` and toast-only validation for operational forms. Invalid fields display red borders (`border-destructive focus-visible:ring-destructive`) and inline error messages (`<p className="text-[11px] text-destructive">`) directly under the input.
+- **Dialog vs. Sheet vs. Route Sizing**:
+  - *Dialog*: Strictly reserved for compact, 1-step actions (deactivation, approval reasons, assignment, brief confirmations). Only the inner body scrolls while header and Save/Cancel stay pinned.
+  - *Slide-Out Sheet (`<Sheet side="right">`)*: The standard for complex multi-section forms (Price Inquiry, Quotation Clause edits, Price Comparison Matrix, Vendor Detail Sheet). Provides 100vh of vertical space without claustrophobia, with pinned `SheetHeader`, scrollable body (`flex-1 overflow-y-auto px-6 py-5`), and pinned `SheetFooter` (`border-t bg-card shrink-0`).
+  - *Dedicated Routes*: Reserved for primary authoring hubs (BOQ Workspace, Quotation Workspace, Requisition Workspace).
+- **Collapsible Clause Cards**: Uses Shadcn `Collapsible`, `Badge`, and bounded-height `Textarea` primitives for quotation/PO clauses, preserving form state while collapsed.
+- **API Field Error Mapping & Optimistic Concurrency**: Maps `{ fieldErrors, missingRequirements }` from 400/422 responses directly into inline form errors and summary alerts while keeping user inputs intact. Mutating requests transmit `expectedVersion` (`rowVersion`).
+
+#### 3. Shadcn Primitive & Theme Compliance
+- **Eliminate Native Controls**: All checkboxes use Shadcn `<Checkbox>` with linked `<Label>`. Native inputs and buttons are replaced with accessible repository primitives.
+- **Accessible Icon Buttons**: Every icon-only button (`Trash2`, `Send`, `ExternalLink`, `Copy`, `MessageSquare`) is wrapped in a Shadcn `<Tooltip>` with `<TooltipTrigger asChild>`, descriptive `<TooltipContent>`, and explicit `aria-label`.
+- **Status Indicators**: Basic badges are enhanced with pulsing colored status dots next to entity names (e.g., emerald ping for responded/active, amber ping for sent/pending, slate dot for draft/inactive).
+- **Framer Motion Micro-Interactions**: Dynamic line items are wrapped in `<AnimatePresence initial={false}>` with smooth height and opacity slide transitions (`initial={{ opacity: 0, height: 0, y: -8 }} animate={{ opacity: 1, height: "auto", y: 0 }} exit={{ opacity: 0, height: 0, y: -8 }}`). List cards (such as invited vendors) use staggered entrance animations (`staggerChildren: 0.08`).
+
+#### 4. Shell, Navigation & Responsive Layout
+- **Desktop Inset Shell**: Standardized ~256px collapsible Sidebar (persisted in Jotai), breadcrumb header, assigned-project selector, and role-visible navigation submenus.
+- **Global Metadata Search**: Debounced, keyboard-accessible header search grouping permitted lead, customer, design, project, vendor, and PO matches.
+- **Notifications Queue**: Header unread badge and server-paginated notification list showing due times, channel delivery status, and access-verified links.
 
 Server tables use pagination/filter/sort with scoped total count. URL stores filters, not transient form edits. Bulk selection states whether it affects selected IDs on current pages; no accidental “all records” action. Offer only permitted actions and report per-record success/failure.
 

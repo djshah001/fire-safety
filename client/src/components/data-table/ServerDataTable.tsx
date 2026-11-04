@@ -147,7 +147,7 @@ export function ServerDataTable<T, TSort extends string>({
           <Select value={String(pageSize)} onValueChange={(value) => onPageSizeChange(Number(value))}>
             <SelectTrigger className="h-8 w-20" aria-label="Rows per page"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {[10, 20, 50, 100].map((size) => <SelectItem key={size} value={String(size)}>{size}</SelectItem>)}
+              {[10, 20, 50, 100, 200, 500].map((size) => <SelectItem key={size} value={String(size)}>{size}</SelectItem>)}
             </SelectContent>
           </Select>
           <Button aria-label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)} size="icon-sm" variant="outline"><ChevronLeft /></Button>

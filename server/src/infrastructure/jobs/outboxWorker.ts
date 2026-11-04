@@ -54,7 +54,7 @@ export async function claimNextJob(pool: Pool, workerId: string): Promise<Claime
     set status = 'processing',
         attempts = job.attempts + 1,
         lease_owner = $1,
-        lease_expires_at = now() + interval '60 seconds',
+        lease_expires_at = now() + interval '120 seconds',
         updated_at = now()
     from candidate
     where job.id = candidate.id
@@ -81,7 +81,7 @@ export async function handleOutboxJob(job: ClaimedJob, options: OutboxHandlerOpt
   if (job.type === 'identity.password_reset_requested') {
     const mode = options.mailDeliveryMode ?? env.MAIL_DELIVERY_MODE;
     if (mode === 'disabled') {
-      throw new PermanentJobError('Email provider is not configured; reset instructions were not delivered.');
+      throw new PermanentJobError('Email provider is not configured; reset instructions were not delivered. Set MAIL_DELIVERY_MODE to smtp or local-file in server/.env.');
     }
     const payload = passwordResetPayloadSchema.parse(job.payload);
     const resetUrl = new URL('/reset-password', options.appOrigin ?? env.APP_ORIGIN);
@@ -207,7 +207,7 @@ export async function deliverReminderEmail(
 
   const mode = options.mailDeliveryMode ?? env.MAIL_DELIVERY_MODE;
   if (mode === 'disabled') {
-    throw new PermanentJobError('Email provider is not configured; the in-app reminder remains available.');
+    throw new PermanentJobError('Email provider is not configured; the in-app reminder remains available. Set MAIL_DELIVERY_MODE to smtp or local-file in server/.env.');
   }
   const dueAt = new Intl.DateTimeFormat('en-IN', {
     dateStyle: 'medium',

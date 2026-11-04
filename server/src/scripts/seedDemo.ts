@@ -1111,24 +1111,63 @@ async function ensureQuotationScenario(
 
 async function ensureProcurementScenario(
   client: PoolClient,
-  input: { companyId: string; projectId: string; boqRevisionId: string; buyerId: string; managerId: string; scenario?: 'comparison' | 'substitution' },
+  input: {
+    companyId: string;
+    projectId: string;
+    boqRevisionId: string;
+    buyerId: string;
+    managerId: string;
+    scenario?: 'comparison' | 'substitution' | 'awarded_po';
+  },
 ) {
+  const isAwarded = input.scenario === 'awarded_po';
   const substitution = input.scenario === 'substitution';
-  const requisitionNumber = substitution ? 'DEMO-REQ-SUB-001' : 'DEMO-REQ-001';
-  const rfqNumber = substitution ? 'DEMO-RFQ-SUB-001' : 'DEMO-RFQ-001';
-  const requisition = await one<IdRow>(client, `
+  const requisitionNumber = isAwarded
+    ? 'DEMO-REQ-PO-001'
+    : substitution
+      ? 'DEMO-REQ-SUB-001'
+      : 'DEMO-REQ-001';
+  const rfqNumber = isAwarded
+    ? 'DEMO-RFQ-PO-001'
+    : substitution
+      ? 'DEMO-RFQ-SUB-001'
+      : 'DEMO-RFQ-001';
+  const title = isAwarded
+    ? 'Demo awarded purchase order (PO)'
+    : substitution
+      ? 'Demo technical substitution review'
+      : 'Demo detector procurement';
+  const reqStatus = isAwarded ? 'selected' : 'sourcing';
+  const rfqStatus = isAwarded ? 'selected' : 'open';
+  const compStatus = isAwarded ? 'selected' : 'open';
+
+  const requisition = await one<IdRow>(
+    client,
+    `
     insert into procurement_requisitions (
       company_id, project_id, boq_revision_id, requisition_number, title, status,
       buyer_user_id, purchase_manager_user_id, required_by, delivery_location, notes, row_version
-    ) values ($1, $2, $3, $6, $7, 'sourcing',
+    ) values ($1, $2, $3, $6, $7, $8,
       $4, $5, current_date + 21, 'Demo project site, Ahmedabad',
       'Synthetic demand based on the complete approved project BOQ.', 2)
     on conflict (company_id, requisition_number) do update
-      set title = procurement_requisitions.title
+      set title = excluded.title, status = excluded.status
     returning id
-  `, [input.companyId, input.projectId, input.boqRevisionId, input.buyerId, input.managerId, requisitionNumber,
-    substitution ? 'Demo technical substitution review' : 'Demo detector procurement']);
-  const requisitionLine = await one<IdRow>(client, `
+  `,
+    [
+      input.companyId,
+      input.projectId,
+      input.boqRevisionId,
+      input.buyerId,
+      input.managerId,
+      requisitionNumber,
+      title,
+      reqStatus,
+    ],
+  );
+  const requisitionLine = await one<IdRow>(
+    client,
+    `
     insert into procurement_requisition_lines (
       company_id, requisition_id, boq_line_id, line_number, item_id, item_code_snapshot,
       item_name_snapshot, specification_snapshot, unit_id, unit_symbol_snapshot, quantity
@@ -1137,17 +1176,25 @@ async function ensureProcurementScenario(
     from boq_lines line where line.boq_revision_id = $3 order by line.line_number limit 1
     on conflict (requisition_id, boq_line_id) do update set quantity = procurement_requisition_lines.quantity
     returning id
-  `, [input.companyId, requisition.id, input.boqRevisionId]);
-  const rfq = await one<IdRow>(client, `
+  `,
+    [input.companyId, requisition.id, input.boqRevisionId],
+  );
+  const rfq = await one<IdRow>(
+    client,
+    `
     insert into procurement_rfqs (
       company_id, requisition_id, rfq_number, status, response_due_date,
       commercial_terms, created_by_user_id, row_version
-    ) values ($1, $2, $4, 'open', current_date + 7,
+    ) values ($1, $2, $4, $5, current_date + 7,
       'Quote taxes, freight, lead time, payment terms and warranty separately. Internal demo only; no external message sent.', $3, 1)
-    on conflict (requisition_id) do update set commercial_terms = procurement_rfqs.commercial_terms
+    on conflict (requisition_id) do update set commercial_terms = procurement_rfqs.commercial_terms, status = excluded.status
     returning id
-  `, [input.companyId, requisition.id, input.buyerId, rfqNumber]);
-  const rfqLine = await one<IdRow>(client, `
+  `,
+    [input.companyId, requisition.id, input.buyerId, rfqNumber, rfqStatus],
+  );
+  const rfqLine = await one<IdRow>(
+    client,
+    `
     insert into procurement_rfq_lines (
       company_id, rfq_id, requisition_line_id, line_number, item_id, item_code_snapshot,
       item_name_snapshot, specification_snapshot, unit_id, unit_symbol_snapshot, quantity
@@ -1156,28 +1203,46 @@ async function ensureProcurementScenario(
     from procurement_requisition_lines req where req.id = $3
     on conflict (rfq_id, requisition_line_id) do update set quantity = procurement_rfq_lines.quantity
     returning id
-  `, [input.companyId, rfq.id, requisitionLine.id]);
-  await one<IdRow>(client, `
+  `,
+    [input.companyId, rfq.id, requisitionLine.id],
+  );
+  const comparison = await one<IdRow>(
+    client,
+    `
     insert into purchase_comparisons (company_id, rfq_id, status, row_version)
-    values ($1, $2, 'open', 1)
-    on conflict (rfq_id) do update set status = purchase_comparisons.status
+    values ($1, $2, $3, 1)
+    on conflict (rfq_id) do update set status = excluded.status
     returning id
-  `, [input.companyId, rfq.id]);
-  const vendorRows = await client.query<{ id: string; code: string }>(`
+  `,
+    [input.companyId, rfq.id, compStatus],
+  );
+  const vendorRows = await client.query<{ id: string; code: string }>(
+    `
     select id, code from vendors where company_id = $1 and code in ('DEMO-VEN-001', 'DEMO-VEN-002') order by code
-  `, [input.companyId]);
-  if (vendorRows.rows.length !== 2) throw new Error('Demo procurement scenario requires two active demo vendors.');
+  `,
+    [input.companyId],
+  );
+  if (vendorRows.rows.length !== 2)
+    throw new Error(
+      'Demo procurement scenario requires two active demo vendors.',
+    );
+  let awardedOfferId: string | null = null;
   for (const vendor of vendorRows.rows) {
-    await client.query(`
+    await client.query(
+      `
       insert into procurement_rfq_vendors (company_id, rfq_id, vendor_id)
       values ($1, $2, $3) on conflict do nothing
-    `, [input.companyId, rfq.id, vendor.id]);
+    `,
+      [input.companyId, rfq.id, vendor.id],
+    );
     const first = vendor.code === 'DEMO-VEN-001';
     const rate = first ? '950.00' : '1000.00';
     const freight = first ? '300.00' : '0.00';
     const subtotal = first ? '11400.00' : '12000.00';
     const total = first ? '11700.00' : '12000.00';
-    const offer = await one<IdRow>(client, `
+    const offer = await one<IdRow>(
+      client,
+      `
       insert into vendor_offers (
         company_id, rfq_id, vendor_id, vendor_reference, currency, tax_basis,
         freight_amount, lead_time_days, payment_terms, warranty, valid_until,
@@ -1186,22 +1251,216 @@ async function ensureProcurementScenario(
         $5, $6, $7, $8, current_date + 30, $9, $10, $11)
       on conflict (rfq_id, vendor_id) do update set vendor_reference = vendor_offers.vendor_reference
       returning id
-    `, [input.companyId, rfq.id, vendor.id, first ? 'SG-DEMO-101' : 'FC-DEMO-202', freight,
-      first ? 14 : 10, first ? '30 days from supply' : '50% advance, balance before dispatch',
-      first ? '18 months from supply' : '24 months from supply', subtotal, total, input.buyerId]);
+    `,
+      [
+        input.companyId,
+        rfq.id,
+        vendor.id,
+        first
+          ? isAwarded
+            ? 'PO-SENTINEL-101'
+            : 'SG-DEMO-101'
+          : isAwarded
+            ? 'PO-FC-202'
+            : 'FC-DEMO-202',
+        freight,
+        first ? 14 : 10,
+        first ? '30 days from supply' : '50% advance, balance before dispatch',
+        first ? '18 months from supply' : '24 months from supply',
+        subtotal,
+        total,
+        input.buyerId,
+      ],
+    );
+    if (first) {
+      awardedOfferId = offer.id;
+    }
     const technicalDeviation = substitution && first;
-    await client.query(`
+    await client.query(
+      `
       insert into vendor_offer_lines (
         company_id, vendor_offer_id, rfq_line_id, line_number, unit_rate, line_total,
         brand_offered, specification_offered, equivalence, deviation_notes
       ) values ($1, $2, $3, 1, $4, $5, $6, $7, $8::offer_equivalence, $9)
       on conflict (vendor_offer_id, rfq_line_id) do update set unit_rate = vendor_offer_lines.unit_rate
-    `, [input.companyId, offer.id, rfqLine.id, rate, subtotal, first ? 'Sentinel' : 'Velocity',
-      technicalDeviation ? 'Alternative addressable detector with a different protocol interface.' : 'Addressable optical smoke detector matching the approved technical BOQ.',
-      technicalDeviation ? 'deviation' : 'equivalent',
-      technicalDeviation ? 'Vendor proposes a different loop protocol; design-head compatibility authorization is required.' : null]);
+    `,
+      [
+        input.companyId,
+        offer.id,
+        rfqLine.id,
+        rate,
+        subtotal,
+        first ? 'Sentinel' : 'Velocity',
+        technicalDeviation
+          ? 'Alternative addressable detector with a different protocol interface.'
+          : 'Addressable optical smoke detector matching the approved technical BOQ.',
+        technicalDeviation ? 'deviation' : 'equivalent',
+        technicalDeviation
+          ? 'Vendor proposes a different loop protocol; design-head compatibility authorization is required.'
+          : null,
+      ],
+    );
   }
+
+  if (isAwarded && awardedOfferId) {
+    await client.query(
+      `
+      insert into procurement_selection_decisions (
+        company_id, comparison_id, selected_offer_id, selection_reason, selected_by_user_id
+      ) values ($1, $2, $3, 'Awarded PO: Lowest compliant commercial proposal with 24-month warranty and immediate site delivery.', $4)
+      on conflict (comparison_id) do update
+        set selection_reason = excluded.selection_reason, selected_offer_id = excluded.selected_offer_id
+    `,
+      [input.companyId, comparison.id, awardedOfferId, input.managerId],
+    );
+  }
+
   return requisition;
+}
+
+async function ensurePriceInquiryScenario(
+  client: PoolClient,
+  input: { companyId: string; userId: string },
+) {
+  const itemRows = await client.query<{ id: string; code: string; name: string; specification: string }>(`
+    select id, code, name, specification from items where company_id = $1 and code in ('DEMO-SMOKE', 'DEMO-ABC-06', 'DEMO-MS-P65') order by code
+  `, [input.companyId]);
+
+  const vendorRows = await client.query<{ id: string; code: string; displayName: string }>(`
+    select id, code, display_name as "displayName" from vendors where company_id = $1 and code in ('DEMO-VEN-001', 'DEMO-VEN-002') order by code
+  `, [input.companyId]);
+
+  if (vendorRows.rows.length < 2 || itemRows.rows.length === 0) return;
+
+  const sentinel = vendorRows.rows.find((v) => v.code === 'DEMO-VEN-001')!;
+  const flametech = vendorRows.rows.find((v) => v.code === 'DEMO-VEN-002')!;
+
+  const smokeItem = itemRows.rows.find((i) => i.code === 'DEMO-SMOKE');
+  const abcItem = itemRows.rows.find((i) => i.code === 'DEMO-ABC-06');
+  const pipeItem = itemRows.rows.find((i) => i.code === 'DEMO-MS-P65');
+
+  if (smokeItem) {
+    await client.query(`
+      insert into vendor_price_lists (company_id, vendor_id, item_id, vendor_product_name, unit_rate, currency, lead_time_days, effective_from)
+      values ($1, $2, $3, 'Sentinel Addressable Smoke Detector V1', '950.0000', 'INR', 14, current_date - 90)
+      on conflict do nothing
+    `, [input.companyId, sentinel.id, smokeItem.id]);
+    await client.query(`
+      insert into vendor_price_lists (company_id, vendor_id, item_id, vendor_product_name, unit_rate, currency, lead_time_days, effective_from)
+      values ($1, $2, $3, 'FlameTech Addressable Smoke Detector FT-100', '1000.0000', 'INR', 10, current_date - 90)
+      on conflict do nothing
+    `, [input.companyId, flametech.id, smokeItem.id]);
+  }
+  if (abcItem) {
+    await client.query(`
+      insert into vendor_price_lists (company_id, vendor_id, item_id, vendor_product_name, unit_rate, currency, lead_time_days, effective_from)
+      values ($1, $2, $3, 'Sentinel 6kg ABC Extinguisher', '820.0000', 'INR', 7, current_date - 90)
+      on conflict do nothing
+    `, [input.companyId, sentinel.id, abcItem.id]);
+    await client.query(`
+      insert into vendor_price_lists (company_id, vendor_id, item_id, vendor_product_name, unit_rate, currency, lead_time_days, effective_from)
+      values ($1, $2, $3, 'FlameTech 6kg ABC Extinguisher', '800.0000', 'INR', 7, current_date - 90)
+      on conflict do nothing
+    `, [input.companyId, flametech.id, abcItem.id]);
+  }
+  if (pipeItem) {
+    await client.query(`
+      insert into vendor_price_lists (company_id, vendor_id, item_id, vendor_product_name, unit_rate, currency, lead_time_days, effective_from)
+      values ($1, $2, $3, 'Sentinel MS Pipe 65mm Class C', '690.0000', 'INR', 7, current_date - 90)
+      on conflict do nothing
+    `, [input.companyId, sentinel.id, pipeItem.id]);
+    await client.query(`
+      insert into vendor_price_lists (company_id, vendor_id, item_id, vendor_product_name, unit_rate, currency, lead_time_days, effective_from)
+      values ($1, $2, $3, 'FlameTech Heavy MS Pipe 65mm', '710.0000', 'INR', 10, current_date - 90)
+      on conflict do nothing
+    `, [input.companyId, flametech.id, pipeItem.id]);
+  }
+
+  const inquiryItems = [
+    {
+      itemId: smokeItem?.id,
+      itemCode: smokeItem?.code,
+      itemName: smokeItem?.name ?? 'Addressable Smoke Detector',
+      specification: smokeItem?.specification ?? 'Addressable optical smoke detector with base',
+      quantity: 50,
+      unit: 'NOS',
+    },
+    {
+      itemId: abcItem?.id,
+      itemCode: abcItem?.code,
+      itemName: abcItem?.name ?? 'ABC Fire Extinguisher 6 kg',
+      specification: abcItem?.specification ?? '6 kg ABC dry powder extinguisher IS 15683',
+      quantity: 20,
+      unit: 'NOS',
+    },
+    {
+      itemId: pipeItem?.id,
+      itemCode: pipeItem?.code,
+      itemName: pipeItem?.name ?? 'MS Fire Pipe 65 mm',
+      specification: pipeItem?.specification ?? 'C-class heavy MS pipe red oxide painted',
+      quantity: 100,
+      unit: 'MTR',
+    },
+  ];
+
+  const inquiry = await one<IdRow>(client, `
+    insert into vendor_price_inquiries (
+      company_id, inquiry_code, title, description, items, status, response_due_date, created_by_user_id
+    ) values ($1, 'DEMO-PRI-001', 'Q4 Detector & Extinguisher Rate Comparison Inquiry',
+      'Rate contract inquiry sent via WhatsApp self-fill link for Q4 project replenishment.',
+      $2::jsonb, 'open', current_date + 14, $3)
+    on conflict (company_id, inquiry_code) do update
+      set title = excluded.title, items = excluded.items, description = excluded.description
+    returning id
+  `, [input.companyId, JSON.stringify(inquiryItems), input.userId]);
+
+  const invSentinel = await one<IdRow>(client, `
+    insert into vendor_price_inquiry_invitations (
+      inquiry_id, company_id, vendor_id, token, whatsapp_number, status, sent_at, expires_at, responded_at
+    ) values ($1, $2, $3, 'demo-token-sentinel-price', '+919876543210', 'responded', now() - interval '2 days', now() + interval '12 days', now() - interval '1 day')
+    on conflict (token) do update
+      set status = 'responded', responded_at = now() - interval '1 day'
+    returning id
+  `, [inquiry.id, input.companyId, sentinel.id]);
+
+  const invFlameTech = await one<IdRow>(client, `
+    insert into vendor_price_inquiry_invitations (
+      inquiry_id, company_id, vendor_id, token, whatsapp_number, status, sent_at, expires_at, responded_at
+    ) values ($1, $2, $3, 'demo-token-flametech-price', '+919876543211', 'responded', now() - interval '2 days', now() + interval '12 days', now() - interval '12 hours')
+    on conflict (token) do update
+      set status = 'responded', responded_at = now() - interval '12 hours'
+    returning id
+  `, [inquiry.id, input.companyId, flametech.id]);
+
+  await client.query(`
+    delete from vendor_price_inquiry_responses where inquiry_id = $1
+  `, [inquiry.id]);
+
+  const sentinelResponses = [
+    { itemRef: inquiryItems[0], unitRate: '920.0000', leadTimeDays: 7, notes: 'Sentinel Pro - Bulk discount applied (-3.2%)' },
+    { itemRef: inquiryItems[1], unitRate: '790.0000', leadTimeDays: 3, notes: 'Ex-Ahmedabad depot stock (-3.7%)' },
+    { itemRef: inquiryItems[2], unitRate: '670.0000', leadTimeDays: 5, notes: 'Includes test certificates (-2.9%)' },
+  ];
+  for (const r of sentinelResponses) {
+    await client.query(`
+      insert into vendor_price_inquiry_responses (
+        invitation_id, inquiry_id, vendor_id, company_id, item_ref, unit_rate, currency, lead_time_days, notes
+      ) values ($1, $2, $3, $4, $5::jsonb, $6, 'INR', $7, $8)
+    `, [invSentinel.id, inquiry.id, sentinel.id, input.companyId, JSON.stringify(r.itemRef), r.unitRate, r.leadTimeDays, r.notes]);
+  }
+
+  const flametechResponses = [
+    { itemRef: inquiryItems[0], unitRate: '980.0000', leadTimeDays: 10, notes: 'FT-200 Optical Smoke Detector (-2.0%)' },
+    { itemRef: inquiryItems[1], unitRate: '810.0000', leadTimeDays: 4, notes: 'ISI Stamped 6kg (+1.3%)' },
+    { itemRef: inquiryItems[2], unitRate: '695.0000', leadTimeDays: 7, notes: 'IS 1239 Heavy Class C (-2.1%)' },
+  ];
+  for (const r of flametechResponses) {
+    await client.query(`
+      insert into vendor_price_inquiry_responses (
+        invitation_id, inquiry_id, vendor_id, company_id, item_ref, unit_rate, currency, lead_time_days, notes
+      ) values ($1, $2, $3, $4, $5::jsonb, $6, 'INR', $7, $8)
+    `, [invFlameTech.id, inquiry.id, flametech.id, input.companyId, JSON.stringify(r.itemRef), r.unitRate, r.leadTimeDays, r.notes]);
+  }
 }
 
 async function seedCurrentWorkflows(client: PoolClient, input: {
@@ -2129,6 +2388,18 @@ async function seed() {
       buyerId: purchaseExecutiveId,
       managerId: purchaseManagerId,
       scenario: 'substitution',
+    });
+    await ensureProcurementScenario(client, {
+      companyId: company.id,
+      projectId: procurementProject.id,
+      boqRevisionId: downstreamBoqs[3]!.id,
+      buyerId: purchaseExecutiveId,
+      managerId: purchaseManagerId,
+      scenario: 'awarded_po',
+    });
+    await ensurePriceInquiryScenario(client, {
+      companyId: company.id,
+      userId: purchaseExecutiveId,
     });
     await ensureQuotationScenario(client, {
       companyId: company.id,

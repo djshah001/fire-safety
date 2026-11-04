@@ -40,12 +40,149 @@ export type ItemOffering = {
   manufacturerModel: string; manufacturerSku: string | null; isPreferred: boolean;
   status: MasterStatus; rowVersion: number; updatedAt: string;
 };
-export type Vendor = {
-  id: string; code: string; displayName: string; legalName: string | null; taxIdentifier: string | null;
-  addressLine1: string | null; addressLine2: string | null; city: string | null; state: string | null;
-  postalCode: string | null; country: string | null; status: MasterStatus; rowVersion: number; updatedAt: string;
-  primaryContact: { id: string; name: string; jobTitle: string | null; phone: string | null; email: string | null } | null;
+export type VendorType =
+  | 'material_supplier'
+  | 'manufacturer'
+  | 'distributor_dealer'
+  | 'service_provider'
+  | 'installation_contractor'
+  | 'labour_contractor'
+  | 'transport_logistics'
+  | 'other';
+
+export type VendorApprovalStatus = 'draft' | 'pending_approval' | 'active' | 'rejected';
+
+export type VendorContact = {
+  id: string;
+  name: string;
+  jobTitle: string | null;
+  phone: string | null;
+  alternatePhone: string | null;
+  email: string | null;
+  isPrimary: boolean;
+  status: MasterStatus;
 };
+
+export type VendorAddress = {
+  id: string;
+  addressType: string;
+  addressLine1: string;
+  addressLine2: string | null;
+  city: string;
+  state: string;
+  postalCode: string;
+  country: string;
+  isDefault: boolean;
+};
+
+export type VendorBankAccount = {
+  id: string;
+  accountHolderName: string;
+  accountNumber: string;
+  accountNumberMasked?: string;
+  ifscCode: string;
+  bankName: string;
+  branch: string | null;
+  upiId: string | null;
+  isDefault: boolean;
+};
+
+export type VendorDocument = {
+  id: string;
+  documentType: string;
+  originalFileName: string;
+  fileSize: number;
+  mimeType: string;
+  uploadedAt: string;
+};
+
+export type VendorPriceListItem = {
+  id: string;
+  vendorId: string;
+  itemId: string | null;
+  vendorProductCode: string | null;
+  vendorProductName: string;
+  description: string | null;
+  unitRate: string;
+  currency: string;
+  leadTimeDays: number | null;
+  minimumOrderQuantity: string;
+  effectiveFrom: string;
+  itemCode?: string | null;
+  itemName?: string | null;
+};
+
+export type Vendor = {
+  id: string;
+  code: string;
+  displayName: string;
+  tradeName: string | null;
+  vendorType: VendorType;
+  supplierCategories: string[];
+  website: string | null;
+  companyDescription: string | null;
+  legalName: string | null;
+  gstStatus: 'registered' | 'unregistered';
+  gstin: string | null;
+  pan: string | null;
+  taxIdentifier: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+  country: string | null;
+  brandsSupplied: string[];
+  deliveryLocations: string | null;
+  typicalLeadTimeDays: number | null;
+  minimumOrderValue: string | null;
+  paymentTerms: string | null;
+  creditPeriodDays: number | null;
+  creditLimit: string | null;
+  preferredCurrency: string;
+  assignedBuyerUserId: string | null;
+  internalNotes: string | null;
+  approvalStatus: VendorApprovalStatus;
+  isArchived: boolean;
+  approvedAt: string | null;
+  status: MasterStatus;
+  rowVersion: number;
+  updatedAt: string;
+  createdAt?: string;
+  primaryContact: {
+    id: string;
+    name: string;
+    jobTitle: string | null;
+    phone: string | null;
+    alternatePhone?: string | null;
+    email: string | null;
+  } | null;
+  contacts?: VendorContact[];
+  addresses?: VendorAddress[];
+  bankAccounts?: VendorBankAccount[];
+  documents?: VendorDocument[];
+  priceList?: VendorPriceListItem[];
+};
+
+export type VendorInvitation = {
+  id: string;
+  token: string;
+  whatsappNumber: string;
+  contactName: string;
+  companyName: string | null;
+  status: string;
+  expiresAt: string;
+  registrationUrl: string;
+  whatsappUrl: string;
+  messageText: string;
+  msg91Delivery?: {
+    success: boolean;
+    status: 'sent' | 'unconfigured' | 'failed';
+    messageId?: string;
+    error?: string;
+  };
+};
+
 export type MasterPage<T> = { items: T[]; total: number; page: number; pageSize: number };
 export type MasterResource = 'vendors' | 'items' | 'item-families' | 'item-categories' | 'brands' | 'units';
 
@@ -63,8 +200,12 @@ export const masterListQuery = <T>(resource: MasterResource, filters: MasterFilt
   },
 });
 
-export const masterLookupsQuery = (resource: 'units' | 'item-families' | 'item-categories' | 'brands') => masterListQuery<Unit | ItemFamily | ItemCategory | Brand>(resource, {
+export const masterLookupsQuery = (resource: 'units' | 'item-families' | 'item-categories' | 'brands' | 'items') => masterListQuery<Unit | ItemFamily | ItemCategory | Brand | Item>(resource, {
   status: 'active', page: 1, pageSize: 100, sort: 'name', direction: 'asc',
+});
+
+export const vendorLookupsQuery = () => masterListQuery<Vendor>('vendors', {
+  status: 'active', page: 1, pageSize: 200, sort: 'name', direction: 'asc',
 });
 
 export const itemOfferingsQuery = (itemId?: string) => queryOptions({
@@ -105,4 +246,122 @@ export async function updateMaster(resource: MasterResource, id: string, input: 
 
 export async function deactivateMaster(resource: MasterResource, id: string, expectedVersion: number, reason: string) {
   await apiClient.post(`/masters/${resource}/${id}/deactivate`, { expectedVersion, reason });
+}
+
+export const vendorDetailQuery = (id?: string) => queryOptions({
+  queryKey: ['masters', 'vendors', id] as const,
+  enabled: Boolean(id),
+  queryFn: async ({ signal }) => (await apiClient.get<ApiEnvelope<{ vendor: Vendor }>>(`/masters/vendors/${id}`, { signal })).data.data.vendor,
+});
+
+export const vendorPriceListQuery = (vendorId?: string) => queryOptions({
+  queryKey: ['masters', 'vendors', vendorId, 'price-list'] as const,
+  enabled: Boolean(vendorId),
+  queryFn: async ({ signal }) => (await apiClient.get<ApiEnvelope<{ items: VendorPriceListItem[] }>>(`/masters/vendors/${vendorId}/price-list`, { signal })).data.data.items,
+});
+
+export async function checkVendorDuplicates(input: { displayName?: string; gstin?: string; phone?: string; excludeVendorId?: string }) {
+  const response = await apiClient.post<ApiEnvelope<{
+    gstinMatch?: { id: string; code: string; displayName: string; gstin: string };
+    nameMatches: Array<{ id: string; code: string; displayName: string }>;
+    phoneMatches: Array<{ id: string; code: string; displayName: string; contactPhone: string }>;
+    hasWarnings: boolean;
+    hasBlockingDuplicate: boolean;
+  }>>('/masters/vendors/check-duplicates', input);
+  return response.data.data;
+}
+
+export async function createVendor(input: Record<string, unknown>) {
+  const response = await apiClient.post<ApiEnvelope<{ vendor: Vendor }>>('/masters/vendors', input);
+  return response.data.data.vendor;
+}
+
+export async function updateVendor(id: string, input: Record<string, unknown>) {
+  const response = await apiClient.put<ApiEnvelope<{ vendor: Vendor }>>(`/masters/vendors/${id}`, input);
+  return response.data.data.vendor;
+}
+
+export async function archiveVendor(id: string, expectedVersion: number, reason?: string) {
+  const response = await apiClient.post<ApiEnvelope<{ vendor: Vendor }>>(`/masters/vendors/${id}/archive`, { expectedVersion, reason });
+  return response.data.data.vendor;
+}
+
+export async function approveVendor(id: string, expectedVersion: number) {
+  const response = await apiClient.post<ApiEnvelope<{ vendor: Vendor }>>(`/masters/vendors/${id}/approve`, { expectedVersion });
+  return response.data.data.vendor;
+}
+
+export async function createVendorInvitation(input: {
+  whatsappNumber: string;
+  contactName: string;
+  companyName?: string;
+  validDays?: number;
+  sendViaMsg91?: boolean;
+}) {
+  const response = await apiClient.post<ApiEnvelope<{ invitation: VendorInvitation }>>('/masters/vendors/invitations', input);
+  return response.data.data.invitation;
+}
+
+export async function sendVendorInvitationMsg91(invitationId: string) {
+  const response = await apiClient.post<ApiEnvelope<{
+    result: {
+      success: boolean;
+      status: 'sent' | 'unconfigured' | 'failed';
+      messageId?: string;
+      error?: string;
+    };
+  }>>(`/masters/vendors/invitations/${invitationId}/send-msg91`);
+  return response.data.data.result;
+}
+
+export async function createVendorPriceListItem(vendorId: string, input: Record<string, unknown>) {
+  const response = await apiClient.post<ApiEnvelope<{ item: VendorPriceListItem }>>(`/masters/vendors/${vendorId}/price-list`, input);
+  return response.data.data.item;
+}
+
+export async function updateVendorPriceListItem(vendorId: string, priceListId: string, input: Record<string, unknown>) {
+  const response = await apiClient.put<ApiEnvelope<{ item: VendorPriceListItem }>>(`/masters/vendors/${vendorId}/price-list/${priceListId}`, input);
+  return response.data.data.item;
+}
+
+export async function deleteVendorPriceListItem(vendorId: string, priceListId: string) {
+  await apiClient.delete(`/masters/vendors/${vendorId}/price-list/${priceListId}`);
+}
+
+export async function uploadVendorDocument(vendorId: string, documentType: string, file: File) {
+  const formData = new FormData();
+  formData.append('documentType', documentType);
+  formData.append('file', file);
+  const response = await apiClient.post<ApiEnvelope<{ document: VendorDocument }>>(`/masters/vendors/${vendorId}/documents`, formData);
+  return response.data.data.document;
+}
+
+export async function deleteVendorDocument(vendorId: string, documentId: string) {
+  await apiClient.delete(`/masters/vendors/${vendorId}/documents/${documentId}`);
+}
+
+// Public Vendor Onboarding APIs
+export const publicOnboardingInvitationQuery = (token?: string) => queryOptions({
+  queryKey: ['public-onboarding', token] as const,
+  enabled: Boolean(token),
+  queryFn: async ({ signal }) => {
+    const response = await apiClient.get<ApiEnvelope<{
+      status: 'pending' | 'submitted' | 'expired';
+      invitation: { contactName: string; companyName: string | null; whatsappNumber: string };
+    }>>(`/vendor-onboarding/${token}`, { signal });
+    return response.data.data;
+  },
+});
+
+export async function submitPublicOnboarding(token: string, input: Record<string, unknown>) {
+  const response = await apiClient.post<ApiEnvelope<{ success: boolean; vendorId: string; code: string; displayName: string }>>(`/vendor-onboarding/${token}/submit`, input);
+  return response.data.data;
+}
+
+export async function uploadPublicOnboardingDocument(token: string, documentType: string, file: File) {
+  const formData = new FormData();
+  formData.append('documentType', documentType);
+  formData.append('file', file);
+  const response = await apiClient.post<ApiEnvelope<{ document: VendorDocument }>>(`/vendor-onboarding/${token}/documents`, formData);
+  return response.data.data.document;
 }

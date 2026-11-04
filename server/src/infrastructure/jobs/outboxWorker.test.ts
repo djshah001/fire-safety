@@ -42,10 +42,10 @@ describe('outbox handlers', () => {
   });
 
   it('does not claim password reset delivery when email is unconfigured', async () => {
-    await expect(handleOutboxJob(job)).rejects.toEqual(expect.objectContaining({
+    await expect(handleOutboxJob(job, { mailDeliveryMode: 'disabled' })).rejects.toEqual(expect.objectContaining({
       message: expect.stringContaining('not configured'),
     }));
-    await expect(handleOutboxJob(job)).rejects.toBeInstanceOf(PermanentJobError);
+    await expect(handleOutboxJob(job, { mailDeliveryMode: 'disabled' })).rejects.toBeInstanceOf(PermanentJobError);
   });
 
   it('captures reset instructions in the private local test mailbox', async () => {

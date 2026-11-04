@@ -13,12 +13,15 @@ import { createAuthRouter } from './modules/auth/auth.routes.js';
 import { createAdminRouter } from './modules/admin/admin.routes.js';
 import { createCrmRouter } from './modules/crm/crm.routes.js';
 import { createMastersRouter } from './modules/masters/masters.routes.js';
+import { createPublicVendorOnboardingRouter } from './modules/masters/vendorOnboarding.routes.js';
 import { createEngineeringRouter } from './modules/engineering/engineering.routes.js';
 import { createBoqRouter } from './modules/engineering/boq.routes.js';
 import { createQuotationRouter } from './modules/engineering/quotation.routes.js';
 import { createNotificationRouter } from './modules/notifications/notification.routes.js';
 import { createProjectRouter } from './modules/projects/project.routes.js';
 import { createProcurementRouter } from './modules/procurement/procurement.routes.js';
+import { createPriceInquiryRouter } from './modules/procurement/priceInquiry.routes.js';
+import { createPublicPriceInquiryRouter } from './modules/procurement/priceInquiry.public.routes.js';
 
 export type AppDependencies = {
   checkReadiness?: ReadinessCheck;
@@ -55,10 +58,13 @@ export function createApp(dependencies: AppDependencies = {}) {
   app.use('/api/v1/admin', createAdminRouter());
   app.use('/api/v1/crm', createCrmRouter());
   app.use('/api/v1/masters', createMastersRouter());
+  app.use('/api/v1/vendor-onboarding', createPublicVendorOnboardingRouter());
   app.use('/api/v1/engineering', createEngineeringRouter());
   app.use('/api/v1/engineering', createBoqRouter());
   app.use('/api/v1/engineering', createQuotationRouter());
   app.use('/api/v1/procurement', createProcurementRouter());
+  app.use('/api/v1/procurement', createPriceInquiryRouter());
+  app.use('/api/v1/vendor-price', createPublicPriceInquiryRouter());
 
   app.use(notFoundHandler);
   app.use(errorHandler);

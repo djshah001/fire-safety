@@ -420,14 +420,36 @@ export const vendors = pgTable(
     displayNameNormalized: varchar("display_name_normalized", {
       length: 160,
     }).notNull(),
+    tradeName: varchar("trade_name", { length: 200 }),
+    vendorType: varchar("vendor_type", { length: 50 }).notNull().default("material_supplier"),
+    supplierCategories: jsonb("supplier_categories").notNull().default([]),
+    website: varchar("website", { length: 255 }),
+    companyDescription: varchar("company_description", { length: 2000 }),
     legalName: varchar("legal_name", { length: 200 }),
+    gstStatus: varchar("gst_status", { length: 20 }).notNull().default("unregistered"),
+    gstin: varchar("gstin", { length: 15 }),
+    pan: varchar("pan", { length: 10 }),
     taxIdentifier: varchar("tax_identifier", { length: 40 }),
     addressLine1: varchar("address_line_1", { length: 200 }),
     addressLine2: varchar("address_line_2", { length: 200 }),
     city: varchar("city", { length: 100 }),
     state: varchar("state", { length: 100 }),
     postalCode: varchar("postal_code", { length: 20 }),
-    country: varchar("country", { length: 100 }),
+    country: varchar("country", { length: 100 }).default("India"),
+    brandsSupplied: jsonb("brands_supplied").notNull().default([]),
+    deliveryLocations: varchar("delivery_locations", { length: 1000 }),
+    typicalLeadTimeDays: integer("typical_lead_time_days"),
+    minimumOrderValue: numeric("minimum_order_value", { precision: 18, scale: 2 }),
+    paymentTerms: varchar("payment_terms", { length: 500 }),
+    creditPeriodDays: integer("credit_period_days"),
+    creditLimit: numeric("credit_limit", { precision: 18, scale: 2 }),
+    preferredCurrency: varchar("preferred_currency", { length: 3 }).notNull().default("INR"),
+    assignedBuyerUserId: uuid("assigned_buyer_user_id").references(() => users.id, { onDelete: "set null" }),
+    internalNotes: varchar("internal_notes", { length: 2000 }),
+    approvalStatus: varchar("approval_status", { length: 30 }).notNull().default("active"),
+    isArchived: boolean("is_archived").notNull().default(false),
+    approvedByUserId: uuid("approved_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
     status: masterStatusEnum("status").notNull().default("active"),
     rowVersion: integer("row_version").notNull().default(1),
     createdByUserId: uuid("created_by_user_id")
@@ -442,11 +464,16 @@ export const vendors = pgTable(
   },
   (table) => [
     uniqueIndex("vendors_company_code_uidx").on(table.companyId, table.code),
+    uniqueIndex("vendors_company_gstin_uidx")
+      .on(table.companyId, table.gstin)
+      .where(sql`${table.gstin} is not null and ${table.gstin} <> ''`),
     index("vendors_company_name_idx").on(
       table.companyId,
       table.displayNameNormalized,
     ),
     index("vendors_company_status_idx").on(table.companyId, table.status),
+    index("vendors_company_approval_idx").on(table.companyId, table.approvalStatus),
+    index("vendors_company_archived_idx").on(table.companyId, table.isArchived),
     check("vendors_row_version_positive", sql`${table.rowVersion} > 0`),
   ],
 );
@@ -465,6 +492,7 @@ export const vendorContacts = pgTable(
     jobTitle: varchar("job_title", { length: 100 }),
     phone: varchar("phone", { length: 30 }),
     phoneNormalized: varchar("phone_normalized", { length: 20 }),
+    alternatePhone: varchar("alternate_phone", { length: 30 }),
     email: varchar("email", { length: 254 }),
     emailNormalized: varchar("email_normalized", { length: 254 }),
     isPrimary: boolean("is_primary").notNull().default(false),
@@ -501,6 +529,248 @@ export const vendorContacts = pgTable(
   ],
 );
 
+export const vendorAddresses = pgTable(
+  "vendor_addresses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "restrict" }),
+    vendorId: uuid("vendor_id")
+      .notNull()
+      .references(() => vendors.id, { onDelete: "cascade" }),
+    addressType: varchar("address_type", { length: 50 }).notNull().default("office"),
+    addressLine1: varchar("address_line_1", { length: 200 }).notNull(),
+    addressLine2: varchar("address_line_2", { length: 200 }),
+    city: varchar("city", { length: 100 }).notNull(),
+    state: varchar("state", { length: 100 }).notNull(),
+    postalCode: varchar("postal_code", { length: 20 }).notNull(),
+    country: varchar("country", { length: 100 }).notNull().default("India"),
+    isDefault: boolean("is_default").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("vendor_addresses_company_vendor_idx").on(table.companyId, table.vendorId),
+    check("vendor_addresses_address_line1_required", sql`length(trim(${table.addressLine1})) > 0`),
+  ],
+);
+
+export const vendorBankAccounts = pgTable(
+  "vendor_bank_accounts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "restrict" }),
+    vendorId: uuid("vendor_id")
+      .notNull()
+      .references(() => vendors.id, { onDelete: "cascade" }),
+    accountHolderName: varchar("account_holder_name", { length: 160 }).notNull(),
+    accountNumber: varchar("account_number", { length: 50 }).notNull(),
+    ifscCode: varchar("ifsc_code", { length: 11 }).notNull(),
+    bankName: varchar("bank_name", { length: 160 }).notNull(),
+    branch: varchar("branch", { length: 160 }),
+    upiId: varchar("upi_id", { length: 100 }),
+    isDefault: boolean("is_default").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("vendor_bank_accounts_company_vendor_idx").on(table.companyId, table.vendorId),
+    check("vendor_bank_accounts_acc_num_required", sql`length(trim(${table.accountNumber})) > 0`),
+    check("vendor_bank_accounts_ifsc_required", sql`length(trim(${table.ifscCode})) > 0`),
+  ],
+);
+
+export const vendorDocuments = pgTable(
+  "vendor_documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "restrict" }),
+    vendorId: uuid("vendor_id")
+      .notNull()
+      .references(() => vendors.id, { onDelete: "cascade" }),
+    documentType: varchar("document_type", { length: 50 }).notNull(),
+    originalFileName: varchar("original_file_name", { length: 255 }).notNull(),
+    fileSize: integer("file_size").notNull(),
+    mimeType: varchar("mime_type", { length: 100 }).notNull(),
+    storageName: varchar("storage_name", { length: 255 }).notNull(),
+    checksumSha256: varchar("checksum_sha256", { length: 64 }).notNull(),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("vendor_documents_company_vendor_idx").on(table.companyId, table.vendorId),
+  ],
+);
+
+export const vendorPriceLists = pgTable(
+  "vendor_price_lists",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "restrict" }),
+    vendorId: uuid("vendor_id")
+      .notNull()
+      .references(() => vendors.id, { onDelete: "cascade" }),
+    itemId: uuid("item_id").references(() => items.id, { onDelete: "set null" }),
+    vendorProductCode: varchar("vendor_product_code", { length: 100 }),
+    vendorProductName: varchar("vendor_product_name", { length: 200 }).notNull(),
+    description: varchar("description", { length: 1000 }),
+    unitRate: numeric("unit_rate", { precision: 18, scale: 4 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull().default("INR"),
+    leadTimeDays: integer("lead_time_days"),
+    minimumOrderQuantity: numeric("minimum_order_quantity", { precision: 18, scale: 4 }).notNull().default("1"),
+    effectiveFrom: date("effective_from").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("vendor_price_lists_company_vendor_idx").on(table.companyId, table.vendorId),
+    check("vendor_price_lists_rate_positive", sql`${table.unitRate} >= 0`),
+  ],
+);
+
+export const vendorOnboardingInvitations = pgTable(
+  "vendor_onboarding_invitations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "restrict" }),
+    token: varchar("token", { length: 64 }).notNull(),
+    whatsappNumber: varchar("whatsapp_number", { length: 30 }).notNull(),
+    whatsappNumberNormalized: varchar("whatsapp_number_normalized", { length: 20 }).notNull(),
+    contactName: varchar("contact_name", { length: 120 }).notNull(),
+    companyName: varchar("company_name", { length: 160 }),
+    status: varchar("status", { length: 30 }).notNull().default("pending"),
+    vendorId: uuid("vendor_id").references(() => vendors.id, { onDelete: "set null" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    invitedByUserId: uuid("invited_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("vendor_onboarding_invitations_token_uidx").on(table.token),
+    index("vendor_onboarding_invitations_company_phone_idx").on(table.companyId, table.whatsappNumberNormalized),
+  ],
+);
+
+export const vendorPriceInquiries = pgTable(
+  "vendor_price_inquiries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "restrict" }),
+    inquiryCode: varchar("inquiry_code", { length: 20 }).notNull(),
+    title: varchar("title", { length: 200 }).notNull(),
+    description: varchar("description", { length: 1000 }),
+    items: jsonb("items").notNull().default([]),
+    status: varchar("status", { length: 20 }).notNull().default("draft"),
+    responseDueDate: date("response_due_date"),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("vpi_company_code_uidx").on(table.companyId, table.inquiryCode),
+    index("vpi_company_status_idx").on(table.companyId, table.status),
+  ],
+);
+
+export const vendorPriceInquiryInvitations = pgTable(
+  "vendor_price_inquiry_invitations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    inquiryId: uuid("inquiry_id")
+      .notNull()
+      .references(() => vendorPriceInquiries.id, { onDelete: "cascade" }),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "restrict" }),
+    vendorId: uuid("vendor_id")
+      .notNull()
+      .references(() => vendors.id, { onDelete: "restrict" }),
+    token: varchar("token", { length: 64 }).notNull(),
+    whatsappNumber: varchar("whatsapp_number", { length: 30 }),
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    msg91MessageId: varchar("msg91_message_id", { length: 100 }),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    respondedAt: timestamp("responded_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("vpii_token_uidx").on(table.token),
+    index("vpii_inquiry_idx").on(table.inquiryId),
+    index("vpii_vendor_idx").on(table.vendorId),
+  ],
+);
+
+export const vendorPriceInquiryResponses = pgTable(
+  "vendor_price_inquiry_responses",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invitationId: uuid("invitation_id")
+      .notNull()
+      .references(() => vendorPriceInquiryInvitations.id, { onDelete: "cascade" }),
+    inquiryId: uuid("inquiry_id")
+      .notNull()
+      .references(() => vendorPriceInquiries.id, { onDelete: "cascade" }),
+    vendorId: uuid("vendor_id")
+      .notNull()
+      .references(() => vendors.id, { onDelete: "restrict" }),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "restrict" }),
+    itemRef: jsonb("item_ref").notNull(),
+    unitRate: numeric("unit_rate", { precision: 18, scale: 4 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull().default("INR"),
+    leadTimeDays: integer("lead_time_days"),
+    notes: varchar("notes", { length: 500 }),
+    moq: numeric("moq", { precision: 18, scale: 4 }),
+    validUntil: date("valid_until"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("vpir_inquiry_vendor_idx").on(table.inquiryId, table.vendorId),
+    index("vpir_invitation_idx").on(table.invitationId),
+  ],
+);
+
 export type Unit = typeof units.$inferSelect;
 export type ItemCategory = typeof itemCategories.$inferSelect;
 export type Brand = typeof brands.$inferSelect;
@@ -510,3 +780,11 @@ export type ItemBrandOffering = typeof itemBrandOfferings.$inferSelect;
 export type ItemRateVersion = typeof itemRateVersions.$inferSelect;
 export type Vendor = typeof vendors.$inferSelect;
 export type VendorContact = typeof vendorContacts.$inferSelect;
+export type VendorAddress = typeof vendorAddresses.$inferSelect;
+export type VendorBankAccount = typeof vendorBankAccounts.$inferSelect;
+export type VendorDocument = typeof vendorDocuments.$inferSelect;
+export type VendorPriceList = typeof vendorPriceLists.$inferSelect;
+export type VendorOnboardingInvitation = typeof vendorOnboardingInvitations.$inferSelect;
+export type VendorPriceInquiry = typeof vendorPriceInquiries.$inferSelect;
+export type VendorPriceInquiryInvitation = typeof vendorPriceInquiryInvitations.$inferSelect;
+export type VendorPriceInquiryResponse = typeof vendorPriceInquiryResponses.$inferSelect;

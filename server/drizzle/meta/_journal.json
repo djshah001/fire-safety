@@ -155,6 +155,20 @@
       "when": 1793369836331,
       "tag": "0021_brainy_sabra",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793638516081,
+      "tag": "0022_sour_owl",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793724916000,
+      "tag": "0023_vendor_price_inquiry",
+      "breakpoints": true
     }
   ]
 }

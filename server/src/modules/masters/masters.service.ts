@@ -1,12 +1,17 @@
+import { createHash, randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { AppError, ConflictError, NotFoundError } from '../../core/errors/appError.js';
 import { normalizeEmail, normalizeName, normalizePhone } from '../../core/text/normalize.js';
 import { db, type Database } from '../../infrastructure/database/db.js';
+import { msg91WhatsAppService } from '../../infrastructure/notifications/msg91.js';
+import { removePrivateFile } from '../../infrastructure/storage/localFileStorage.js';
 import { createAuthRepository } from '../auth/auth.repository.js';
 import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
 import { createMastersRepository } from './masters.repository.js';
 import type {
   BrandCreateInput,
   BrandUpdateInput,
+  CreateVendorInvitationInput,
   ItemCategoryCreateInput,
   ItemCategoryUpdateInput,
   ItemCreateInput,
@@ -20,6 +25,9 @@ import type {
   UnitCreateInput,
   UnitUpdateInput,
   VendorCreateInput,
+  VendorDuplicateCheckInput,
+  VendorPriceListCreateInput,
+  VendorPriceListUpdateInput,
   VendorUpdateInput,
 } from './masters.schemas.js';
 
@@ -72,20 +80,29 @@ export function normalizeSpecificationValues(
   return normalized;
 }
 
-function contactValues(input: VendorCreateInput['primaryContact']) {
-  const phoneNormalized = normalizePhone(input.phone);
-  const emailNormalized = normalizeEmail(input.email);
+function contactValues(input: {
+  name: string;
+  jobTitle?: string;
+  phone?: string;
+  alternatePhone?: string;
+  email?: string;
+  isPrimary?: boolean;
+}) {
+  const phoneNormalized = input.phone ? normalizePhone(input.phone) : undefined;
+  const emailNormalized = input.email ? normalizeEmail(input.email) : undefined;
   if (!phoneNormalized && !emailNormalized) {
-    throw new AppError('VALIDATION_ERROR', 'Provide a valid primary-contact phone number or email address.', 422);
+    throw new AppError('VALIDATION_ERROR', 'Provide a valid contact phone number or email address.', 422);
   }
   return {
     name: input.name,
     jobTitle: input.jobTitle,
     phone: input.phone,
     phoneNormalized,
+    alternatePhone: input.alternatePhone,
     email: input.email,
     emailNormalized,
-    isPrimary: true,
+    isPrimary: input.isPrimary ?? false,
+    status: 'active' as const,
   };
 }
 
@@ -438,22 +455,117 @@ export class MastersService {
     });
   }
 
+  async getVendor(principal: AuthenticatedPrincipal, id: string) {
+    const detail = await createMastersRepository(this.database).getVendorDetail(principal.companyId, id);
+    if (!detail) throw new NotFoundError('Vendor not found.');
+    return detail;
+  }
+
+  async checkVendorDuplicates(principal: AuthenticatedPrincipal, input: VendorDuplicateCheckInput) {
+    const repository = createMastersRepository(this.database);
+    const result = await repository.findVendorDuplicates(
+      principal.companyId,
+      input.gstin,
+      input.displayName ? normalizeName(input.displayName) : undefined,
+      input.phone ? (normalizePhone(input.phone) ?? undefined) : undefined,
+      input.excludeVendorId,
+    );
+    const hasWarnings = Boolean(result.nameMatches.length || result.phoneMatches.length);
+    const hasBlockingDuplicate = Boolean(result.gstinMatch);
+    return {
+      ...result,
+      hasWarnings,
+      hasBlockingDuplicate,
+    };
+  }
+
   async createVendor(principal: AuthenticatedPrincipal, input: VendorCreateInput, requestId: string) {
     return this.database.transaction(async (transaction) => {
       const repository = createMastersRepository(transaction);
-      const { primaryContact, ...vendorInput } = input;
+      const {
+        primaryContact,
+        additionalContacts = [],
+        additionalAddresses = [],
+        bankAccounts = [],
+        code: inputCode,
+        ...vendorInput
+      } = input;
+
+      const code = inputCode || await repository.getNextVendorCode(principal.companyId);
+
+      if (input.gstStatus === 'registered' && input.gstin) {
+        const existingGstin = await repository.findVendorByGstin(principal.companyId, input.gstin);
+        if (existingGstin) {
+          throw new ConflictError(`A vendor with GSTIN ${input.gstin} already exists: ${existingGstin.displayName} (${existingGstin.code})`);
+        }
+      }
+
       const vendor = await repository.createVendor({
         ...vendorInput,
+        code,
         companyId: principal.companyId,
         displayNameNormalized: normalizeName(input.displayName),
         createdByUserId: principal.userId,
       });
+
       await repository.createVendorContact({
-        ...contactValues(primaryContact),
+        ...contactValues({ ...primaryContact, isPrimary: true }),
         companyId: principal.companyId,
         vendorId: vendor!.id,
         createdByUserId: principal.userId,
       });
+
+      for (const contact of additionalContacts) {
+        await repository.createVendorContact({
+          ...contactValues({ ...contact, isPrimary: false }),
+          companyId: principal.companyId,
+          vendorId: vendor!.id,
+          createdByUserId: principal.userId,
+        });
+      }
+
+      await repository.createVendorAddress({
+        companyId: principal.companyId,
+        vendorId: vendor!.id,
+        addressType: 'registered',
+        addressLine1: input.addressLine1,
+        addressLine2: input.addressLine2,
+        city: input.city,
+        state: input.state,
+        postalCode: input.postalCode,
+        country: input.country || 'India',
+        isDefault: true,
+      });
+
+      for (const addr of additionalAddresses) {
+        await repository.createVendorAddress({
+          companyId: principal.companyId,
+          vendorId: vendor!.id,
+          addressType: addr.addressType || 'office',
+          addressLine1: addr.addressLine1,
+          addressLine2: addr.addressLine2,
+          city: addr.city,
+          state: addr.state,
+          postalCode: addr.postalCode,
+          country: addr.country || 'India',
+          isDefault: addr.isDefault || false,
+        });
+      }
+
+      for (const bank of bankAccounts) {
+        await repository.createVendorBankAccount({
+          companyId: principal.companyId,
+          vendorId: vendor!.id,
+          accountHolderName: bank.accountHolderName,
+          accountNumber: bank.accountNumber,
+          ifscCode: bank.ifscCode.toUpperCase(),
+          bankName: bank.bankName,
+          branch: bank.branch,
+          upiId: bank.upiId,
+          isDefault: bank.isDefault ?? true,
+        });
+      }
+
       await this.audit(transaction, principal, requestId, 'master.vendor_created', 'vendor', vendor!.id);
       return vendor!;
     });
@@ -462,15 +574,107 @@ export class MastersService {
   async updateVendor(principal: AuthenticatedPrincipal, id: string, input: VendorUpdateInput, requestId: string) {
     return this.database.transaction(async (transaction) => {
       const repository = createMastersRepository(transaction);
-      const { primaryContact, expectedVersion, ...vendorInput } = input;
+      const {
+        primaryContact,
+        additionalContacts,
+        additionalAddresses,
+        bankAccounts,
+        expectedVersion,
+        code: _code,
+        ...vendorInput
+      } = input;
+
+      if (input.gstStatus === 'registered' && input.gstin) {
+        const existingGstin = await repository.findVendorByGstin(principal.companyId, input.gstin, id);
+        if (existingGstin) {
+          throw new ConflictError(`A vendor with GSTIN ${input.gstin} already exists: ${existingGstin.displayName} (${existingGstin.code})`);
+        }
+      }
+
       const now = new Date();
       const vendor = await repository.updateVendor(principal.companyId, id, expectedVersion, {
         ...vendorInput,
         displayNameNormalized: normalizeName(input.displayName),
       }, now);
       if (!vendor) throw new ConflictError('The vendor changed before this update. Refresh and try again.');
-      const contact = await repository.updatePrimaryVendorContact(principal.companyId, id, contactValues(primaryContact), now);
-      if (!contact) throw new ConflictError('The vendor primary contact is missing. Refresh and try again.');
+
+      const contact = await repository.updatePrimaryVendorContact(principal.companyId, id, contactValues({ ...primaryContact, isPrimary: true }), now);
+      if (!contact) {
+        await repository.createVendorContact({
+          ...contactValues({ ...primaryContact, isPrimary: true }),
+          companyId: principal.companyId,
+          vendorId: id,
+          createdByUserId: principal.userId,
+        });
+      }
+
+      if (additionalContacts !== undefined) {
+        await repository.deleteVendorContacts(id);
+        await repository.createVendorContact({
+          ...contactValues({ ...primaryContact, isPrimary: true }),
+          companyId: principal.companyId,
+          vendorId: id,
+          createdByUserId: principal.userId,
+        });
+        for (const c of additionalContacts) {
+          await repository.createVendorContact({
+            ...contactValues({ ...c, isPrimary: false }),
+            companyId: principal.companyId,
+            vendorId: id,
+            createdByUserId: principal.userId,
+          });
+        }
+      }
+
+      if (additionalAddresses !== undefined || input.addressLine1) {
+        await repository.deleteVendorAddresses(id);
+        await repository.createVendorAddress({
+          companyId: principal.companyId,
+          vendorId: id,
+          addressType: 'registered',
+          addressLine1: input.addressLine1,
+          addressLine2: input.addressLine2,
+          city: input.city,
+          state: input.state,
+          postalCode: input.postalCode,
+          country: input.country || 'India',
+          isDefault: true,
+        });
+        if (additionalAddresses) {
+          for (const addr of additionalAddresses) {
+            await repository.createVendorAddress({
+              companyId: principal.companyId,
+              vendorId: id,
+              addressType: addr.addressType || 'office',
+              addressLine1: addr.addressLine1,
+              addressLine2: addr.addressLine2,
+              city: addr.city,
+              state: addr.state,
+              postalCode: addr.postalCode,
+              country: addr.country || 'India',
+              isDefault: addr.isDefault || false,
+            });
+          }
+        }
+      }
+
+      if (bankAccounts !== undefined) {
+        await repository.deleteVendorBankAccounts(id);
+        for (const bank of bankAccounts) {
+          await repository.createVendorBankAccount({
+            companyId: principal.companyId,
+            vendorId: id,
+            accountHolderName: bank.accountHolderName,
+            accountNumber: bank.accountNumber,
+            ifscCode: bank.ifscCode.toUpperCase(),
+            bankName: bank.bankName,
+            branch: bank.branch,
+            upiId: bank.upiId,
+            isDefault: bank.isDefault ?? true,
+          });
+        }
+      }
+
       await this.audit(transaction, principal, requestId, 'master.vendor_updated', 'vendor', id);
       return vendor;
     });
@@ -482,6 +686,371 @@ export class MastersService {
       if (!vendor) throw new ConflictError('The vendor changed or is already inactive. Refresh and try again.');
       await this.audit(transaction, principal, requestId, 'master.vendor_deactivated', 'vendor', id, { reason });
       return vendor;
+    });
+  }
+
+  async archiveVendor(principal: AuthenticatedPrincipal, id: string, expectedVersion: number, reason: string | undefined, requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const vendor = await createMastersRepository(transaction).archiveVendor(principal.companyId, id, expectedVersion, new Date());
+      if (!vendor) throw new ConflictError('The vendor changed or is already archived. Refresh and try again.');
+      await this.audit(transaction, principal, requestId, 'master.vendor_archived', 'vendor', id, { reason });
+      return vendor;
+    });
+  }
+
+  async approveVendor(principal: AuthenticatedPrincipal, id: string, expectedVersion: number, requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const vendor = await createMastersRepository(transaction).approveVendor(principal.companyId, id, expectedVersion, principal.userId, new Date());
+      if (!vendor) throw new ConflictError('The vendor changed before approval. Refresh and try again.');
+      await this.audit(transaction, principal, requestId, 'master.vendor_approved', 'vendor', id);
+      return vendor;
+    });
+  }
+
+  async listVendorPriceList(principal: AuthenticatedPrincipal, vendorId: string) {
+    return createMastersRepository(this.database).listVendorPriceList(principal.companyId, vendorId);
+  }
+
+  async createVendorPriceListItem(principal: AuthenticatedPrincipal, vendorId: string, input: VendorPriceListCreateInput, requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const repository = createMastersRepository(transaction);
+      const vendor = await repository.findVendor(principal.companyId, vendorId);
+      if (!vendor) throw new NotFoundError('Vendor not found.');
+
+      const item = await repository.createVendorPriceListItem({
+        companyId: principal.companyId,
+        vendorId,
+        itemId: input.itemId,
+        vendorProductCode: input.vendorProductCode,
+        vendorProductName: input.vendorProductName,
+        description: input.description,
+        unitRate: input.unitRate,
+        currency: input.currency,
+        leadTimeDays: input.leadTimeDays,
+        minimumOrderQuantity: input.minimumOrderQuantity,
+        effectiveFrom: input.effectiveFrom,
+      });
+
+      await this.audit(transaction, principal, requestId, 'master.vendor_price_list_created', 'vendor_price_list', item!.id, { vendorId, productName: input.vendorProductName });
+      return item!;
+    });
+  }
+
+  async updateVendorPriceListItem(principal: AuthenticatedPrincipal, vendorId: string, priceListId: string, input: VendorPriceListUpdateInput, requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const repository = createMastersRepository(transaction);
+      const item = await repository.updateVendorPriceListItem(principal.companyId, vendorId, priceListId, {
+        itemId: input.itemId,
+        vendorProductCode: input.vendorProductCode,
+        vendorProductName: input.vendorProductName,
+        description: input.description,
+        unitRate: input.unitRate,
+        currency: input.currency,
+        leadTimeDays: input.leadTimeDays,
+        minimumOrderQuantity: input.minimumOrderQuantity,
+        effectiveFrom: input.effectiveFrom,
+      }, new Date());
+      if (!item) throw new NotFoundError('Price list item not found.');
+      await this.audit(transaction, principal, requestId, 'master.vendor_price_list_updated', 'vendor_price_list', priceListId, { vendorId });
+      return item;
+    });
+  }
+
+  async deleteVendorPriceListItem(principal: AuthenticatedPrincipal, vendorId: string, priceListId: string, requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const repository = createMastersRepository(transaction);
+      const item = await repository.deleteVendorPriceListItem(principal.companyId, vendorId, priceListId);
+      if (!item) throw new NotFoundError('Price list item not found.');
+      await this.audit(transaction, principal, requestId, 'master.vendor_price_list_deleted', 'vendor_price_list', priceListId, { vendorId });
+      return item;
+    });
+  }
+
+  async uploadVendorDocument(principal: AuthenticatedPrincipal, vendorId: string, documentType: string, file: Express.Multer.File, requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const repository = createMastersRepository(transaction);
+      const vendor = await repository.findVendor(principal.companyId, vendorId);
+      if (!vendor) throw new NotFoundError('Vendor not found.');
+
+      const fileBuffer = await readFile(file.path);
+      const checksumSha256 = createHash('sha256').update(fileBuffer).digest('hex');
+
+      const doc = await repository.createVendorDocument({
+        companyId: principal.companyId,
+        vendorId,
+        documentType,
+        originalFileName: file.originalname,
+        fileSize: file.size,
+        mimeType: file.mimetype,
+        storageName: file.filename,
+        checksumSha256,
+      });
+
+      await this.audit(transaction, principal, requestId, 'master.vendor_document_uploaded', 'vendor', vendorId, { documentId: doc!.id, documentType });
+      return doc!;
+    });
+  }
+
+  async deleteVendorDocument(principal: AuthenticatedPrincipal, vendorId: string, documentId: string, requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const repository = createMastersRepository(transaction);
+      const doc = await repository.deleteVendorDocument(principal.companyId, documentId);
+      if (!doc) throw new NotFoundError('Document not found.');
+      try {
+        await removePrivateFile(doc.storageName);
+      } catch {
+        // file might already be removed
+      }
+      await this.audit(transaction, principal, requestId, 'master.vendor_document_deleted', 'vendor', vendorId, { documentId });
+      return doc;
+    });
+  }
+
+  async createOnboardingInvitation(principal: AuthenticatedPrincipal, input: CreateVendorInvitationInput, requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const repository = createMastersRepository(transaction);
+      const token = randomBytes(24).toString('hex');
+      const phoneNormalized = normalizePhone(input.whatsappNumber);
+      if (!phoneNormalized) throw new AppError('VALIDATION_ERROR', 'Provide a valid WhatsApp mobile number.', 422);
+
+      const expiresAt = new Date(Date.now() + (input.validDays || 14) * 24 * 60 * 60 * 1000);
+
+      const invitation = await repository.createVendorOnboardingInvitation({
+        companyId: principal.companyId,
+        token,
+        whatsappNumber: input.whatsappNumber,
+        whatsappNumberNormalized: phoneNormalized,
+        contactName: input.contactName,
+        companyName: input.companyName,
+        status: 'pending',
+        expiresAt,
+        invitedByUserId: principal.userId,
+      });
+
+      const appOrigin = process.env.APP_ORIGIN || 'http://localhost:5173';
+      const registrationUrl = `${appOrigin}/vendor-registration/${token}`;
+      const cleanPhoneForWa = phoneNormalized.replace(/\D/g, '');
+      const messageText = `Hello ${input.contactName}, please complete your vendor registration for Fire Safety by opening this link: ${registrationUrl}\nThank you!`;
+      const whatsappUrl = `https://wa.me/${cleanPhoneForWa}?text=${encodeURIComponent(messageText)}`;
+
+      let msg91Delivery: { success: boolean; status: string; messageId?: string; error?: string } | undefined;
+      if (input.sendViaMsg91 || msg91WhatsAppService.isConfigured()) {
+        msg91Delivery = await msg91WhatsAppService.sendVendorInvitation({
+          to: phoneNormalized,
+          contactName: input.contactName,
+          companyName: input.companyName,
+          registrationUrl,
+        });
+      }
+
+      await this.audit(transaction, principal, requestId, 'master.vendor_invitation_created', 'vendor_onboarding_invitation', invitation!.id, {
+        whatsappNumber: input.whatsappNumber,
+        msg91Status: msg91Delivery?.status,
+        msg91MessageId: msg91Delivery?.messageId,
+      });
+
+      return {
+        ...invitation!,
+        registrationUrl,
+        whatsappUrl,
+        messageText,
+        msg91Delivery,
+      };
+    });
+  }
+
+  async sendVendorInvitationViaMsg91(principal: AuthenticatedPrincipal, invitationId: string, requestId: string) {
+    const repository = createMastersRepository(this.database);
+    const invitation = await repository.findVendorOnboardingInvitationById(principal.companyId, invitationId);
+    if (!invitation) throw new NotFoundError('Invitation not found.');
+    if (new Date() > new Date(invitation.expiresAt)) throw new AppError('EXPIRED_INVITATION', 'This registration link has expired.', 410);
+
+    const appOrigin = process.env.APP_ORIGIN || 'http://localhost:5173';
+    const registrationUrl = `${appOrigin}/vendor-registration/${invitation.token}`;
+
+    const result = await msg91WhatsAppService.sendVendorInvitation({
+      to: invitation.whatsappNumberNormalized,
+      contactName: invitation.contactName,
+      companyName: invitation.companyName,
+      registrationUrl,
+    });
+
+    await this.database.transaction(async (transaction) => {
+      await this.audit(transaction, principal, requestId, 'master.vendor_invitation_msg91_sent', 'vendor_onboarding_invitation', invitation.id, {
+        status: result.status,
+        messageId: result.messageId,
+        error: result.error,
+      });
+    });
+
+    return result;
+  }
+
+  async getPublicOnboardingInvitation(token: string) {
+    const invitation = await createMastersRepository(this.database).findVendorOnboardingInvitationByToken(token);
+    if (!invitation) throw new NotFoundError('Registration link not found or invalid.');
+    if (invitation.status === 'submitted') {
+      return {
+        status: 'submitted',
+        invitation: {
+          contactName: invitation.contactName,
+          companyName: invitation.companyName,
+          whatsappNumber: invitation.whatsappNumber,
+        },
+      };
+    }
+    if (new Date() > new Date(invitation.expiresAt)) {
+      return {
+        status: 'expired',
+        invitation: {
+          contactName: invitation.contactName,
+          companyName: invitation.companyName,
+          whatsappNumber: invitation.whatsappNumber,
+        },
+      };
+    }
+    return {
+      status: 'pending',
+      invitation: {
+        contactName: invitation.contactName,
+        companyName: invitation.companyName,
+        whatsappNumber: invitation.whatsappNumber,
+      },
+    };
+  }
+
+  async submitPublicOnboarding(token: string, input: VendorCreateInput, _requestId: string) {
+    return this.database.transaction(async (transaction) => {
+      const repository = createMastersRepository(transaction);
+      const invitation = await repository.findVendorOnboardingInvitationByToken(token);
+      if (!invitation) throw new NotFoundError('Invalid registration link.');
+      if (invitation.status === 'submitted') throw new ConflictError('This registration has already been submitted.');
+      if (new Date() > new Date(invitation.expiresAt)) throw new AppError('EXPIRED_INVITATION', 'This registration link has expired.', 410);
+
+      if (input.gstStatus === 'registered' && input.gstin) {
+        const existingGstin = await repository.findVendorByGstin(invitation.companyId, input.gstin);
+        if (existingGstin) {
+          throw new ConflictError(`A vendor with GSTIN ${input.gstin} already exists in the system.`);
+        }
+      }
+
+      const code = input.code || await repository.getNextVendorCode(invitation.companyId);
+      const {
+        primaryContact,
+        additionalContacts = [],
+        additionalAddresses = [],
+        bankAccounts = [],
+        code: _c,
+        ...vendorFields
+      } = input;
+
+      const vendor = await repository.createVendor({
+        ...vendorFields,
+        code,
+        companyId: invitation.companyId,
+        displayNameNormalized: normalizeName(input.displayName),
+        approvalStatus: 'pending_approval',
+        status: 'inactive',
+        createdByUserId: invitation.invitedByUserId!,
+      });
+
+      await repository.createVendorContact({
+        ...contactValues({ ...primaryContact, isPrimary: true }),
+        companyId: invitation.companyId,
+        vendorId: vendor!.id,
+        createdByUserId: vendor!.createdByUserId,
+      });
+
+      for (const contact of additionalContacts) {
+        await repository.createVendorContact({
+          ...contactValues({ ...contact, isPrimary: false }),
+          companyId: invitation.companyId,
+          vendorId: vendor!.id,
+          createdByUserId: vendor!.createdByUserId,
+        });
+      }
+
+      await repository.createVendorAddress({
+        companyId: invitation.companyId,
+        vendorId: vendor!.id,
+        addressType: 'registered',
+        addressLine1: input.addressLine1,
+        addressLine2: input.addressLine2,
+        city: input.city,
+        state: input.state,
+        postalCode: input.postalCode,
+        country: input.country || 'India',
+        isDefault: true,
+      });
+
+      for (const addr of additionalAddresses) {
+        await repository.createVendorAddress({
+          companyId: invitation.companyId,
+          vendorId: vendor!.id,
+          addressType: addr.addressType || 'office',
+          addressLine1: addr.addressLine1,
+          addressLine2: addr.addressLine2,
+          city: addr.city,
+          state: addr.state,
+          postalCode: addr.postalCode,
+          country: addr.country || 'India',
+          isDefault: addr.isDefault || false,
+        });
+      }
+
+      for (const bank of bankAccounts) {
+        await repository.createVendorBankAccount({
+          companyId: invitation.companyId,
+          vendorId: vendor!.id,
+          accountHolderName: bank.accountHolderName,
+          accountNumber: bank.accountNumber,
+          ifscCode: bank.ifscCode.toUpperCase(),
+          bankName: bank.bankName,
+          branch: bank.branch,
+          upiId: bank.upiId,
+          isDefault: bank.isDefault ?? true,
+        });
+      }
+
+      await repository.updateVendorOnboardingInvitation(token, {
+        status: 'submitted',
+        vendorId: vendor!.id,
+        submittedAt: new Date(),
+      }, new Date());
+
+      return {
+        success: true,
+        vendorId: vendor!.id,
+        code: vendor!.code,
+        displayName: vendor!.displayName,
+      };
+    });
+  }
+
+  async uploadPublicOnboardingDocument(token: string, documentType: string, file: Express.Multer.File) {
+    return this.database.transaction(async (transaction) => {
+      const repository = createMastersRepository(transaction);
+      const invitation = await repository.findVendorOnboardingInvitationByToken(token);
+      if (!invitation) throw new NotFoundError('Invalid registration link.');
+      if (!invitation.vendorId) {
+        throw new AppError('PRECONDITION_FAILED', 'Submit the vendor form before uploading documents.', 400);
+      }
+
+      const fileBuffer = await readFile(file.path);
+      const checksumSha256 = createHash('sha256').update(fileBuffer).digest('hex');
+
+      const doc = await repository.createVendorDocument({
+        companyId: invitation.companyId,
+        vendorId: invitation.vendorId,
+        documentType,
+        originalFileName: file.originalname,
+        fileSize: file.size,
+        mimeType: file.mimetype,
+        storageName: file.filename,
+        checksumSha256,
+      });
+
+      return doc!;
     });
   }
 

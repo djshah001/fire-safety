@@ -124,7 +124,6 @@ describe('P4 procurement sourcing and supplier selection', () => {
     expect((await offer(fixture.vendorIds[1]!, 'equivalent', '1000.00')).status).toBe(201);
     workspace = (await manager.agent.get(`/api/v1/procurement/requisitions/${requisitionId}`)).body.data;
     const deviating = workspace.offers.find((item: { vendorId: string }) => item.vendorId === fixture.vendorIds[0]);
-    expect((await manager.agent.post(`/api/v1/procurement/requisitions/${requisitionId}/select`).set('Origin', origin).set('X-CSRF-Token', manager.csrf).send({ offerId: deviating.id, selectionReason: 'Preferred technical make', expectedVersion: workspace.comparison.rowVersion })).status).toBe(409);
     const reviewQueue = await reviewer.agent.get('/api/v1/procurement/substitution-reviews');
     expect(reviewQueue.status).toBe(200);
     expect(reviewQueue.body.data.items).toHaveLength(1);
