@@ -35,7 +35,12 @@
     "db:local:stop": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/local-postgres.ps1 stop",
     "seed:demo": "npm run seed:demo --workspace @fire-safety/server",
     "reset:demo": "npm run reset:demo --workspace @fire-safety/server",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run build"
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "prod:start": "pm2 start ecosystem.config.cjs --env production",
+    "prod:stop": "pm2 stop ecosystem.config.cjs",
+    "prod:restart": "pm2 restart ecosystem.config.cjs --env production",
+    "prod:status": "pm2 status",
+    "prod:logs": "pm2 logs"
   },
   "devDependencies": {
     "concurrently": "10.0.6",

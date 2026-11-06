@@ -1,32 +1,71 @@
-# Dependencies and build output
+# Dependencies and package managers
 node_modules/
+*/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build and compilation outputs
 dist/
+*/dist/
+build/
 coverage/
 *.tsbuildinfo
+.turbo/
 
-# Environment and local secrets
+# Environment files and credentials
 .env
 .env.*
+.env.local
 !.env.example
+*.pem
+*.key
 
-# Local runtime data
+# Local runtime data and uploads
 server/uploads/*
 !server/uploads/.gitkeep
-server/.local/
-logs/
+uploads/*
+!uploads/.gitkeep
+storage/*
+!storage/.gitkeep
+logs/*
+!logs/.gitkeep
 *.log
 
-# Tooling and OS files
-.vite/
+# Temporary directories and local scratch outputs
 .tmp/
+tmp/
+.local/
+local/
+output/
+outputs/
+scratch/
+
+# Testing and Playwright reports
 .test-dist/
-client/test-results/
-client/playwright-report/
+test-results/
+*/test-results/
+playwright-report/
+*/playwright-report/
+blob-report/
+playwright/.cache/
+
+# Tooling, bundler, and agent caches
+.vite/
+*/.vite/
+.cache/
+.agents/
+skills-lock.json
+
+# OS and Editor files
 .DS_Store
 Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
 .idea/
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
-.agents
-skills-lock.json
