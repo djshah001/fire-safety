@@ -24,6 +24,7 @@ import { createPriceInquiryRouter } from './modules/procurement/priceInquiry.rou
 import { createPublicPriceInquiryRouter } from './modules/procurement/priceInquiry.public.routes.js';
 import { createPurchaseOrderRouter } from './modules/procurement/purchaseOrder.routes.js';
 import { createInventoryRouter } from './modules/inventory/inventory.routes.js';
+import { createExecutionRouter } from './modules/execution/execution.routes.js';
 
 export type AppDependencies = {
   checkReadiness?: ReadinessCheck;
@@ -69,6 +70,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   app.use('/api/v1/procurement', createPurchaseOrderRouter());
   app.use('/api/v1/vendor-price', createPublicPriceInquiryRouter());
   app.use('/api/v1/inventory', createInventoryRouter());
+  app.use('/api/v1/execution', createExecutionRouter());
 
   app.use(notFoundHandler);
   app.use(errorHandler);

@@ -103,6 +103,17 @@ export const permissionCatalog = {
   "inventory.site_issue.create": "Issue stock to project sites for execution and consumption.",
   "inventory.site_return.create": "Return unused or defective stock from project sites back to warehouse.",
   "inventory.adjustment.manage": "Perform stock adjustments and write-offs with mandatory business reasons.",
+  "project.execution.read": "View project tasks, milestones, daily reports, delays, and variations in assigned project scope.",
+  "project.task.manage": "Create, update, and manage project milestones, tasks, and schedules in assigned project scope.",
+  "project.daily_report.create": "Draft, submit, and revise daily progress reports as assigned site engineer.",
+  "project.daily_report.review": "Review, approve, or return submitted daily progress reports as assigned project manager.",
+  "project.delay.manage": "Record and manage site delay notices and impact assessments.",
+  "project.delay.review": "Review and approve schedule impact and revised target dates for reported delays.",
+  "project.variation.create": "Initiate site variations and scope deviations for project changes.",
+  "project.variation.review": "Review engineering and commercial impact of proposed variations.",
+  "project.variation.approve": "Record customer approval and update project baseline for variations.",
+  "project.expense.manage": "Record and submit site project expenses.",
+  "project.expense.review": "Approve or reject submitted site project expenses.",
 } as const;
 
 export type PermissionCode = keyof typeof permissionCatalog;
@@ -140,6 +151,7 @@ export const salesManagerPermissionCodes: PermissionCode[] = [
 export const designEngineerPermissionCodes: PermissionCode[] = [
   "engineering.design.write",
   "project.read",
+  "project.execution.read",
 ];
 
 export const designHeadPermissionCodes: PermissionCode[] = [
@@ -148,7 +160,9 @@ export const designHeadPermissionCodes: PermissionCode[] = [
   "engineering.design.review",
   "engineering.quotation.read",
   "project.read",
+  "project.execution.read",
   "procurement.substitution.review",
+  "project.variation.review",
 ];
 
 export const purchaseExecutivePermissionCodes: PermissionCode[] = [
@@ -229,6 +243,10 @@ export const managementPermissionCodes: PermissionCode[] = [
   "project.start",
   "inventory.warehouse.read",
   "inventory.stock.read",
+  "project.execution.read",
+  "project.delay.review",
+  "project.variation.approve",
+  "project.expense.review",
 ];
 export const projectManagerPermissionCodes: PermissionCode[] = [
   "project.read",
@@ -241,4 +259,15 @@ export const projectManagerPermissionCodes: PermissionCode[] = [
   "inventory.transfer.receive",
   "inventory.site_issue.create",
   "inventory.site_return.create",
+  "project.execution.read",
+  "project.task.manage",
+  "project.daily_report.create",
+  "project.daily_report.review",
+  "project.delay.manage",
+  "project.delay.review",
+  "project.variation.create",
+  "project.variation.review",
+  "project.variation.approve",
+  "project.expense.manage",
+  "project.expense.review",
 ];

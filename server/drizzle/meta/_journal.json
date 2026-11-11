@@ -190,6 +190,13 @@
       "when": 1794380154078,
       "tag": "0026_glossy_flatman",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1794383653372,
+      "tag": "0027_famous_the_initiative",
+      "breakpoints": true
     }
   ]
 }

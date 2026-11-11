@@ -1,5 +1,54 @@
 # Fire Safety — Decision and Status Memory
 
+## Phase 7: Project Execution, Daily Progress Reports & Site Variations — 2026-11-11
+
+- **Context & Scope**:
+  - Implemented Phase 7 per `phase.md`, `rules.md`, and `architechture.md`: Project Execution, Milestones, Weighted Tasks, Daily Progress Reports (DPR), Site Delay Notices, Scope Variations, and Petty Expenses.
+  - Ensures project managers can plan milestones and measurable tasks, site engineers can log daily manpower, equipment, and progress, and customer changes trigger technical impact review before revising the commercial baseline.
+- **Database Schema & Migrations (`server/drizzle/0027_famous_the_initiative.sql`)**:
+  - `project_milestones`: Project milestone checkpoints with target/actual dates, status (`pending`, `in_progress`, `completed`, `delayed`), billing percentages, and order index.
+  - `project_tasks`: Execution tasks linked to milestones with planned/actual dates, assignees, status (`not_started`, `in_progress`, `completed`, `blocked`), progress % (0-100), weightages, and obstacle reasons.
+  - `daily_progress_reports`: Audited site log headers with atomic `report_number` (`DPR-YYYY-XXXXX`), `report_date`, site engineer assignee, status (`draft`, `submitted`, `approved`, `returned`), revision number, and review notes. Enforces unique daily report per project per day (`company_id, project_id, report_date`).
+  - `daily_report_revisions`: Sequential, immutable revisions storing weather conditions, work summaries, obstacle descriptions, corrective action plans, manpower count/breakdown (JSON), equipment on site (JSON), and site photo references.
+  - `daily_report_task_progress`: Task progress advancements recorded during daily reporting, linking back to project tasks and auto-advancing status.
+  - `daily_report_material_consumption`: Material installed/consumed on site with unique consumption keys (`${projectId}-${revisionId}-${itemId}`) preventing duplicate consumption on retries.
+  - `project_delays`: Delay logs with root cause categories (`client_delay`, `site_access`, `material_unavailability`, `contractor_delay`, `force_majeure`, `design_clarification`, `other`), responsible parties (`customer`, `company`, `vendor`, `third_party`), delay days, target vs revised dates, impact descriptions, mitigation plans, and manager approvals.
+  - `project_variations`: Scope deviation registry tracking title, reasons (`customer_request`, `site_condition`, `regulatory_compliance`, `design_optimization`, `error_omission`, `other`), scope delta summaries, schedule/cost impacts, internal design reviews, and customer change order approval snapshots.
+  - `project_expenses`: On-site petty expenses with categories (`travel`, `transport`, `local_purchase`, `labour_wages`, `permits`, `miscellaneous`), amounts, receipts, and approval lifecycle.
+  - Applied migration `0027_famous_the_initiative.sql` to PostgreSQL.
+- **Backend Architecture & Security (`server/src/modules/execution/`)**:
+  - Permissions added to `permissionCatalog`:
+    - `project.execution.read`, `project.task.manage`, `project.daily_report.create`, `project.daily_report.review`, `project.delay.manage`, `project.delay.review`, `project.variation.create`, `project.variation.review`, `project.variation.approve`, `project.expense.manage`, `project.expense.review`.
+  - Roles mapped: `project_manager`, `design_head`, `management`, and `system_admin`.
+  - Invariants strictly enforced:
+    - Independent review: site engineers cannot approve their own DPR, reported delays, or variations (non-admin self-approval blocked; system administrator override permitted per 2026-10-30 policy).
+    - Unique daily report per day prevents duplicate conflicting reports.
+    - Return cycle: returned reports can be revised by site engineers into immutable revision $N+1$.
+    - Dynamic weighted project progress rollup: $\sum (P_i \times W_i) / \sum W_i$.
+  - Unit tests in `server/src/modules/execution/execution.service.test.ts` (6/6 passing).
+- **Frontend Architecture & UX (`client/src/features/projects/`)**:
+  - `client/src/api/execution.ts`: Typed TypeScript DTOs, TanStack query factories, and mutation functions.
+  - `client/src/features/projects/execution/MilestonesTasksTab.tsx`: Overall weighted completion progress bar, milestones cards with billing percentages, task list with quick-progress sliders, and creation dialogs.
+  - `client/src/features/projects/execution/DailyProgressReportsTab.tsx`: DPR directory table, "Submit Daily Report" dialog with manpower, equipment, and task linkages, and "View & Review DPR" sheet for managers with Approve and Return actions.
+  - `client/src/features/projects/execution/DelaysTab.tsx`: Delay notice log with reason categories, responsible parties, days delayed, "Report Delay" dialog, and "Review Delay" manager action.
+  - `client/src/features/projects/execution/VariationsTab.tsx`: Scope deviations registry with delta summaries, cost & schedule impact, "Initiate Variation" dialog, "Design Review" dialog, and "Record Client Order" baseline update dialog.
+  - `client/src/features/projects/execution/ExpensesTab.tsx`: Site petty cash and local purchases log with receipts, "Log Expense" dialog, and manager approval action.
+  - `client/src/features/projects/ProjectPage.tsx`: Integrated multi-tab workspace across Overview, Milestones & Tasks, DPRs, Delays, Variations, and Expenses.
+- **Demo Fixtures Seeded (`server/src/scripts/seedDemo.ts`)**:
+  - Populated Alpha Towers (`procurementProject`) with:
+    - 4 Milestones (`MS-01` to `MS-04`)
+    - 3 Tasks (`TSK-2026-00001` completed, `TSK-2026-00002` in progress, `TSK-2026-00003` blocked with reason)
+    - 1 Approved DPR (`DPR-2026-00001`) with full manpower, groover/scaffolding equipment, and progress advance
+    - 1 Approved Delay notice (`DEL-2026-00001` for civil contractor slab opening)
+    - 1 Approved Variation (`VAR-2026-00001` for basement parking expansion with client acceptance snapshot)
+    - 1 Approved petty expense (`EXP-2026-00001` for anchor bolts)
+- **Verification & Status**:
+  - `npm run typecheck --workspaces`: 0 errors across server and client.
+  - `npm --workspace @fire-safety/server run lint`: 0 errors, 0 warnings across 140 files.
+  - `npm --workspace @fire-safety/server test`: 25/25 test files passing (107/107 tests).
+  - `npm --workspace @fire-safety/client run build`: Built cleanly in 7.67s.
+  - PostgreSQL database migrated and seeded.
+
 ## Phase 5: Executive & Operational Dashboard Command Center — 2026-11-11
 
 - **Context & Scope**:

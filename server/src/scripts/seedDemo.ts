@@ -2021,6 +2021,242 @@ async function ensureInventoryScenario(
   );
 }
 
+async function ensureExecutionScenario(
+  client: PoolClient,
+  input: {
+    companyId: string;
+    projectId: string;
+    engineerId: string;
+    managerId: string;
+    adminId: string;
+  },
+) {
+  // 1. Milestones
+  const ms1 = await one<IdRow>(
+    client,
+    `
+    insert into project_milestones (
+      company_id, project_id, milestone_number, name, description, target_date,
+      status, billing_percentage, order_index, row_version
+    ) values (
+      $1, $2, 'MS-01', 'Rough-in & MS Riser Piping',
+      'Installation of primary water supply risers, manifolds, and floor headers.',
+      current_date + 10, 'in_progress', '30.00', 1, 1
+    )
+    on conflict (company_id, project_id, milestone_number) do update
+      set status = excluded.status
+    returning id
+  `,
+    [input.companyId, input.projectId],
+  );
+
+  const ms2 = await one<IdRow>(
+    client,
+    `
+    insert into project_milestones (
+      company_id, project_id, milestone_number, name, description, target_date,
+      status, billing_percentage, order_index, row_version
+    ) values (
+      $1, $2, 'MS-02', 'Cable Laying & Device First Fix',
+      'Cabling for addressable loop, call points, and base plates installation.',
+      current_date + 25, 'pending', '25.00', 2, 1
+    )
+    on conflict (company_id, project_id, milestone_number) do update
+      set status = excluded.status
+    returning id
+  `,
+    [input.companyId, input.projectId],
+  );
+
+  await client.query(
+    `
+    insert into project_milestones (
+      company_id, project_id, milestone_number, name, description, target_date,
+      status, billing_percentage, order_index, row_version
+    ) values (
+      $1, $2, 'MS-03', 'Alarm Panel & Booster Mounting',
+      'Main fire control panel installation, battery backup, and repeater integration.',
+      current_date + 40, 'pending', '25.00', 3, 1
+    ), (
+      $1, $2, 'MS-04', 'Integrated Testing & CFO Handover',
+      'Hydro testing, sounder audibility checks, CFO inspection, and documentation.',
+      current_date + 60, 'pending', '20.00', 4, 1
+    )
+    on conflict (company_id, project_id, milestone_number) do nothing
+  `,
+    [input.companyId, input.projectId],
+  );
+
+  // 2. Project Tasks
+  const tsk1 = await one<IdRow>(
+    client,
+    `
+    insert into project_tasks (
+      company_id, project_id, milestone_id, task_number, title, description, assigned_user_id,
+      planned_start_date, planned_end_date, actual_start_date, actual_end_date,
+      status, progress_percentage, weightage, planned_quantity, actual_quantity, unit_symbol, row_version
+    ) values (
+      $1, $2, $3, 'TSK-2026-00001', 'Install 65mm MS riser pipe in Shaft A',
+      'Fix heavy duty clamp brackets and erect pipe lengths with victaulic couplings.',
+      $4, current_date - 5, current_date + 5, current_date - 5, current_date,
+      'completed', 100, '2.00', '120.0000', '120.0000', 'm', 1
+    )
+    on conflict (company_id, project_id, task_number) do update
+      set progress_percentage = excluded.progress_percentage
+    returning id
+  `,
+    [input.companyId, input.projectId, ms1.id, input.engineerId],
+  );
+
+  const tsk2 = await one<IdRow>(
+    client,
+    `
+    insert into project_tasks (
+      company_id, project_id, milestone_id, task_number, title, description, assigned_user_id,
+      planned_start_date, planned_end_date, actual_start_date,
+      status, progress_percentage, weightage, planned_quantity, actual_quantity, unit_symbol, row_version
+    ) values (
+      $1, $2, $3, 'TSK-2026-00002', 'Install groove couplings & butterfly valves Floor 1-4',
+      'Mount isolating butterfly valves with supervisory switches at each floor takeoff.',
+      $4, current_date - 2, current_date + 8, current_date - 2,
+      'in_progress', 60, '2.00', '8.0000', '5.0000', 'Nos', 1
+    )
+    on conflict (company_id, project_id, task_number) do update
+      set progress_percentage = excluded.progress_percentage
+    returning id
+  `,
+    [input.companyId, input.projectId, ms1.id, input.engineerId],
+  );
+
+  await client.query(
+    `
+    insert into project_tasks (
+      company_id, project_id, milestone_id, task_number, title, description, assigned_user_id,
+      planned_start_date, planned_end_date,
+      status, progress_percentage, weightage, blocked_reason, row_version
+    ) values (
+      $1, $2, $3, 'TSK-2026-00003', 'Mount smoke detector bases in corridor ceiling',
+      'Mark positions according to approved CAD drawing and fix detector bases.',
+      $4, current_date + 5, current_date + 15,
+      'blocked', 0, '1.50', 'False ceiling grid pending from main civil contractor', 1
+    )
+    on conflict (company_id, project_id, task_number) do nothing
+  `,
+    [input.companyId, input.projectId, ms2.id, input.engineerId],
+  );
+
+  // 3. Daily Progress Reports
+  const dpr1 = await one<IdRow>(
+    client,
+    `
+    insert into daily_progress_reports (
+      company_id, project_id, report_number, report_date, site_engineer_user_id,
+      status, current_revision_number, submitted_at, reviewed_at, reviewed_by_user_id, review_notes, row_version
+    ) values (
+      $1, $2, 'DPR-2026-00001', current_date - 2, $3,
+      'approved', 1, now() - interval '2 days', now() - interval '2 days', $4,
+      'Inspected Shaft A riser alignment and support brackets. Work verified and accepted.', 1
+    )
+    on conflict (company_id, report_number) do update
+      set status = excluded.status
+    returning id
+  `,
+    [input.companyId, input.projectId, input.engineerId, input.managerId],
+  );
+
+  const dprRev1 = await one<IdRow>(
+    client,
+    `
+    insert into daily_report_revisions (
+      company_id, daily_report_id, revision_number, weather_condition, work_summary,
+      obstacles_encountered, corrective_actions, general_notes, manpower_count,
+      manpower_details, equipment_details, site_photos, submitted_at, submitted_by_user_id
+    ) values (
+      $1, $2, 1, 'clear',
+      'Erected scaffolding in Shaft A, hoisted and fitted 12 lengths of 65mm MS pipe with Victaulic couplings.',
+      'Minor water seepage in basement sump.', 'Dewatered using portable submersible pump.',
+      'All technicians equipped with safety harnesses.', 6,
+      '[{"trade": "Pipe Fitter", "count": 2}, {"trade": "Welder", "count": 1}, {"trade": "Helper", "count": 3}]'::jsonb,
+      '[{"equipmentName": "Scaffolding Tower", "count": 2, "status": "operational"}, {"equipmentName": "Pipe Groover", "count": 1, "status": "operational"}]'::jsonb,
+      '[]'::jsonb, now() - interval '2 days', $3
+    )
+    on conflict (daily_report_id, revision_number) do update
+      set work_summary = excluded.work_summary
+    returning id
+  `,
+    [input.companyId, dpr1.id, input.engineerId],
+  );
+
+  await client.query(
+    `
+    insert into daily_report_task_progress (
+      company_id, daily_report_revision_id, task_id, work_completed_today, progress_percentage, quantity_completed_today, unit_symbol
+    ) values ($1, $2, $3, 'Completed full shaft run from ground to 4th floor', 100, '120.0000', 'm')
+    on conflict (daily_report_revision_id, task_id) do nothing
+  `,
+    [input.companyId, dprRev1.id, tsk1.id],
+  );
+
+  // 4. Delays
+  await client.query(
+    `
+    insert into project_delays (
+      company_id, project_id, task_id, delay_number, reason_category, responsible_party,
+      delay_days, original_target_date, revised_target_date, impact_description,
+      mitigation_plan, status, reported_by_user_id, reviewed_by_user_id, reviewed_at, review_notes, row_version
+    ) values (
+      $1, $2, $3, 'DEL-2026-00001', 'contractor_delay', 'third_party',
+      4, current_date + 5, current_date + 9,
+      'Shaft B ceiling slab opening not cast on 3rd floor by civil contractor.',
+      'Diverted piping crew to Shaft A and ground pump room manifold.',
+      'approved', $4, $5, now() - interval '1 day',
+      'Assessed schedule impact; diverted crew to prevent standing manpower costs.', 1
+    )
+    on conflict (company_id, delay_number) do nothing
+  `,
+    [input.companyId, input.projectId, tsk2.id, input.engineerId, input.managerId],
+  );
+
+  // 5. Variations
+  await client.query(
+    `
+    insert into project_variations (
+      company_id, project_id, variation_number, title, description, reason_category,
+      scope_delta_summary, schedule_impact_days, cost_impact_amount,
+      status, initiator_user_id, design_review_notes, design_reviewed_by_user_id, design_reviewed_at,
+      customer_evidence_snapshot, customer_approved_at, row_version
+    ) values (
+      $1, $2, 'VAR-2026-00001', 'Basement Car Park Sprinkler & Detector Expansion',
+      'Customer expanded visitor parking area by 400 sqm requiring extra coverage.',
+      'customer_request', '+24 optical smoke detectors, 32 pendant sprinklers, 180m piping and cabling.',
+      5, '68500.00', 'customer_approved', $3,
+      'Verified hydraulic calculation and loop address capacity. Sizing confirmed adequate.',
+      $4, now() - interval '3 days',
+      'Signed Change Order #CO-ALPHA-001 received via email dated 2026-11-09 from client representative.',
+      now() - interval '2 days', 1
+    )
+    on conflict (company_id, variation_number) do nothing
+  `,
+    [input.companyId, input.projectId, input.engineerId, input.managerId],
+  );
+
+  // 6. Site Expenses
+  await client.query(
+    `
+    insert into project_expenses (
+      company_id, project_id, expense_number, category, amount, expense_date,
+      description, status, submitted_by_user_id, approved_by_user_id, approved_at, review_notes, row_version
+    ) values (
+      $1, $2, 'EXP-2026-00001', 'local_purchase', '2450.00', current_date - 3,
+      'Urgent purchase of 40 nos 12mm wedge anchor bolts and 10 cutting wheels from local hardware store.',
+      'approved', $3, $4, now() - interval '2 days', 'Verified site receipt voucher.', 1
+    )
+    on conflict (company_id, expense_number) do nothing
+  `,
+    [input.companyId, input.projectId, input.engineerId, input.managerId],
+  );
+}
+
 async function seedCurrentWorkflows(client: PoolClient, input: {
   companyId: string; companyName: string; adminId: string; managerId: string; executiveId: string;
   designerId: string; headId: string; purchaseId: string; purchaseManagerId: string; serviceCategoryId: string;
@@ -2158,6 +2394,7 @@ async function seed() {
       procurementRequisitions: string | null;
       substitutionReviews: string | null;
       warehouses: string | null;
+      projectMilestones: string | null;
     }>(
       client,
       `
@@ -2166,7 +2403,8 @@ async function seed() {
         to_regclass('public.survey_revisions')::text as "surveyRevisions",
         to_regclass('public.procurement_requisitions')::text as "procurementRequisitions",
         to_regclass('public.procurement_substitution_reviews')::text as "substitutionReviews",
-        to_regclass('public.warehouses')::text as "warehouses"
+        to_regclass('public.warehouses')::text as "warehouses",
+        to_regclass('public.project_milestones')::text as "projectMilestones"
     `,
     );
     if (!schema.designJobs || !schema.quotationRevisions || !schema.surveyRevisions || !schema.procurementRequisitions || !schema.substitutionReviews)
@@ -2985,6 +3223,16 @@ async function seed() {
         adminId,
       });
     }
+    if (schema.projectMilestones) {
+      stage = "project execution milestones, tasks, DPR, and variations fixtures";
+      await ensureExecutionScenario(client, {
+        companyId: company.id,
+        projectId: procurementProject.id,
+        engineerId: receiverId,
+        managerId: purchaseManagerId,
+        adminId,
+      });
+    }
     await ensureQuotationScenario(client, {
       companyId: company.id,
       jobId: designJobs[3]!.id,
@@ -3036,7 +3284,7 @@ async function seed() {
         `Demo seed complete for ${company.name}.`,
         `Created/refreshed ${userDefinitions.length} demo users, ${customers.length} customers and ${leads.length + currentWorkflows.scenarioCount} lead fixtures.`,
         `Ensured ${opportunities.length + currentWorkflows.scenarioCount} assigned opportunities, ${designJobs.length + currentWorkflows.scenarioCount} design jobs, 1 survey draft, 2 projects, ${2 + currentWorkflows.quotationCount} quotation checkpoints and 2 sourcing comparisons.`,
-        `Added ${referenceProducts.length} BOQ reference products, ${schema.warehouses ? "3 inventory warehouses & stock ledger fixtures, " : ""}${currentWorkflows.scenarioCount} DEMO-LATEST-* checkpoints, including full-catalogue PDFs and accepted payment-plan examples.`,
+        `Added ${referenceProducts.length} BOQ reference products, ${schema.warehouses ? "3 inventory warehouses & stock ledger fixtures, " : ""}${schema.projectMilestones ? "4 execution milestones, tasks & DPR site reports, " : ""}${currentWorkflows.scenarioCount} DEMO-LATEST-* checkpoints, including full-catalogue PDFs and accepted payment-plan examples.`,
         "Workflow starts: DEMO-LEAD-003 authorize design; 006 upload/review design; 007 finalize the survey draft and build BOQ; 004 build quotation; 008 approve quotation; 009 issue and record decision; DEMO-REQ-001 compare/select a supplier; DEMO-REQ-SUB-001 review a technical deviation as design head.",
         "Login: demo.admin@example.test",
         `Password: ${demoPassword}`,
