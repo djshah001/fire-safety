@@ -1756,6 +1756,271 @@ async function ensurePurchaseOrderScenario(
   );
 }
 
+async function ensureInventoryScenario(
+  client: PoolClient,
+  input: {
+    companyId: string;
+    projectId: string;
+    receiverId: string;
+    purchaseManagerId: string;
+    adminId: string;
+  },
+) {
+  const itemRows = await client.query<{
+    id: string;
+    code: string;
+    name: string;
+    unitId: string;
+    unitSymbol: string;
+  }>(
+    `select i.id, i.code, i.name, i.unit_id as "unitId", u.symbol as "unitSymbol"
+     from items i
+     join units u on u.id = i.unit_id
+     where i.company_id = $1 and i.code in ('DEMO-SMOKE', 'DEMO-ABC-06', 'DEMO-MS-P65')
+     order by i.code`,
+    [input.companyId],
+  );
+  const smoke = itemRows.rows.find((i) => i.code === 'DEMO-SMOKE');
+  const abc = itemRows.rows.find((i) => i.code === 'DEMO-ABC-06');
+  const pipe = itemRows.rows.find((i) => i.code === 'DEMO-MS-P65');
+  if (!smoke || !abc || !pipe) return;
+
+  // 1. Storage Warehouses
+  const centralWh = await one<IdRow>(
+    client,
+    `
+    insert into warehouses (
+      company_id, code, name, warehouse_type, address_line1, city, state, postal_code, in_charge_user_id, is_active, row_version
+    ) values (
+      $1, 'WH-CENTRAL', 'Central Warehouse - Ahmedabad', 'central_warehouse',
+      'Plot 12, GIDC Phase 2, Vatva', 'Ahmedabad', 'Gujarat', '382445', $2, 1, 1
+    )
+    on conflict (company_id, code) do update
+      set name = excluded.name, in_charge_user_id = excluded.in_charge_user_id
+    returning id
+  `,
+    [input.companyId, input.receiverId],
+  );
+
+  const suratWh = await one<IdRow>(
+    client,
+    `
+    insert into warehouses (
+      company_id, code, name, warehouse_type, address_line1, city, state, postal_code, in_charge_user_id, is_active, row_version
+    ) values (
+      $1, 'WH-SURAT', 'South Gujarat Regional Depot', 'regional_depot',
+      'Survey 88, Sachin Industrial Area', 'Surat', 'Gujarat', '394230', $2, 1, 1
+    )
+    on conflict (company_id, code) do update
+      set name = excluded.name, in_charge_user_id = excluded.in_charge_user_id
+    returning id
+  `,
+    [input.companyId, input.receiverId],
+  );
+
+  await client.query(
+    `
+    insert into warehouses (
+      company_id, code, name, warehouse_type, project_id, address_line1, city, state, postal_code, in_charge_user_id, is_active, row_version
+    ) values (
+      $1, 'WH-SITE-ALPHA', 'Project Site Store - Alpha Towers', 'project_site_store', $2,
+      'Site Office, SG Highway', 'Ahmedabad', 'Gujarat', '380054', $3, 1, 1
+    )
+    on conflict (company_id, code) do update
+      set name = excluded.name, in_charge_user_id = excluded.in_charge_user_id
+  `,
+    [input.companyId, input.projectId, input.adminId],
+  );
+
+  // 2. Opening Cutover Balances at Central Warehouse
+  const openDoc = await one<IdRow>(
+    client,
+    `
+    insert into stock_documents (
+      company_id, document_number, document_type, status, destination_warehouse_id,
+      document_date, notes, posted_at, posted_by_user_id, row_version
+    ) values (
+      $1, 'STK-DOC-2026-00001', 'opening_balance', 'posted', $2,
+      current_date - 10, 'Initial cutover inventory opening balance.', now() - interval '10 days', $3, 1
+    )
+    on conflict (company_id, document_number) do update
+      set status = excluded.status
+    returning id
+  `,
+    [input.companyId, centralWh.id, input.adminId],
+  );
+
+  const openingItems = [
+    { item: smoke, qty: '100.0000', cost: '1200.00', seq: '00001' },
+    { item: abc, qty: '50.0000', cost: '800.00', seq: '00002' },
+    { item: pipe, qty: '200.0000', cost: '690.00', seq: '00003' },
+  ];
+
+  for (let idx = 0; idx < openingItems.length; idx++) {
+    const o = openingItems[idx]!;
+    await client.query(
+      `
+      insert into stock_document_lines (
+        company_id, stock_document_id, line_number, item_id, quantity, unit_rate, notes
+      ) values ($1, $2, $3, $4, $5, $6, 'Cutover opening stock')
+      on conflict (stock_document_id, line_number) do nothing
+    `,
+      [input.companyId, openDoc.id, idx + 1, o.item.id, o.qty, o.cost],
+    );
+
+    await client.query(
+      `
+      insert into stock_balances (
+        company_id, warehouse_id, item_id, quantity_on_hand, quantity_reserved, last_movement_at
+      ) values ($1, $2, $3, $4, '0.0000', now() - interval '10 days')
+      on conflict (warehouse_id, item_id) do nothing
+    `,
+      [input.companyId, centralWh.id, o.item.id, o.qty],
+    );
+
+    await client.query(
+      `
+      insert into stock_ledger_entries (
+        company_id, entry_number, posting_date, source_type, source_id, source_reference,
+        warehouse_id, item_id, direction, quantity, balance_before, balance_after,
+        unit_cost, notes, posted_by_user_id
+      ) values (
+        $1, $2, now() - interval '10 days', 'opening_balance', $3, 'Opening Cutover Balance',
+        $4, $5, 'in', $6, '0.0000', $6, $7, 'Verified warehouse physical count', $8
+      )
+      on conflict (company_id, source_type, source_id, warehouse_id, direction) do nothing
+    `,
+      [
+        input.companyId,
+        `SLE-2026-${o.seq}`,
+        openDoc.id,
+        centralWh.id,
+        o.item.id,
+        o.qty,
+        o.cost,
+        input.adminId,
+      ],
+    );
+  }
+
+  // 3. Post Goods Receipt Line from DEMO-GRN-001 (5 accepted smoke detectors)
+  const grnLineRow = await client.query<{ id: string; grnNumber: string; acceptedQty: string; unitRate: string }>(
+    `select gl.id, gr.grn_number as "grnNumber", gl.accepted_quantity as "acceptedQty", pol.unit_rate as "unitRate"
+     from goods_receipt_lines gl
+     join goods_receipts gr on gr.id = gl.goods_receipt_id
+     join purchase_order_lines pol on pol.id = gl.purchase_order_line_id
+     where gl.company_id = $1 and gr.grn_number = 'DEMO-GRN-001' and gl.line_number = 1`,
+    [input.companyId],
+  );
+  if (grnLineRow.rows.length > 0) {
+    const grnLine = grnLineRow.rows[0]!;
+    const acceptedVal = Number(grnLine.acceptedQty);
+    if (acceptedVal > 0) {
+      await client.query(
+        `
+        insert into stock_ledger_entries (
+          company_id, entry_number, posting_date, source_type, source_id, source_reference,
+          warehouse_id, item_id, direction, quantity, balance_before, balance_after,
+          unit_cost, notes, posted_by_user_id
+        ) values (
+          $1, 'SLE-2026-00004', now() - interval '1 day', 'goods_receipt_line', $2, 'GRN DEMO-GRN-001 (Line #1)',
+          $3, $4, 'in', $5, '100.0000', '105.0000', $6, 'Inspected & accepted delivery from Sentinel Security', $7
+        )
+        on conflict (company_id, source_type, source_id, warehouse_id, direction) do nothing
+      `,
+        [
+          input.companyId,
+          grnLine.id,
+          centralWh.id,
+          smoke.id,
+          grnLine.acceptedQty,
+          grnLine.unitRate,
+          input.receiverId,
+        ],
+      );
+
+      await client.query(
+        `update stock_balances set quantity_on_hand = '105.0000', last_movement_at = now() - interval '1 day'
+         where warehouse_id = $1 and item_id = $2`,
+        [centralWh.id, smoke.id],
+      );
+    }
+  }
+
+  // 4. Inter-Warehouse Transfer: 20 smoke detectors Central WH -> Surat Depot (In Transit)
+  const trf = await one<IdRow>(
+    client,
+    `
+    insert into stock_transfers (
+      company_id, transfer_number, status, source_warehouse_id, destination_warehouse_id,
+      challan_number, vehicle_number, transporter_name, dispatched_at, dispatched_by_user_id,
+      notes, row_version
+    ) values (
+      $1, 'TRF-2026-00001', 'dispatched', $2, $3,
+      'CH-TRF-001', 'GJ-01-XX-9876', 'Gujarat Inter-City Logistics', now() - interval '4 hours', $4,
+      'Stock replenishment for South Gujarat regional projects.', 1
+    )
+    on conflict (company_id, transfer_number) do update
+      set status = excluded.status
+    returning id
+  `,
+    [input.companyId, centralWh.id, suratWh.id, input.receiverId],
+  );
+
+  await client.query(
+    `
+    insert into stock_transfer_lines (
+      company_id, transfer_id, line_number, item_id, dispatched_quantity, received_quantity, notes
+    ) values ($1, $2, 1, $3, '20.0000', '0.0000', '20 optical smoke detectors in transit')
+    on conflict (transfer_id, line_number) do nothing
+  `,
+    [input.companyId, trf.id, smoke.id],
+  );
+
+  await client.query(
+    `
+    insert into stock_ledger_entries (
+      company_id, entry_number, posting_date, source_type, source_id, source_reference,
+      warehouse_id, item_id, direction, quantity, balance_before, balance_after,
+      notes, posted_by_user_id
+    ) values (
+      $1, 'SLE-2026-00005', now() - interval '4 hours', 'transfer_dispatch', $2, 'Transfer TRF-2026-00001 (Challan: CH-TRF-001)',
+      $3, $4, 'out', '20.0000', '105.0000', '85.0000', 'Dispatched to South Gujarat Regional Depot', $5
+    )
+    on conflict (company_id, source_type, source_id, warehouse_id, direction) do nothing
+  `,
+    [input.companyId, trf.id, centralWh.id, smoke.id, input.receiverId],
+  );
+
+  await client.query(
+    `update stock_balances set quantity_on_hand = '85.0000', last_movement_at = now() - interval '4 hours'
+     where warehouse_id = $1 and item_id = $2`,
+    [centralWh.id, smoke.id],
+  );
+
+  // 5. Stock Reservation: 25 smoke detectors at Central WH for Alpha Towers Project
+  await client.query(
+    `
+    insert into stock_reservations (
+      company_id, reservation_number, project_id, warehouse_id, item_id,
+      quantity_reserved, quantity_issued, status, reserved_by_user_id, notes, row_version
+    ) values (
+      $1, 'RES-2026-00001', $2, $3, $4,
+      '25.0000', '0.0000', 'active', $5,
+      'Reserved for Alpha Towers Zone-1 installation schedule.', 1
+    )
+    on conflict (company_id, reservation_number) do nothing
+  `,
+    [input.companyId, input.projectId, centralWh.id, smoke.id, input.purchaseManagerId],
+  );
+
+  await client.query(
+    `update stock_balances set quantity_reserved = '25.0000', updated_at = now()
+     where warehouse_id = $1 and item_id = $2`,
+    [centralWh.id, smoke.id],
+  );
+}
+
 async function seedCurrentWorkflows(client: PoolClient, input: {
   companyId: string; companyName: string; adminId: string; managerId: string; executiveId: string;
   designerId: string; headId: string; purchaseId: string; purchaseManagerId: string; serviceCategoryId: string;
@@ -1886,14 +2151,22 @@ async function seed() {
     await client.query("begin");
     transactionOpen = true;
     await client.query("select pg_advisory_xact_lock(hashtext('fire-safety:demo-seed'))");
-    const schema = await one<{ designJobs: string | null; quotationRevisions: string | null; surveyRevisions: string | null; procurementRequisitions: string | null; substitutionReviews: string | null }>(
+    const schema = await one<{
+      designJobs: string | null;
+      quotationRevisions: string | null;
+      surveyRevisions: string | null;
+      procurementRequisitions: string | null;
+      substitutionReviews: string | null;
+      warehouses: string | null;
+    }>(
       client,
       `
       select to_regclass('public.design_jobs')::text as "designJobs",
         to_regclass('public.quotation_revisions')::text as "quotationRevisions",
         to_regclass('public.survey_revisions')::text as "surveyRevisions",
         to_regclass('public.procurement_requisitions')::text as "procurementRequisitions",
-        to_regclass('public.procurement_substitution_reviews')::text as "substitutionReviews"
+        to_regclass('public.procurement_substitution_reviews')::text as "substitutionReviews",
+        to_regclass('public.warehouses')::text as "warehouses"
     `,
     );
     if (!schema.designJobs || !schema.quotationRevisions || !schema.surveyRevisions || !schema.procurementRequisitions || !schema.substitutionReviews)
@@ -2010,6 +2283,7 @@ async function seed() {
     const designHeadId = userIds.get("DEMO-DH")!;
     const purchaseManagerId = userIds.get("DEMO-PM")!;
     const purchaseExecutiveId = userIds.get("DEMO-PE")!;
+    const receiverId = userIds.get("DEMO-RC")!;
 
     stage = "lead classifications and service categories";
     for (const [code, name] of [
@@ -2701,6 +2975,16 @@ async function seed() {
       managerId: purchaseManagerId,
       adminId,
     });
+    if (schema.warehouses) {
+      stage = "inventory warehouses, balances, and ledger fixtures";
+      await ensureInventoryScenario(client, {
+        companyId: company.id,
+        projectId: procurementProject.id,
+        receiverId,
+        purchaseManagerId,
+        adminId,
+      });
+    }
     await ensureQuotationScenario(client, {
       companyId: company.id,
       jobId: designJobs[3]!.id,
@@ -2752,7 +3036,7 @@ async function seed() {
         `Demo seed complete for ${company.name}.`,
         `Created/refreshed ${userDefinitions.length} demo users, ${customers.length} customers and ${leads.length + currentWorkflows.scenarioCount} lead fixtures.`,
         `Ensured ${opportunities.length + currentWorkflows.scenarioCount} assigned opportunities, ${designJobs.length + currentWorkflows.scenarioCount} design jobs, 1 survey draft, 2 projects, ${2 + currentWorkflows.quotationCount} quotation checkpoints and 2 sourcing comparisons.`,
-        `Added ${referenceProducts.length} BOQ reference products and ${currentWorkflows.scenarioCount} DEMO-LATEST-* checkpoints, including full-catalogue PDFs and accepted payment-plan examples.`,
+        `Added ${referenceProducts.length} BOQ reference products, ${schema.warehouses ? "3 inventory warehouses & stock ledger fixtures, " : ""}${currentWorkflows.scenarioCount} DEMO-LATEST-* checkpoints, including full-catalogue PDFs and accepted payment-plan examples.`,
         "Workflow starts: DEMO-LEAD-003 authorize design; 006 upload/review design; 007 finalize the survey draft and build BOQ; 004 build quotation; 008 approve quotation; 009 issue and record decision; DEMO-REQ-001 compare/select a supplier; DEMO-REQ-SUB-001 review a technical deviation as design head.",
         "Login: demo.admin@example.test",
         `Password: ${demoPassword}`,
