@@ -105,6 +105,7 @@ const pageTitles: Record<string, string> = {
   "/procurement/requisitions": "Requisitions & sourcing",
   "/procurement/purchase-orders": "Purchase orders (PO)",
   "/procurement/substitution-reviews": "Technical substitution reviews",
+  "/inventory": "Inventory & Warehouse Ledger",
 };
 
 function initials(name: string) {
@@ -561,6 +562,15 @@ export function AppShell({ user }: { user: CurrentUser }) {
     icon: FolderKanban,
     visible: user.permissions.includes("project.read"),
   };
+  const inventory: NavItem = {
+    to: "/inventory",
+    label: "Inventory & Warehouses",
+    icon: Boxes,
+    visible:
+      user.permissions.includes("system.access.all") ||
+      user.permissions.includes("inventory.stock.read") ||
+      user.permissions.includes("inventory.warehouse.read"),
+  };
 
   // Filter Items based on live search query
   const query = searchQuery.trim().toLowerCase();
@@ -574,6 +584,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
     ? notifications
     : null;
   const filteredProjects = matchesSearch(projects) ? projects : null;
+  const filteredInventory = matchesSearch(inventory) ? inventory : null;
 
   const filterGroupItems = (items: NavItem[]) =>
     items.filter((item) => item.visible && matchesSearch(item));
@@ -588,6 +599,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
     (filteredOverview ? 1 : 0) +
     (filteredNotifications ? 1 : 0) +
     (filteredProjects ? 1 : 0) +
+    (filteredInventory ? 1 : 0) +
     filteredCrm.length +
     filteredMasters.length +
     filteredEngineering.length +
@@ -701,6 +713,9 @@ export function AppShell({ user }: { user: CurrentUser }) {
                   )}
                   {filteredProjects && (
                     <NavigationLink item={filteredProjects} />
+                  )}
+                  {filteredInventory && (
+                    <NavigationLink item={filteredInventory} />
                   )}
 
                   {filteredCrm.length > 0 && (

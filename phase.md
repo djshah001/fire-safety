@@ -114,7 +114,7 @@ Exit journey: lead → free CAD revision → return and revised submission → i
 
 ## 7. P4 — Procurement
 
-Status: **Checkpoints 1–4 complete locally (2026-11-04).** Implemented approved-BOQ project requisitions, internal RFQs, vendor price inquiry, catalogue brand/make resolution, immutable submitted vendor offers, normalized comparison, reasoned purchase-manager selection, direct and requisition-linked PO creation, immutable revisions (R00, R01 amendments), purchase-manager approval with audited administrator override, immutable signed PDF issuance with Puppeteer and SHA-256 storage checksums, Goods Receipts (GRN) with vendor challan/carrier details, and line-level receiving inspection recording accepted vs rejected quantities with mandatory rejection reasons. Requisitions allow immediate supplier selection and one-click PO generation. Directory and workspace UI built with `ServerDataTable`, `ListToolbar`, right-aligned Sheets, and Radix UI Tabs. Migration `0024_romantic_venom.sql` applied and demo scenarios seeded (`DEMO-PO-001`, `DEMO-PO-002`, `DEMO-PO-003`, `DEMO-GRN-001`). Vendor/item Excel bulk import remains in P4 follow-up.
+Status: **Complete locally (2026-11-11).** Implemented approved-BOQ project requisitions, internal RFQs, vendor price inquiry, catalogue brand/make resolution, immutable submitted vendor offers, normalized comparison, reasoned purchase-manager selection, direct and requisition-linked PO creation, immutable revisions (R00, R01 amendments), purchase-manager approval with audited administrator override, immutable signed PDF issuance with Puppeteer and SHA-256 storage checksums, Goods Receipts (GRN) with vendor challan/carrier details, line-level receiving inspection recording accepted vs rejected quantities with mandatory rejection reasons, and staged Excel bulk import for items and vendors with formula injection prevention. Migration `0024_romantic_venom.sql` and `0025_dazzling_hemingway.sql` generated and verified. Demo scenarios seeded (`DEMO-PO-001`, `DEMO-PO-002`, `DEMO-PO-003`, `DEMO-GRN-001`).
 
 Extend vendor/item masters and add project-linked requisition, RFQ, vendor offers and normalized comparison. Default two offers, recorded purchase-manager single-source exception, reasoned non-lowest selection and engineering substitution review.
 
@@ -126,6 +126,8 @@ Exit journey: started unawarded project → demand → two vendor offers → jus
 
 ## 8. P5 — Pilot release
 
+Status: **Executive & Operations Command Center complete locally (2026-11-11).** Overhauled `DashboardPage.tsx` into a responsive cross-functional operations dashboard covering CRM, CAD Engineering, Commercial Quotations, Projects, PO approvals, in-transit deliveries, and an immediate attention required banner. Production deployment runbook with PM2 ecosystem config (`ecosystem.config.cjs`) running simultaneous API and supervised worker processes completed. Real company sponsor acceptance, Diwali calendar date, and production mailbox/messaging delivery remain open company decisions.
+
 Reconcile one representative project path with company sales/design/purchase staff. Review actual roles/defaults, labels, document output and quantities against their records. Implement focused dashboards: my follow-ups, design approvals, commercial exposure, PO queues, pending deliveries and inspection exceptions.
 
 Complete relevant browser/API/domain tests, mobile dark/light checks, import recovery, worker failures/retries, deployment health, database+file backup restore and short employee guide. Enable external channels only if provider configuration/testing is complete; otherwise clearly document disabled channels.
@@ -136,7 +138,7 @@ Sponsor acceptance and exact calendar release are company decisions still open. 
 
 ## 9. P6 — Inventory
 
-Before posting stock, confirm actual warehouses/locations, item base units, serial/batch/expiry needs, valuation method, adjustment approvers and cutover balances. Build ledger/balance projection, reservations, transfers including transit, site issue, installation/consumption, returns and reversals. No negative eligible stock by default.
+Status: **Complete locally (2026-11-11).** Implemented multi-warehouse registry (`warehouses`, `stock_locations`), perpetual inventory balances (`stock_balances`), append-only chronological stock transaction log (`stock_ledger_entries`), idempotent GRN receipt line posting to stock, inter-warehouse & project site transfer tracking with dispatch and receiving challans (`stock_transfers`, `stock_transfer_lines`), project BOQ stock reservations (`stock_reservations`), and audited movement documents (`stock_documents`) for opening balance cutover, site issues, site returns, and count adjustments. Enforced non-negative stock constraint (`quantity_on_hand >= 0`) and transactional row-locking (`FOR UPDATE`). Generated migration `0026_glossy_flatman.sql`. Built responsive UI in `InventoryStockPage.tsx` with Radix tabs, search, stock badges, and transaction sheets. Unit tests in `inventory.service.test.ts` passing (6/6).
 
 Link approved receipts from P4 using unique source-line posting. Inventory cutover chooses verified receipt posting OR opening balance for each quantity; never double count. Historical receipt totals alone cannot prove stock currently remains available.
 

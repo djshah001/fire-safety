@@ -7,3 +7,4 @@ export * from './masters.js';
 export * from './engineering.js';
 export * from './projects.js';
 export * from './procurement.js';
+export * from './inventory.js';

@@ -82,6 +82,7 @@ const SubstitutionReviewsPage = lazy(() => import('@/features/procurement/Substi
 const SubstitutionReviewWorkspacePage = lazy(() => import('@/features/procurement/SubstitutionReviewWorkspacePage').then((module) => ({ default: module.SubstitutionReviewWorkspacePage })));
 const PurchaseOrdersPage = lazy(() => import('@/features/procurement/PurchaseOrdersPage').then((module) => ({ default: module.PurchaseOrdersPage })));
 const PurchaseOrderWorkspacePage = lazy(() => import('@/features/procurement/PurchaseOrderWorkspacePage').then((module) => ({ default: module.PurchaseOrderWorkspacePage })));
+const InventoryStockPage = lazy(() => import('@/features/inventory/InventoryStockPage').then((module) => ({ default: module.InventoryStockPage })));
 const PublicVendorRegistrationPage = lazy(() => import('@/features/masters/PublicVendorRegistrationPage').then((module) => ({ default: module.PublicVendorRegistrationPage })));
 const PublicPriceSubmissionPage = lazy(() => import('@/features/procurement/PublicPriceSubmissionPage').then((module) => ({ default: module.PublicPriceSubmissionPage })));
 
@@ -146,6 +147,7 @@ const router = createBrowserRouter([
           { path: "/procurement/purchase-orders/:poId", element: <PurchaseOrderWorkspacePage /> },
           { path: "/procurement/substitution-reviews", element: <SubstitutionReviewsPage /> },
           { path: "/procurement/substitution-reviews/:requisitionId", element: <SubstitutionReviewWorkspacePage /> },
+          { path: "/inventory", element: <InventoryStockPage /> },
         ],
       },
       { path: "*", element: <NotFoundPage /> },

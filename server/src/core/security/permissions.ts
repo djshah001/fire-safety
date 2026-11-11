@@ -92,6 +92,17 @@ export const permissionCatalog = {
     "Record goods receipts against issued purchase orders.",
   "procurement.goods_receipt.inspect":
     "Inspect received material and record accepted or rejected quantities.",
+  "inventory.warehouse.read": "View warehouse and stock location directories.",
+  "inventory.warehouse.manage": "Create and configure warehouses and stock locations.",
+  "inventory.stock.read": "View real-time stock balances, transactions, and movements.",
+  "inventory.receipt.post": "Post inspected and accepted goods receipts into warehouse stock ledger.",
+  "inventory.transfer.create": "Create inter-warehouse and site transfer challans.",
+  "inventory.transfer.dispatch": "Dispatch material for transit between warehouses or to project sites.",
+  "inventory.transfer.receive": "Receive dispatched transit material at destination warehouse or project site.",
+  "inventory.reservation.manage": "Allocate or release warehouse stock reservations for project BOQ requirements.",
+  "inventory.site_issue.create": "Issue stock to project sites for execution and consumption.",
+  "inventory.site_return.create": "Return unused or defective stock from project sites back to warehouse.",
+  "inventory.adjustment.manage": "Perform stock adjustments and write-offs with mandatory business reasons.",
 } as const;
 
 export type PermissionCode = keyof typeof permissionCatalog;
@@ -184,6 +195,9 @@ export const purchaseManagerPermissionCodes: PermissionCode[] = [
   "procurement.goods_receipt.read",
   "procurement.goods_receipt.manage",
   "procurement.goods_receipt.inspect",
+  "inventory.warehouse.read",
+  "inventory.stock.read",
+  "inventory.reservation.manage",
 ];
 
 export const boqAdminApproverPermissionCodes: PermissionCode[] = [
@@ -198,15 +212,33 @@ export const receiverPermissionCodes: PermissionCode[] = [
   "procurement.purchase_order.read",
   "procurement.goods_receipt.read",
   "procurement.goods_receipt.manage",
+  "inventory.warehouse.read",
+  "inventory.warehouse.manage",
+  "inventory.stock.read",
+  "inventory.receipt.post",
+  "inventory.transfer.create",
+  "inventory.transfer.dispatch",
+  "inventory.transfer.receive",
+  "inventory.site_issue.create",
+  "inventory.site_return.create",
+  "inventory.adjustment.manage",
 ];
 
 export const managementPermissionCodes: PermissionCode[] = [
   "project.read",
   "project.start",
+  "inventory.warehouse.read",
+  "inventory.stock.read",
 ];
 export const projectManagerPermissionCodes: PermissionCode[] = [
   "project.read",
   "procurement.purchase_order.read",
   "procurement.goods_receipt.read",
   "procurement.goods_receipt.inspect",
+  "inventory.warehouse.read",
+  "inventory.stock.read",
+  "inventory.reservation.manage",
+  "inventory.transfer.receive",
+  "inventory.site_issue.create",
+  "inventory.site_return.create",
 ];
