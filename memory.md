@@ -1,5 +1,73 @@
 # Fire Safety — Decision and Status Memory
 
+## Phase 5: Executive & Operational Dashboard Command Center — 2026-11-11
+
+- **Context & Scope**:
+  - Implemented the cross-functional operations and executive command center on `DashboardPage.tsx`, bridging the complete P1–P4 operational pilot (CRM, CAD Engineering, Commercial Quotations, Project Register, and Procurement POs/GRN deliveries).
+  - Previously, `DashboardPage` only displayed CRM metrics and showed an empty "No business workspace assigned" for engineering or purchasing staff.
+- **Frontend Architecture & UX Enhancement (`client/src/features/foundation/DashboardPage.tsx`)**:
+  - **Permission-Aware Scoping**: Dynamically grants access across `crm.*`, `engineering.*`, `procurement.*`, and `project.*`.
+  - **Executive KPI Matrix**: 8 responsive metric cards displaying real-time counts:
+    - Visible CRM leads and pending first contact
+    - Scheduled follow-up reminders due
+    - Active CAD Design jobs & packages awaiting review
+    - Commercial quotations submitted & awaiting customer award
+    - Active started projects launched from customer-approved designs
+    - Purchase Order approvals queue
+    - In-transit partial deliveries
+    - Active customer directory
+  - **Critical Immediate Action Banner**: Aggregates high-priority pending work across all domains (overdue reminders, design reviews, PO manager approvals, and submitted quotations) with quick-access links.
+  - **Operational Tabs**:
+    - `Overview`: Cross-functional activity split (CRM pipeline + Procurement commitments and active projects).
+    - `CRM & Follow-ups`: Dedicated leads pipeline and chronological reminders timeline.
+    - `Design & Quotes`: Active CAD drawing packages with designer assignments, revision numbers, and quotation values.
+    - `Procurement & Deliveries`: Purchase orders queue and active delivery fulfillment tracker.
+    - `Projects`: Active started projects register with commercial baseline status.
+- **Verification & Status**:
+  - `npm run typecheck --workspace @fire-safety/client`: 0 errors.
+  - `npm run build --workspace @fire-safety/client`: Built 2,757 modules cleanly into production assets (`/dist`) in 6.60s.
+  - `npm run typecheck --workspaces`: 0 errors across `@fire-safety/client` and `@fire-safety/server`.
+
+## Master Data: Item & Vendor Excel Bulk Import — 2026-11-11
+
+- **Context & Requirement**:
+  - Implemented multi-row staged XLSX bulk validation and import wizard for catalogue items (`/masters/items`) and operational vendors (`/masters/vendors`).
+  - Followed strict two-phase staging architecture: Stage & Preview (validating headers, formula rejection, foreign key lookups, and duplicate detection) -> Review validation table -> Transactional Commit of valid rows.
+- **Database Schema & Migrations (`server/drizzle/0025_dazzling_hemingway.sql`)**:
+  - Created enums:
+    - `master_import_type`: `items`, `vendors`
+    - `master_import_batch_status`: `staged`, `committing`, `completed`, `cancelled`
+    - `master_import_row_status`: `valid`, `invalid`, `created`, `failed`
+  - Created tables:
+    - `master_import_batches`: Company-scoped audit batch with `original_name`, `storage_name`, `checksum_sha256`, `total_rows`, `valid_rows`, `invalid_rows`, row version, and timestamps.
+    - `master_import_rows`: Row-level tracking with 1-based `row_number`, raw `payload` JSON, `issues` and `warnings` arrays, execution `status`, `created_record_id`, and `result_message`.
+- **Backend Architecture & Security**:
+  - `server/src/modules/masters/masters.imports.ts`:
+    - `buildMasterImportTemplate(type)`: Generates branded `.xlsx` download with frozen headers, required markers, column widths, and realistic sample data rows.
+    - `readMasterImportWorkbook(type, filePath)`: Strictly rejects formula injection (`ExcelJS.ValueType.Formula`), enforces 500 data row caps, normalizes headers, and skips empty rows.
+  - `server/src/modules/masters/masters.repository.ts`:
+    - Added batch management (`createImportBatch`, `findImportBatch`, `claimImportBatch`, `listImportRows`, `markImportRowFailed`, `markImportRowCreated`, `completeImportBatch`).
+    - Added fast in-memory resolution lookups (`listActiveCategories`, `listActiveUnits`, `listActiveFamilies`, `listActiveBrands`, `findActiveItemByCode`, `findVendorByCode`, `findVendorByDisplayName`).
+  - `server/src/modules/masters/masters.service.ts`:
+    - `assertImportPermission()`: Enforces `procurement.item.manage` or `procurement.vendor.manage` with audited administrator override.
+    - `stageImport()`: Multi-column validation for items (code regex, name lengths, category resolution, unit resolution, family and brand links, initial rate decimal) and vendors (name lengths, vendor types, GSTIN format & uniqueness, PAN format, primary contact method required check).
+    - `commitImport()`: Optimistic claim lock; per-row transactional commit inserting `items` (with optional `itemBrandOfferings` and base `itemRateVersions` if initial rate provided) and `vendors` (with primary `vendorContacts` and default `vendorAddresses`). Failed rows recorded without aborting the entire workbook.
+  - `server/src/modules/masters/masters.routes.ts`:
+    - `GET /api/v1/masters/imports/:type/template`: Template download endpoint.
+    - `POST /api/v1/masters/imports/:type/stage`: Authenticated, CSRF-guarded multipart upload (5MB max).
+    - `GET /api/v1/masters/imports/:id`: Batch status and preview fetch.
+    - `POST /api/v1/masters/imports/:id/commit`: Batch execution endpoint.
+- **Frontend Architecture & UX**:
+  - `client/src/api/masters.ts`: Added `MasterImportBatch`, `MasterImportRow`, and API functions `downloadMasterImportTemplate`, `stageMasterImport`, and `commitMasterImport`.
+  - `client/src/features/masters/MasterImportDialog.tsx`: Two-stage dialog supporting download template, file upload, live progress, batch metrics badges (total, valid, invalid, created, failed), preview table highlighting row errors and warnings, and partial valid row commit button.
+  - `client/src/features/masters/MasterDataPage.tsx`: Integrated "Import items" button on `/masters/items` and "Import vendors" button on `/masters/vendors` directly alongside the existing Add and WhatsApp buttons. Query invalidation auto-refreshes data tables upon commit.
+- **Verification & Status**:
+  - `server/src/modules/masters/masters.imports.test.ts`: 3/3 tests passing.
+  - `npm run typecheck --workspaces`: 0 errors across server and client.
+  - `npm run lint --workspace @fire-safety/server`: 0 errors, 0 warnings.
+  - `npm run build --workspace @fire-safety/client`: Built cleanly in 6.27s.
+  - `npm run build --workspace @fire-safety/server`: Built cleanly with `tsc -p tsconfig.build.json`.
+
 ## Phase 4: Purchase Orders (PO) & Goods Receipts (GRN) Lifecycle — 2026-11-04
 
 - **Context & Scope**:

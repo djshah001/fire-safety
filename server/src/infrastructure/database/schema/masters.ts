@@ -7,6 +7,7 @@ import {
   integer,
   jsonb,
   numeric,
+  pgEnum,
   pgTable,
   primaryKey,
   timestamp,
@@ -17,6 +18,10 @@ import {
 import { masterStatusEnum } from "./crm.js";
 import { users } from "./identity.js";
 import { companies } from "./organizations.js";
+
+export const masterImportTypeEnum = pgEnum('master_import_type', ['items', 'vendors']);
+export const masterImportBatchStatusEnum = pgEnum('master_import_batch_status', ['staged', 'committing', 'completed', 'cancelled']);
+export const masterImportRowStatusEnum = pgEnum('master_import_row_status', ['valid', 'invalid', 'created', 'failed']);
 
 export const units = pgTable(
   "units",
@@ -771,6 +776,85 @@ export const vendorPriceInquiryResponses = pgTable(
   ],
 );
 
+export type MasterImportPayload = Record<string, string | null>;
+export type MasterImportIssue = { field?: string; message: string };
+
+export const masterImportBatches = pgTable(
+  "master_import_batches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "restrict" }),
+    type: masterImportTypeEnum("type").notNull(),
+    status: masterImportBatchStatusEnum("status").notNull().default("staged"),
+    originalName: varchar("original_name", { length: 255 }).notNull(),
+    storageName: varchar("storage_name", { length: 64 }).notNull(),
+    mimeType: varchar("mime_type", { length: 100 }).notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    checksumSha256: varchar("checksum_sha256", { length: 64 }).notNull(),
+    totalRows: integer("total_rows").notNull(),
+    validRows: integer("valid_rows").notNull(),
+    invalidRows: integer("invalid_rows").notNull(),
+    rowVersion: integer("row_version").notNull().default(1),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    committedAt: timestamp("committed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("master_import_batches_storage_name_uidx").on(table.storageName),
+    index("master_import_batches_company_created_idx").on(table.companyId, table.createdAt),
+    check(
+      "master_import_batches_counts_valid",
+      sql`${table.totalRows} >= 0 and ${table.validRows} >= 0 and ${table.invalidRows} >= 0 and ${table.totalRows} = ${table.validRows} + ${table.invalidRows}`,
+    ),
+    check(
+      "master_import_batches_file_size_valid",
+      sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 5242880`,
+    ),
+    check("master_import_batches_row_version_positive", sql`${table.rowVersion} > 0`),
+  ],
+);
+
+export const masterImportRows = pgTable(
+  "master_import_rows",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "restrict" }),
+    batchId: uuid("batch_id")
+      .notNull()
+      .references(() => masterImportBatches.id, { onDelete: "cascade" }),
+    rowNumber: integer("row_number").notNull(),
+    payload: jsonb("payload").$type<MasterImportPayload>().notNull(),
+    issues: jsonb("issues").$type<MasterImportIssue[]>().notNull().default([]),
+    warnings: jsonb("warnings").$type<MasterImportIssue[]>().notNull().default([]),
+    status: masterImportRowStatusEnum("status").notNull(),
+    createdRecordId: uuid("created_record_id"),
+    resultMessage: varchar("result_message", { length: 500 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("master_import_rows_batch_row_uidx").on(table.batchId, table.rowNumber),
+    index("master_import_rows_batch_status_idx").on(table.companyId, table.batchId, table.status),
+    check("master_import_rows_row_number_valid", sql`${table.rowNumber} >= 2`),
+    check(
+      "master_import_rows_result_consistent",
+      sql`(${table.status} = 'created' and ${table.createdRecordId} is not null) or ${table.status} <> 'created'`,
+    ),
+  ],
+);
+
 export type Unit = typeof units.$inferSelect;
 export type ItemCategory = typeof itemCategories.$inferSelect;
 export type Brand = typeof brands.$inferSelect;
@@ -788,3 +872,5 @@ export type VendorOnboardingInvitation = typeof vendorOnboardingInvitations.$inf
 export type VendorPriceInquiry = typeof vendorPriceInquiries.$inferSelect;
 export type VendorPriceInquiryInvitation = typeof vendorPriceInquiryInvitations.$inferSelect;
 export type VendorPriceInquiryResponse = typeof vendorPriceInquiryResponses.$inferSelect;
+export type MasterImportBatch = typeof masterImportBatches.$inferSelect;
+export type MasterImportRow = typeof masterImportRows.$inferSelect;

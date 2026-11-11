@@ -1,12 +1,18 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { AppError, ConflictError, NotFoundError } from '../../core/errors/appError.js';
+import path from 'node:path';
+import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../core/errors/appError.js';
+import { isAdministrator } from '../../core/security/administrator.js';
 import { normalizeEmail, normalizeName, normalizePhone } from '../../core/text/normalize.js';
 import { db, type Database } from '../../infrastructure/database/db.js';
+import { type MasterImportIssue } from '../../infrastructure/database/schema/index.js';
 import { msg91WhatsAppService } from '../../infrastructure/notifications/msg91.js';
-import { removePrivateFile } from '../../infrastructure/storage/localFileStorage.js';
+import { removePrivateFile, resolvePrivateFile } from '../../infrastructure/storage/localFileStorage.js';
+import { hasPermission } from '../auth/auth.middleware.js';
 import { createAuthRepository } from '../auth/auth.repository.js';
 import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
+import { buildMasterImportTemplate, readMasterImportWorkbook, type MasterImportType } from './masters.imports.js';
 import { createMastersRepository } from './masters.repository.js';
 import type {
   BrandCreateInput,
@@ -33,6 +39,19 @@ import type {
 
 function validationError(message: string) {
   return new AppError('VALIDATION_ERROR', message, 422);
+}
+
+async function sha256File(filePath: string) {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+function safeOriginalName(name: string) {
+  return Array.from(name)
+    .map((c) => (c.charCodeAt(0) < 32 || c.charCodeAt(0) > 126 ? '_' : c))
+    .join('')
+    .slice(0, 255);
 }
 
 type SpecificationDefinition = {
@@ -1051,6 +1070,588 @@ export class MastersService {
       });
 
       return doc!;
+    });
+  }
+
+  assertImportPermission(principal: AuthenticatedPrincipal, type: MasterImportType) {
+    if (isAdministrator(principal)) return;
+    const permission = type === 'items' ? 'procurement.item.manage' : 'procurement.vendor.manage';
+    if (!hasPermission(principal, permission)) {
+      throw new ForbiddenError(`You do not have permission to manage ${type}.`);
+    }
+  }
+
+  async getImportTemplate(type: MasterImportType) {
+    return buildMasterImportTemplate(type);
+  }
+
+  async stageImport(
+    principal: AuthenticatedPrincipal,
+    type: MasterImportType,
+    file: Express.Multer.File,
+    requestId: string,
+  ) {
+    this.assertImportPermission(principal, type);
+    if (path.extname(file.originalname).toLowerCase() !== '.xlsx') {
+      await removePrivateFile(file.filename);
+      throw validationError('Upload the .xlsx template without changing its file type.');
+    }
+
+    try {
+      const parsedRows = await readMasterImportWorkbook(type, resolvePrivateFile(file.filename));
+      const repository = createMastersRepository(this.database);
+
+      const stagedRows: Array<{
+        rowNumber: number;
+        payload: Record<string, string | null>;
+        issues: MasterImportIssue[];
+        warnings: MasterImportIssue[];
+        status: 'valid' | 'invalid';
+      }> = [];
+
+      if (type === 'items') {
+        const [categories, unitsList, families, brandsList] = await Promise.all([
+          repository.listActiveCategories(principal.companyId),
+          repository.listActiveUnits(principal.companyId),
+          repository.listActiveFamilies(principal.companyId),
+          repository.listActiveBrands(principal.companyId),
+        ]);
+
+        const categoryLookup = new Map<string, typeof categories[0]>();
+        for (const cat of categories) {
+          categoryLookup.set(cat.code.toUpperCase(), cat);
+          categoryLookup.set(cat.nameNormalized.toUpperCase(), cat);
+        }
+
+        const unitLookup = new Map<string, typeof unitsList[0]>();
+        for (const u of unitsList) {
+          unitLookup.set(u.symbol.toUpperCase(), u);
+          unitLookup.set(u.code.toUpperCase(), u);
+          unitLookup.set(u.nameNormalized.toUpperCase(), u);
+        }
+
+        const familyLookup = new Map<string, typeof families[0]>();
+        for (const fam of families) {
+          familyLookup.set(fam.code.toUpperCase(), fam);
+          familyLookup.set(fam.nameNormalized.toUpperCase(), fam);
+        }
+
+        const brandLookup = new Map<string, typeof brandsList[0]>();
+        for (const br of brandsList) {
+          brandLookup.set(br.code.toUpperCase(), br);
+          brandLookup.set(br.nameNormalized.toUpperCase(), br);
+        }
+
+        const seenCodesInBatch = new Set<string>();
+
+        for (const row of parsedRows) {
+          const issues: MasterImportIssue[] = [];
+          const warnings: MasterImportIssue[] = [];
+          const code = (row.payload.code ?? '').trim().toUpperCase();
+          const name = (row.payload.name ?? '').trim();
+          const categoryStr = (row.payload.category ?? '').trim();
+          const unitStr = (row.payload.unit ?? '').trim();
+          const familyStr = (row.payload.family ?? '').trim();
+          const costingBrandStr = (row.payload.costing_brand ?? '').trim();
+          const initialRateStr = (row.payload.initial_rate ?? '').trim();
+
+          if (!code) {
+            issues.push({ field: 'code', message: 'Item code is required.' });
+          } else if (code.length > 50 || !/^[A-Za-z0-9_-]+$/.test(code)) {
+            issues.push({ field: 'code', message: 'Use up to 50 letters, numbers, hyphens, or underscores only.' });
+          } else if (seenCodesInBatch.has(code)) {
+            issues.push({ field: 'code', message: `Duplicate item code '${code}' in this import file.` });
+          } else {
+            seenCodesInBatch.add(code);
+            const existingItem = await repository.findActiveItemByCode(principal.companyId, code);
+            if (existingItem) {
+              issues.push({ field: 'code', message: `An item with code '${code}' already exists.` });
+            }
+          }
+
+          if (!name) {
+            issues.push({ field: 'name', message: 'Item name is required.' });
+          } else if (name.length < 2 || name.length > 160) {
+            issues.push({ field: 'name', message: 'Item name must be between 2 and 160 characters.' });
+          }
+
+          if (!categoryStr) {
+            issues.push({ field: 'category', message: 'Category code or name is required.' });
+          } else {
+            const category = categoryLookup.get(categoryStr.toUpperCase());
+            if (!category) {
+              issues.push({ field: 'category', message: `Active category not found for '${categoryStr}'.` });
+            }
+          }
+
+          if (!unitStr) {
+            issues.push({ field: 'unit', message: 'Unit symbol or code is required.' });
+          } else {
+            const unit = unitLookup.get(unitStr.toUpperCase());
+            if (!unit) {
+              issues.push({ field: 'unit', message: `Active unit not found for '${unitStr}'.` });
+            }
+          }
+
+          if (familyStr) {
+            const family = familyLookup.get(familyStr.toUpperCase());
+            if (!family) {
+              issues.push({ field: 'family', message: `Active item family not found for '${familyStr}'.` });
+            }
+          }
+
+          if (costingBrandStr) {
+            const brand = brandLookup.get(costingBrandStr.toUpperCase());
+            if (!brand) {
+              issues.push({ field: 'costing_brand', message: `Active brand not found for '${costingBrandStr}'.` });
+            }
+          }
+
+          if (initialRateStr) {
+            const rateNum = Number(initialRateStr);
+            if (Number.isNaN(rateNum) || rateNum < 0 || !/^\d+(\.\d{1,4})?$/.test(initialRateStr)) {
+              issues.push({ field: 'initial_rate', message: 'Initial rate must be a valid non-negative number.' });
+            }
+          }
+
+          stagedRows.push({
+            rowNumber: row.rowNumber,
+            payload: row.payload,
+            issues,
+            warnings,
+            status: issues.length === 0 ? 'valid' : 'invalid',
+          });
+        }
+      } else {
+        const seenCodesInBatch = new Set<string>();
+        const seenGstinsInBatch = new Set<string>();
+        const validVendorTypes = new Set([
+          'material_supplier',
+          'manufacturer',
+          'distributor_dealer',
+          'service_provider',
+          'installation_contractor',
+          'labour_contractor',
+          'transport_logistics',
+          'other',
+        ]);
+
+        for (const row of parsedRows) {
+          const issues: MasterImportIssue[] = [];
+          const warnings: MasterImportIssue[] = [];
+          const displayName = (row.payload.display_name ?? '').trim();
+          const code = (row.payload.code ?? '').trim().toUpperCase();
+          const vendorType = (row.payload.vendor_type ?? '').trim();
+          const gstin = (row.payload.gstin ?? '').trim().toUpperCase();
+          const pan = (row.payload.pan ?? '').trim().toUpperCase();
+          const contactName = (row.payload.contact_name ?? '').trim();
+          const contactPhone = (row.payload.contact_phone ?? '').trim();
+          const contactEmail = (row.payload.contact_email ?? '').trim();
+
+          if (!displayName) {
+            issues.push({ field: 'display_name', message: 'Vendor display name is required.' });
+          } else if (displayName.length < 2 || displayName.length > 160) {
+            issues.push({ field: 'display_name', message: 'Display name must be between 2 and 160 characters.' });
+          } else {
+            const existingByName = await repository.findVendorByDisplayName(
+              principal.companyId,
+              normalizeName(displayName),
+            );
+            if (existingByName) {
+              warnings.push({
+                field: 'display_name',
+                message: `Possible duplicate vendor: '${existingByName.displayName}' (${existingByName.code}) already exists.`,
+              });
+            }
+          }
+
+          if (code) {
+            if (code.length > 50 || !/^[A-Za-z0-9_-]+$/.test(code)) {
+              issues.push({ field: 'code', message: 'Use up to 50 letters, numbers, hyphens, or underscores only.' });
+            } else if (seenCodesInBatch.has(code)) {
+              issues.push({ field: 'code', message: `Duplicate vendor code '${code}' in this import file.` });
+            } else {
+              seenCodesInBatch.add(code);
+              const existingByCode = await repository.findVendorByCode(principal.companyId, code);
+              if (existingByCode) {
+                issues.push({ field: 'code', message: `A vendor with code '${code}' already exists.` });
+              }
+            }
+          }
+
+          if (vendorType && !validVendorTypes.has(vendorType)) {
+            issues.push({
+              field: 'vendor_type',
+              message: `Choose a valid vendor type (e.g., material_supplier, manufacturer, distributor_dealer).`,
+            });
+          }
+
+          if (gstin) {
+            if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gstin)) {
+              issues.push({ field: 'gstin', message: 'Provide a valid 15-character GSTIN format.' });
+            } else if (seenGstinsInBatch.has(gstin)) {
+              issues.push({ field: 'gstin', message: `Duplicate GSTIN '${gstin}' in this import file.` });
+            } else {
+              seenGstinsInBatch.add(gstin);
+              const existingByGstin = await repository.findVendorByGstin(principal.companyId, gstin);
+              if (existingByGstin) {
+                issues.push({ field: 'gstin', message: `A vendor with GSTIN '${gstin}' already exists.` });
+              }
+            }
+          }
+
+          if (pan) {
+            if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan)) {
+              issues.push({ field: 'pan', message: 'Provide a valid 10-character PAN format.' });
+            }
+          }
+
+          if (contactName) {
+            if (contactPhone && (contactPhone.length < 7 || contactPhone.length > 30)) {
+              issues.push({ field: 'contact_phone', message: 'Contact phone must be between 7 and 30 characters.' });
+            }
+            if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) {
+              issues.push({ field: 'contact_email', message: 'Provide a valid contact email.' });
+            }
+            if (!contactPhone && !contactEmail) {
+              issues.push({
+                field: 'contact_phone',
+                message: 'Provide at least a phone number or email for the primary contact.',
+              });
+            }
+          }
+
+          stagedRows.push({
+            rowNumber: row.rowNumber,
+            payload: row.payload,
+            issues,
+            warnings,
+            status: issues.length === 0 ? 'valid' : 'invalid',
+          });
+        }
+      }
+
+      const validRows = stagedRows.filter((row) => row.status === 'valid').length;
+      const checksumSha256 = await sha256File(resolvePrivateFile(file.filename));
+      const originalName = safeOriginalName(file.originalname);
+
+      const batch = await this.database.transaction(async (transaction) => {
+        const repo = createMastersRepository(transaction);
+        const created = await repo.createImportBatch(
+          {
+            companyId: principal.companyId,
+            type,
+            originalName,
+            storageName: file.filename,
+            mimeType: file.mimetype,
+            sizeBytes: file.size,
+            checksumSha256,
+            totalRows: stagedRows.length,
+            validRows,
+            invalidRows: stagedRows.length - validRows,
+            createdByUserId: principal.userId,
+          },
+          stagedRows.map((row) => ({
+            ...row,
+            companyId: principal.companyId,
+          })),
+        );
+        await createAuthRepository(transaction).appendAuditEvent({
+          companyId: principal.companyId,
+          actorUserId: principal.userId,
+          action: 'master.import_staged',
+          targetType: 'master_import_batch',
+          targetId: created!.id,
+          requestId,
+          metadata: { type, totalRows: stagedRows.length, validRows },
+        });
+        return created!;
+      });
+
+      return this.getImportBatch(principal, batch.id);
+    } catch (error) {
+      await removePrivateFile(file.filename);
+      if (error instanceof AppError) throw error;
+      const message = error instanceof Error ? error.message : 'The workbook could not be read.';
+      throw validationError(message);
+    }
+  }
+
+  async getImportBatch(principal: AuthenticatedPrincipal, batchId: string) {
+    const repository = createMastersRepository(this.database);
+    const batch = await repository.findImportBatch(principal.companyId, batchId);
+    if (!batch || (!isAdministrator(principal) && batch.createdByUserId !== principal.userId)) {
+      throw new NotFoundError('Import batch not found.');
+    }
+    this.assertImportPermission(principal, batch.type);
+    const rows = await repository.listImportRows(principal.companyId, batchId);
+    return {
+      id: batch.id,
+      type: batch.type,
+      status: batch.status,
+      originalName: batch.originalName,
+      checksumSha256: batch.checksumSha256,
+      totalRows: batch.totalRows,
+      validRows: batch.validRows,
+      invalidRows: batch.invalidRows,
+      rowVersion: batch.rowVersion,
+      createdAt: batch.createdAt,
+      committedAt: batch.committedAt,
+      rows: rows.map((row) => ({
+        id: row.id,
+        rowNumber: row.rowNumber,
+        payload: row.payload,
+        issues: row.issues,
+        warnings: row.warnings,
+        status: row.status,
+        createdRecordId: row.createdRecordId,
+        resultMessage: row.resultMessage,
+      })),
+    };
+  }
+
+  async commitImport(
+    principal: AuthenticatedPrincipal,
+    batchId: string,
+    expectedVersion: number,
+    requestId: string,
+  ) {
+    const repository = createMastersRepository(this.database);
+    const existing = await repository.findImportBatch(principal.companyId, batchId);
+    if (!existing || (!isAdministrator(principal) && existing.createdByUserId !== principal.userId)) {
+      throw new NotFoundError('Import batch not found.');
+    }
+    this.assertImportPermission(principal, existing.type);
+    if (existing.status === 'completed' || existing.status === 'cancelled') {
+      throw new ConflictError('This import batch is already closed.');
+    }
+    const claimed = await repository.claimImportBatch(principal.companyId, batchId, expectedVersion);
+    if (!claimed) {
+      throw new ConflictError('This import batch changed or is being committed elsewhere. Refresh it.');
+    }
+    const rows = await repository.listImportRows(principal.companyId, batchId);
+
+    for (const row of rows.filter((item) => item.status === 'valid')) {
+      try {
+        if (claimed.type === 'items') {
+          await this.commitItemImportRow(principal, row.id, row.payload, requestId);
+        } else {
+          await this.commitVendorImportRow(principal, row.id, row.payload, requestId);
+        }
+      } catch (error) {
+        const message = error instanceof AppError ? error.message : 'The row could not be committed.';
+        await repository.markImportRowFailed(principal.companyId, row.id, message, new Date());
+      }
+    }
+
+    await this.database.transaction(async (transaction) => {
+      const completed = await createMastersRepository(transaction).completeImportBatch(
+        principal.companyId,
+        claimed.id,
+        claimed.rowVersion,
+        new Date(),
+      );
+      if (!completed) throw new ConflictError('The import batch changed before completion. Refresh it.');
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'master.import_completed',
+        targetType: 'master_import_batch',
+        targetId: claimed.id,
+        requestId,
+        metadata: { type: claimed.type },
+      });
+    });
+
+    return this.getImportBatch(principal, batchId);
+  }
+
+  private async commitItemImportRow(
+    principal: AuthenticatedPrincipal,
+    rowId: string,
+    payload: Record<string, string | null>,
+    requestId: string,
+  ) {
+    const code = (payload.code ?? '').trim().toUpperCase();
+    const name = (payload.name ?? '').trim();
+    const categoryStr = (payload.category ?? '').trim();
+    const unitStr = (payload.unit ?? '').trim();
+    const familyStr = (payload.family ?? '').trim();
+    const costingBrandStr = (payload.costing_brand ?? '').trim();
+    const model = (payload.model ?? '').trim() || null;
+    const specification = (payload.specification ?? '').trim() || null;
+    const initialRate = (payload.initial_rate ?? '').trim() || null;
+
+    return this.database.transaction(async (transaction) => {
+      const repo = createMastersRepository(transaction);
+      const [categories, unitsList, families, brandsList] = await Promise.all([
+        repo.listActiveCategories(principal.companyId),
+        repo.listActiveUnits(principal.companyId),
+        repo.listActiveFamilies(principal.companyId),
+        repo.listActiveBrands(principal.companyId),
+      ]);
+
+      const category = categories.find(
+        (c) => c.code.toUpperCase() === categoryStr.toUpperCase() || c.nameNormalized.toUpperCase() === categoryStr.toUpperCase(),
+      );
+      if (!category) throw validationError(`Category '${categoryStr}' not found.`);
+
+      const unit = unitsList.find(
+        (u) => u.symbol.toUpperCase() === unitStr.toUpperCase() || u.code.toUpperCase() === unitStr.toUpperCase() || u.nameNormalized.toUpperCase() === unitStr.toUpperCase(),
+      );
+      if (!unit) throw validationError(`Unit '${unitStr}' not found.`);
+
+      const family = familyStr
+        ? families.find((f) => f.code.toUpperCase() === familyStr.toUpperCase() || f.nameNormalized.toUpperCase() === familyStr.toUpperCase())
+        : undefined;
+
+      const brand = costingBrandStr
+        ? brandsList.find((b) => b.code.toUpperCase() === costingBrandStr.toUpperCase() || b.nameNormalized.toUpperCase() === costingBrandStr.toUpperCase())
+        : undefined;
+
+      const item = await repo.createItem({
+        companyId: principal.companyId,
+        code,
+        name,
+        nameNormalized: normalizeName(name),
+        specification,
+        categoryId: category.id,
+        unitId: unit.id,
+        familyId: family?.id ?? null,
+        costingBrandId: brand?.id ?? null,
+        model,
+        specificationValues: {},
+        createdByUserId: principal.userId,
+      });
+
+      if (!item) throw validationError('Item creation failed.');
+
+      if (brand) {
+        await repo.replaceItemBrands(principal.companyId, item.id, [brand.id], principal.userId);
+      }
+
+      if (brand || model || initialRate) {
+        const offering = await repo.createItemOffering({
+          companyId: principal.companyId,
+          itemId: item.id,
+          brandId: brand?.id ?? null,
+          manufacturerModel: model || 'Standard',
+          isPreferred: true,
+          status: 'active',
+          createdByUserId: principal.userId,
+        });
+
+        if (offering && initialRate) {
+          await repo.createItemRate({
+            companyId: principal.companyId,
+            itemId: item.id,
+            offeringId: offering.id,
+            currency: 'INR',
+            effectiveFrom: new Date().toISOString().slice(0, 10),
+            supplyRate: initialRate,
+            labourRate: '0.00',
+            miscellaneousRate: '0.00',
+            miscellaneousNote: 'Imported via Excel catalogue onboarding',
+            createdByUserId: principal.userId,
+          });
+        }
+      }
+
+      await this.audit(transaction, principal, requestId, 'master.item_imported', 'item', item.id, {
+        code: item.code,
+        name: item.name,
+      });
+
+      await repo.markImportRowCreated(principal.companyId, rowId, item.id, new Date());
+      return item;
+    });
+  }
+
+  private async commitVendorImportRow(
+    principal: AuthenticatedPrincipal,
+    rowId: string,
+    payload: Record<string, string | null>,
+    requestId: string,
+  ) {
+    const displayName = (payload.display_name ?? '').trim();
+    const inputCode = (payload.code ?? '').trim().toUpperCase();
+    const legalName = (payload.legal_name ?? '').trim() || null;
+    const vendorType = (payload.vendor_type ?? '').trim() || 'material_supplier';
+    const gstin = (payload.gstin ?? '').trim().toUpperCase() || null;
+    const pan = (payload.pan ?? '').trim().toUpperCase() || null;
+    const gstStatus = (payload.gst_status ?? '').trim() || (gstin ? 'registered' : 'unregistered');
+    const contactName = (payload.contact_name ?? '').trim() || null;
+    const contactPhone = (payload.contact_phone ?? '').trim() || null;
+    const contactEmail = (payload.contact_email ?? '').trim() || null;
+    const addressLine1 = (payload.address_line_1 ?? '').trim() || null;
+    const city = (payload.city ?? '').trim() || null;
+    const state = (payload.state ?? '').trim() || null;
+    const postalCode = (payload.postal_code ?? '').trim() || null;
+    const paymentTerms = (payload.payment_terms ?? '').trim() || null;
+
+    return this.database.transaction(async (transaction) => {
+      const repo = createMastersRepository(transaction);
+      const code = inputCode || await repo.getNextVendorCode(principal.companyId);
+
+      const vendor = await repo.createVendor({
+        companyId: principal.companyId,
+        code,
+        displayName,
+        displayNameNormalized: normalizeName(displayName),
+        legalName,
+        vendorType,
+        supplierCategories: ['General'],
+        gstStatus,
+        gstin,
+        pan,
+        addressLine1: addressLine1 || undefined,
+        city: city || undefined,
+        state: state || undefined,
+        postalCode: postalCode || undefined,
+        paymentTerms: paymentTerms || undefined,
+        approvalStatus: 'active',
+        status: 'active',
+        createdByUserId: principal.userId,
+      });
+
+      if (!vendor) throw validationError('Vendor creation failed.');
+
+      if (contactName && (contactPhone || contactEmail)) {
+        await repo.createVendorContact({
+          companyId: principal.companyId,
+          vendorId: vendor.id,
+          name: contactName,
+          phone: contactPhone,
+          phoneNormalized: contactPhone ? normalizePhone(contactPhone) : null,
+          email: contactEmail,
+          emailNormalized: contactEmail ? normalizeEmail(contactEmail) : null,
+          isPrimary: true,
+          status: 'active',
+          createdByUserId: principal.userId,
+        });
+      }
+
+      if (addressLine1 && city && state && postalCode) {
+        await repo.createVendorAddress({
+          companyId: principal.companyId,
+          vendorId: vendor.id,
+          addressType: 'office',
+          addressLine1,
+          city,
+          state,
+          postalCode,
+          country: 'India',
+          isDefault: true,
+        });
+      }
+
+      await this.audit(transaction, principal, requestId, 'master.vendor_imported', 'vendor', vendor.id, {
+        code: vendor.code,
+        displayName: vendor.displayName,
+      });
+
+      await repo.markImportRowCreated(principal.companyId, rowId, vendor.id, new Date());
+      return vendor;
     });
   }
 

@@ -318,3 +318,14 @@ export type VendorPriceListCreateInput = z.infer<typeof vendorPriceListCreateSch
 export type VendorPriceListUpdateInput = z.infer<typeof vendorPriceListUpdateSchema>;
 export type ArchiveVendorInput = z.infer<typeof archiveVendorSchema>;
 export type ApproveVendorInput = z.infer<typeof approveVendorSchema>;
+
+export const masterImportTypeParamsSchema = z.object({
+  type: z.enum(['items', 'vendors']),
+});
+
+export const commitMasterImportSchema = z.object({
+  expectedVersion: z.coerce.number().int().positive(),
+});
+
+export type CommitMasterImportInput = z.infer<typeof commitMasterImportSchema>;
+

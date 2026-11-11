@@ -365,3 +365,63 @@ export async function uploadPublicOnboardingDocument(token: string, documentType
   const response = await apiClient.post<ApiEnvelope<{ document: VendorDocument }>>(`/vendor-onboarding/${token}/documents`, formData);
   return response.data.data.document;
 }
+
+// Master Bulk Import Types & APIs (Items & Vendors)
+export type MasterImportType = 'items' | 'vendors';
+export type MasterImportBatchStatus = 'staged' | 'committing' | 'completed' | 'cancelled';
+export type MasterImportRowStatus = 'valid' | 'invalid' | 'created' | 'failed';
+export type MasterImportIssue = { field?: string; message: string };
+
+export type MasterImportRow = {
+  id: string;
+  rowNumber: number;
+  payload: Record<string, string | null>;
+  issues: MasterImportIssue[];
+  warnings: MasterImportIssue[];
+  status: MasterImportRowStatus;
+  createdRecordId: string | null;
+  resultMessage: string | null;
+};
+
+export type MasterImportBatch = {
+  id: string;
+  type: MasterImportType;
+  status: MasterImportBatchStatus;
+  originalName: string;
+  checksumSha256: string;
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+  rowVersion: number;
+  createdAt: string;
+  committedAt: string | null;
+  rows: MasterImportRow[];
+};
+
+export async function downloadMasterImportTemplate(type: MasterImportType) {
+  const response = await apiClient.get<Blob>(`/masters/imports/${type}/template`, { responseType: 'blob' });
+  const url = URL.createObjectURL(response.data);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `fire-safety-${type}-import.xlsx`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function stageMasterImport(type: MasterImportType, file: File) {
+  const data = new FormData();
+  data.append('file', file);
+  const response = await apiClient.post<ApiEnvelope<{ batch: MasterImportBatch }>>(
+    `/masters/imports/${type}/stage`,
+    data,
+  );
+  return response.data.data.batch;
+}
+
+export async function commitMasterImport(batch: MasterImportBatch) {
+  const response = await apiClient.post<ApiEnvelope<{ batch: MasterImportBatch }>>(
+    `/masters/imports/${batch.id}/commit`,
+    { expectedVersion: batch.rowVersion },
+  );
+  return response.data.data.batch;
+}

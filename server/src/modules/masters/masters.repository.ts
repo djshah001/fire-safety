@@ -9,6 +9,8 @@ import {
   itemFamilySpecifications,
   itemRateVersions,
   items,
+  masterImportBatches,
+  masterImportRows,
   units,
   vendorAddresses,
   vendorBankAccounts,
@@ -630,6 +632,133 @@ export function createMastersRepository(executor: DatabaseExecutor) {
     async approveVendor(companyId: string, id: string, expectedVersion: number, approvedByUserId: string, now: Date) {
       const [row] = await executor.update(vendors).set({ approvalStatus: 'active', status: 'active', approvedByUserId, approvedAt: now, rowVersion: sql`${vendors.rowVersion} + 1`, updatedAt: now })
         .where(and(eq(vendors.companyId, companyId), eq(vendors.id, id), eq(vendors.rowVersion, expectedVersion))).returning();
+      return row;
+    },
+
+    async createImportBatch(batch: typeof masterImportBatches.$inferInsert, rows: Array<Omit<typeof masterImportRows.$inferInsert, 'batchId'>>) {
+      const [createdBatch] = await executor.insert(masterImportBatches).values(batch).returning();
+      if (!createdBatch) return undefined;
+      if (rows.length > 0) {
+        await executor.insert(masterImportRows).values(
+          rows.map((row) => ({ ...row, batchId: createdBatch.id })),
+        );
+      }
+      return createdBatch;
+    },
+
+    async findImportBatch(companyId: string, id: string) {
+      const [batch] = await executor
+        .select()
+        .from(masterImportBatches)
+        .where(and(eq(masterImportBatches.companyId, companyId), eq(masterImportBatches.id, id)))
+        .limit(1);
+      return batch;
+    },
+
+    async claimImportBatch(companyId: string, id: string, expectedVersion: number) {
+      const [batch] = await executor
+        .update(masterImportBatches)
+        .set({ status: 'committing', rowVersion: sql`${masterImportBatches.rowVersion} + 1` })
+        .where(and(
+          eq(masterImportBatches.companyId, companyId),
+          eq(masterImportBatches.id, id),
+          eq(masterImportBatches.rowVersion, expectedVersion),
+        ))
+        .returning();
+      return batch;
+    },
+
+    async listImportRows(companyId: string, batchId: string) {
+      return executor
+        .select()
+        .from(masterImportRows)
+        .where(and(eq(masterImportRows.companyId, companyId), eq(masterImportRows.batchId, batchId)))
+        .orderBy(asc(masterImportRows.rowNumber));
+    },
+
+    async markImportRowFailed(companyId: string, rowId: string, message: string, updatedAt: Date) {
+      const [row] = await executor
+        .update(masterImportRows)
+        .set({ status: 'failed', resultMessage: message, updatedAt })
+        .where(and(eq(masterImportRows.companyId, companyId), eq(masterImportRows.id, rowId)))
+        .returning();
+      return row;
+    },
+
+    async markImportRowCreated(companyId: string, rowId: string, createdRecordId: string, updatedAt: Date) {
+      const [row] = await executor
+        .update(masterImportRows)
+        .set({ status: 'created', createdRecordId, updatedAt })
+        .where(and(eq(masterImportRows.companyId, companyId), eq(masterImportRows.id, rowId)))
+        .returning();
+      return row;
+    },
+
+    async completeImportBatch(companyId: string, id: string, expectedVersion: number, committedAt: Date) {
+      const [batch] = await executor
+        .update(masterImportBatches)
+        .set({ status: 'completed', committedAt, rowVersion: sql`${masterImportBatches.rowVersion} + 1` })
+        .where(and(
+          eq(masterImportBatches.companyId, companyId),
+          eq(masterImportBatches.id, id),
+          eq(masterImportBatches.rowVersion, expectedVersion),
+        ))
+        .returning();
+      return batch;
+    },
+
+    async findActiveItemByCode(companyId: string, code: string) {
+      const [row] = await executor
+        .select()
+        .from(items)
+        .where(and(eq(items.companyId, companyId), eq(items.code, code)))
+        .limit(1);
+      return row;
+    },
+
+    async listActiveCategories(companyId: string) {
+      return executor
+        .select()
+        .from(itemCategories)
+        .where(and(eq(itemCategories.companyId, companyId), eq(itemCategories.status, 'active')));
+    },
+
+    async listActiveUnits(companyId: string) {
+      return executor
+        .select()
+        .from(units)
+        .where(and(eq(units.companyId, companyId), eq(units.status, 'active')));
+    },
+
+    async listActiveFamilies(companyId: string) {
+      return executor
+        .select()
+        .from(itemFamilies)
+        .where(and(eq(itemFamilies.companyId, companyId), eq(itemFamilies.status, 'active')));
+    },
+
+    async listActiveBrands(companyId: string) {
+      return executor
+        .select()
+        .from(brands)
+        .where(and(eq(brands.companyId, companyId), eq(brands.status, 'active')));
+    },
+
+    async findVendorByCode(companyId: string, code: string) {
+      const [row] = await executor
+        .select()
+        .from(vendors)
+        .where(and(eq(vendors.companyId, companyId), eq(vendors.code, code)))
+        .limit(1);
+      return row;
+    },
+
+    async findVendorByDisplayName(companyId: string, displayNameNormalized: string) {
+      const [row] = await executor
+        .select()
+        .from(vendors)
+        .where(and(eq(vendors.companyId, companyId), eq(vendors.displayNameNormalized, displayNameNormalized)))
+        .limit(1);
       return row;
     },
   };

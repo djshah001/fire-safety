@@ -3,6 +3,7 @@ import {
   Boxes,
   Eye,
   Factory,
+  FileSpreadsheet,
   Layers3,
   LoaderCircle,
   MessageSquare,
@@ -82,6 +83,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { VendorDetailSheet } from "./VendorDetailSheet";
 import { VendorFormDialog } from "./VendorFormDialog";
 import { VendorInvitationDialog } from "./VendorInvitationDialog";
+import { MasterImportDialog } from "./MasterImportDialog";
 
 type MasterRow = Unit | ItemCategory | Brand | ItemFamily | Item | Vendor;
 type Configuration = {
@@ -195,6 +197,7 @@ export function MasterDataPage() {
     undefined,
   );
   const [whatsappInviteOpen, setWhatsappInviteOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
   const search = params.get("search") ?? "";
   const status = (
     ["active", "inactive"].includes(params.get("status") ?? "")
@@ -655,6 +658,13 @@ export function MasterDataPage() {
             <div className="flex items-center gap-2">
               <Button
                 variant="outline"
+                onClick={() => setImportDialogOpen(true)}
+              >
+                <FileSpreadsheet className="size-4 mr-1" />
+                Import vendors
+              </Button>
+              <Button
+                variant="outline"
                 onClick={() => setWhatsappInviteOpen(true)}
               >
                 <MessageSquare className="size-4 mr-1 text-emerald-600" />
@@ -671,15 +681,26 @@ export function MasterDataPage() {
               </Button>
             </div>
           ) : (
-            <Button
-              onClick={() => {
-                save.reset();
-                setEditing("new");
-              }}
-            >
-              <Plus />
-              Add {config.singular}
-            </Button>
+            <div className="flex items-center gap-2">
+              {config.resource === "items" && (
+                <Button
+                  variant="outline"
+                  onClick={() => setImportDialogOpen(true)}
+                >
+                  <FileSpreadsheet className="size-4 mr-1" />
+                  Import items
+                </Button>
+              )}
+              <Button
+                onClick={() => {
+                  save.reset();
+                  setEditing("new");
+                }}
+              >
+                <Plus />
+                Add {config.singular}
+              </Button>
+            </div>
           ))}
       </div>
       <div className="mt-6">
@@ -1124,6 +1145,24 @@ export function MasterDataPage() {
             }}
           />
         </>
+      )}
+
+      {(config.resource === "items" || isVendorResource) && (
+        <MasterImportDialog
+          open={importDialogOpen}
+          onOpenChange={setImportDialogOpen}
+          type={isVendorResource ? "vendors" : "items"}
+          onCommitted={async () => {
+            await queryClient.invalidateQueries({
+              queryKey: ["masters", config.resource],
+            });
+            if (isVendorResource) {
+              await queryClient.invalidateQueries({
+                queryKey: ["master-lookups"],
+              });
+            }
+          }}
+        />
       )}
     </main>
   );

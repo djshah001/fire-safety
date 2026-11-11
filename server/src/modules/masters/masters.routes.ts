@@ -10,6 +10,7 @@ import {
   approveVendorSchema,
   brandCreateSchema,
   brandUpdateSchema,
+  commitMasterImportSchema,
   createVendorInvitationSchema,
   deactivateMasterSchema,
   itemCategoryCreateSchema,
@@ -23,6 +24,7 @@ import {
   itemRateCreateSchema,
   itemUpdateSchema,
   masterIdParamsSchema,
+  masterImportTypeParamsSchema,
   masterListQuerySchema,
   unitCreateSchema,
   unitUpdateSchema,
@@ -38,6 +40,14 @@ import { mastersService } from './masters.service.js';
 const vendorDocUpload = createPrivateUpload({
   allowedMimeTypes: new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']),
   maxFileBytes: 20 * 1024 * 1024,
+});
+
+const importUpload = createPrivateUpload({
+  allowedMimeTypes: new Set([
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/octet-stream',
+  ]),
+  maxFileBytes: 5 * 1024 * 1024,
 });
 
 export function createMastersRouter() {
@@ -253,6 +263,51 @@ export function createMastersRouter() {
     const id = request.params.id as string;
     const result = await mastersService.sendVendorInvitationViaMsg91(getPrincipal(request), id, getRequestId(request));
     sendData(request, response, { result });
+  });
+
+  // Master Imports (Items & Vendors)
+  router.get('/imports/:type/template', async (request, response) => {
+    const { type } = masterImportTypeParamsSchema.parse(request.params);
+    mastersService.assertImportPermission(getPrincipal(request), type);
+    const workbook = await mastersService.getImportTemplate(type);
+    response
+      .status(200)
+      .setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+      .setHeader('Content-Disposition', `attachment; filename="fire-safety-${type}-import.xlsx"`)
+      .send(workbook);
+  });
+
+  router.post(
+    '/imports/:type/stage',
+    requireCsrf,
+    async (request, _response, next) => {
+      try {
+        const { type } = masterImportTypeParamsSchema.parse(request.params);
+        mastersService.assertImportPermission(getPrincipal(request), type);
+        next();
+      } catch (error) {
+        next(error);
+      }
+    },
+    importUpload.single('file'),
+    async (request, response) => {
+      const { type } = masterImportTypeParamsSchema.parse(request.params);
+      if (!request.file) throw new AppError('VALIDATION_ERROR', 'Choose an Excel workbook to upload.', 422);
+      const batch = await mastersService.stageImport(getPrincipal(request), type, request.file, getRequestId(request));
+      sendData(request, response, { batch }, 201);
+    },
+  );
+
+  router.get('/imports/:id', async (request, response) => {
+    const { id } = masterIdParamsSchema.parse(request.params);
+    sendData(request, response, { batch: await mastersService.getImportBatch(getPrincipal(request), id) });
+  });
+
+  router.post('/imports/:id/commit', requireCsrf, async (request, response) => {
+    const { id } = masterIdParamsSchema.parse(request.params);
+    const { expectedVersion } = commitMasterImportSchema.parse(request.body);
+    const batch = await mastersService.commitImport(getPrincipal(request), id, expectedVersion, getRequestId(request));
+    sendData(request, response, { batch });
   });
 
   return router;
