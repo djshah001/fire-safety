@@ -1,4 +1,4 @@
-import puppeteer, { type Browser } from "puppeteer";
+import puppeteer, { type Browser, type Page } from "puppeteer";
 import { AppError } from "../../core/errors/appError.js";
 import { env } from "../../config/env.js";
 
@@ -53,6 +53,17 @@ function release() {
 }
 
 async function browser() {
+  if (browserPromise) {
+    try {
+      const existing = await browserPromise;
+      if (existing && existing.connected === false) {
+        browserPromise = undefined;
+      }
+    } catch {
+      browserPromise = undefined;
+    }
+  }
+
   if (!browserPromise) {
     const launched = puppeteer.launch({
       headless: true,
@@ -63,8 +74,6 @@ async function browser() {
         "--disable-dev-shm-usage", // Writes shared memory to /tmp instead of /dev/shm
         "--disable-gpu", // Avoids hardware acceleration overhead on headless servers
         "--no-first-run",
-        "--no-zygote",
-        "--single-process", // Reduces memory footprint on low-resource VPS
       ],
       ...(env.PUPPETEER_EXECUTABLE_PATH
         ? { executablePath: env.PUPPETEER_EXECUTABLE_PATH }
@@ -111,8 +120,9 @@ export async function printPdf(html: string, footer: string) {
     const instance = await browser();
     // Each request gets a fresh isolated context; never reuse authentication/cookies.
     const context = await instance.createBrowserContext();
+    let page: Page | null = null;
     try {
-      const page = await context.newPage();
+      page = await context.newPage();
       page.setDefaultTimeout(env.PDF_RENDER_TIMEOUT_MS);
       page.setDefaultNavigationTimeout(env.PDF_RENDER_TIMEOUT_MS);
       await page.setJavaScriptEnabled(false);
@@ -142,8 +152,21 @@ export async function printPdf(html: string, footer: string) {
         }),
       );
     } finally {
-      await context.close();
+      try {
+        await context.close();
+      } catch {
+        // Ignore context disposal failures if the browser connection already dropped
+      }
     }
+  } catch (err: any) {
+    if (
+      err?.name === "ConnectionClosedError" ||
+      err?.message?.includes("Connection closed") ||
+      err?.message?.includes("Target closed")
+    ) {
+      void closePdfBrowser().catch(() => undefined);
+    }
+    throw err;
   } finally {
     release();
   }
