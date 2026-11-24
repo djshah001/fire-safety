@@ -84,6 +84,30 @@ export function createProjectRepository(executor: DatabaseExecutor) {
 
     async create(input: typeof projects.$inferInsert) { const [row] = await executor.insert(projects).values(input).returning(); return row!; },
     createMembers(inputs: Array<typeof projectMembers.$inferInsert>) { return executor.insert(projectMembers).values(inputs).returning(); },
+    async addMember(input: typeof projectMembers.$inferInsert) {
+      const [row] = await executor.insert(projectMembers).values(input).onConflictDoUpdate({
+        target: [projectMembers.projectId, projectMembers.userId],
+        set: { role: input.role, assignedByUserId: input.assignedByUserId },
+      }).returning();
+      return row!;
+    },
+    async removeMember(companyId: string, projectId: string, userId: string) {
+      const [row] = await executor.delete(projectMembers)
+        .where(and(eq(projectMembers.companyId, companyId), eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)))
+        .returning();
+      return row ?? null;
+    },
+    async findMember(companyId: string, projectId: string, userId: string) {
+      const [row] = await executor.select().from(projectMembers)
+        .where(and(eq(projectMembers.companyId, companyId), eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)))
+        .limit(1);
+      return row ?? null;
+    },
+    async countProjectManagers(companyId: string, projectId: string) {
+      const [result] = await executor.select({ value: count() }).from(projectMembers)
+        .where(and(eq(projectMembers.companyId, companyId), eq(projectMembers.projectId, projectId), eq(projectMembers.role, 'project_manager')));
+      return Number(result?.value ?? 0);
+    },
     async createDesignBaseline(input: typeof projectDesignBaselines.$inferInsert) { const [row] = await executor.insert(projectDesignBaselines).values(input).returning(); return row!; },
     async findByOpportunity(companyId: string, opportunityId: string) { const [row] = await executor.select().from(projects).where(and(eq(projects.companyId, companyId), eq(projects.opportunityId, opportunityId))).limit(1); return row; },
     async findByOpportunityUnscoped(companyId: string, opportunityId: string) { const [row] = await executor.select().from(projects).where(and(eq(projects.companyId, companyId), eq(projects.opportunityId, opportunityId))).limit(1); return row; },

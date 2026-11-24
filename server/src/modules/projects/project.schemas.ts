@@ -5,6 +5,21 @@ const date = z.iso.date();
 
 export const projectParamsSchema = z.object({ projectId: uuid });
 export const projectStartOptionsParamsSchema = z.object({ jobId: uuid });
+export const projectMemberParamsSchema = z.object({ projectId: uuid, userId: uuid });
+
+export const projectMemberRoleEnum = z.enum([
+  'project_manager',
+  'sales',
+  'design',
+  'purchase',
+  'member',
+  'viewer',
+]);
+
+export const addProjectMemberSchema = z.object({
+  userId: uuid,
+  role: projectMemberRoleEnum.default('member'),
+});
 
 export const projectListQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),

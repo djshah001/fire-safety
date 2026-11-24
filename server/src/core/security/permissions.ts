@@ -56,6 +56,8 @@ export const permissionCatalog = {
     "View projects where the employee is an explicit project member.",
   "project.start":
     "Start one project from an exact customer-approved design in assigned scope.",
+  "project.member.manage":
+    "Add, update, or remove assigned team members on a project.",
   "procurement.vendor.read":
     "View operational vendor identity and contact fields.",
   "procurement.vendor.manage":
@@ -114,6 +116,14 @@ export const permissionCatalog = {
   "project.variation.approve": "Record customer approval and update project baseline for variations.",
   "project.expense.manage": "Record and submit site project expenses.",
   "project.expense.review": "Approve or reject submitted site project expenses.",
+  "project.quality.read": "View quality checklist templates, inspections, protocol test reports, and punch items.",
+  "project.quality.manage": "Create, schedule, execute inspections, and log test reports in assigned project scope.",
+  "project.quality.review": "Review and sign off quality inspections and protocol test reports.",
+  "project.punch_item.manage": "Log and rectify punch items.",
+  "project.punch_item.close": "Verify and sign off closure of punch items.",
+  "project.handover.manage": "Upload and manage statutory clearance, NOC, and practical completion handover documents.",
+  "project.handover.certify": "Certify statutory compliance and grant operational completion.",
+  "project.closure.execute": "Authorize commercial and final project closure.",
 } as const;
 
 export type PermissionCode = keyof typeof permissionCatalog;
@@ -163,6 +173,9 @@ export const designHeadPermissionCodes: PermissionCode[] = [
   "project.execution.read",
   "procurement.substitution.review",
   "project.variation.review",
+  "project.quality.read",
+  "project.quality.review",
+  "project.handover.manage",
 ];
 
 export const purchaseExecutivePermissionCodes: PermissionCode[] = [
@@ -241,15 +254,20 @@ export const receiverPermissionCodes: PermissionCode[] = [
 export const managementPermissionCodes: PermissionCode[] = [
   "project.read",
   "project.start",
+  "project.member.manage",
   "inventory.warehouse.read",
   "inventory.stock.read",
   "project.execution.read",
   "project.delay.review",
   "project.variation.approve",
   "project.expense.review",
+  "project.quality.read",
+  "project.handover.certify",
+  "project.closure.execute",
 ];
 export const projectManagerPermissionCodes: PermissionCode[] = [
   "project.read",
+  "project.member.manage",
   "procurement.purchase_order.read",
   "procurement.goods_receipt.read",
   "procurement.goods_receipt.inspect",
@@ -270,4 +288,11 @@ export const projectManagerPermissionCodes: PermissionCode[] = [
   "project.variation.approve",
   "project.expense.manage",
   "project.expense.review",
+  "project.quality.read",
+  "project.quality.manage",
+  "project.quality.review",
+  "project.punch_item.manage",
+  "project.punch_item.close",
+  "project.handover.manage",
+  "project.handover.certify",
 ];

@@ -13,3 +13,20 @@ export const projectQuery = (projectId?: string) => queryOptions({ queryKey: ['p
 export type ProjectStartOptions = { context: { designJobId: string; opportunityId: string; customerId: string; siteId: string | null; siteName: string | null; siteStatus: 'active' | 'inactive' | null; customerName: string; title: string; commercialState: CommercialState }; designRevisions: Array<{ id: string; revisionNumber: number; title: string; decisionId: string; evidenceReference: string }>; boqRevisions: Array<{ id: string; revisionNumber: number; title: string; designRevisionId: string }>; eligibleMembers: Array<{ id: string; name: string; email: string }>; existingProjectId: string | null };
 export const projectStartOptionsQuery = (jobId?: string, enabled = true) => queryOptions({ queryKey: ['projects', 'start-options', jobId] as const, enabled: Boolean(jobId) && enabled, queryFn: async ({ signal }) => (await apiClient.get<ApiEnvelope<ProjectStartOptions>>(`/projects/start-options/${jobId}`, { signal })).data.data });
 export async function startProject(jobId: string, input: { title: string; designRevisionId: string; boqRevisionId?: string; projectManagerUserId: string; memberUserIds: string[]; startDate: string; targetCompletionDate: string; startReason: string; idempotencyKey: string }) { return (await apiClient.post<ApiEnvelope<ProjectDetail>>(`/projects/from-design/${jobId}`, input)).data.data; }
+
+export type EligibleMember = { id: string; name: string; email: string };
+export const eligibleProjectMembersQuery = (projectId?: string) =>
+  queryOptions({
+    queryKey: ['projects', 'eligible-members', projectId] as const,
+    enabled: Boolean(projectId),
+    queryFn: async ({ signal }) =>
+      (await apiClient.get<ApiEnvelope<EligibleMember[]>>(`/projects/${projectId}/eligible-members`, { signal })).data.data,
+  });
+
+export async function addProjectMember(projectId: string, input: { userId: string; role?: string }) {
+  return (await apiClient.post<ApiEnvelope<ProjectDetail>>(`/projects/${projectId}/members`, input)).data.data;
+}
+
+export async function removeProjectMember(projectId: string, userId: string) {
+  return (await apiClient.delete<ApiEnvelope<ProjectDetail>>(`/projects/${projectId}/members/${userId}`)).data.data;
+}

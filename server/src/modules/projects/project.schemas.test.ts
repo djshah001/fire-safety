@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { projectListQuerySchema, startProjectSchema } from './project.schemas.js';
+import {
+  addProjectMemberSchema,
+  projectListQuerySchema,
+  projectMemberParamsSchema,
+  startProjectSchema,
+} from './project.schemas.js';
 
 const id = (suffix: string) => `00000000-0000-4000-8000-${suffix.padStart(12, '0')}`;
 
@@ -16,5 +21,18 @@ describe('project input validation', () => {
     expect(() => startProjectSchema.parse({ ...valid, targetCompletionDate: '2026-10-20' })).toThrow();
     expect(() => startProjectSchema.parse({ ...valid, memberUserIds: [id('3'), id('3')] })).toThrow();
     expect(() => startProjectSchema.parse({ ...valid, startReason: 'x' })).toThrow();
+  });
+
+  it('validates addProjectMemberSchema and projectMemberParamsSchema', () => {
+    const validMember = { userId: id('10'), role: 'member' as const };
+    expect(addProjectMemberSchema.parse(validMember)).toMatchObject({ userId: id('10'), role: 'member' });
+    expect(addProjectMemberSchema.parse({ userId: id('11') })).toMatchObject({ userId: id('11'), role: 'member' });
+    expect(() => addProjectMemberSchema.parse({ userId: 'not-a-uuid' })).toThrow();
+    expect(() => addProjectMemberSchema.parse({ userId: id('10'), role: 'superman' })).toThrow();
+
+    expect(projectMemberParamsSchema.parse({ projectId: id('1'), userId: id('2') })).toMatchObject({
+      projectId: id('1'),
+      userId: id('2'),
+    });
   });
 });

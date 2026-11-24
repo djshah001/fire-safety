@@ -2257,6 +2257,178 @@ async function ensureExecutionScenario(
   );
 }
 
+async function ensureQualityScenario(
+  client: PoolClient,
+  input: {
+    companyId: string;
+    projectId: string;
+    engineerId: string;
+    managerId: string;
+    adminId: string;
+  },
+) {
+  // 1. Checklist Templates
+  const hydTpl = await one<IdRow>(
+    client,
+    `
+    insert into quality_checklist_templates (
+      company_id, code, title, category, description, items, is_active, row_version
+    ) values (
+      $1, 'TPL-HYD-01', 'Hydrant & Wet Riser Pressure Checklist', 'hydrant_piping',
+      'Standard site inspection checklist for MS wet riser joint integrity and pressure testing.',
+      '[
+        {"itemKey": "visual_alignment", "title": "Visual & Pipe Alignment Check", "acceptanceCriteria": "Vertical alignment within ±3mm; support brackets spaced <= 3m", "isMandatory": true},
+        {"itemKey": "flange_torque", "title": "Flange Bolt Torque Check", "acceptanceCriteria": "All bolts torqued to specified 85 Nm; full gasket seating", "isMandatory": true},
+        {"itemKey": "pressure_hold", "title": "Hydrostatic Pressure Hold (10.5 Bar)", "acceptanceCriteria": "Hold test pressure for 2.0 hrs; pressure drop <= 0.1 bar", "isMandatory": true},
+        {"itemKey": "valve_operation", "title": "Landing Valve Full Stroke Operability", "acceptanceCriteria": "Smooth operation without jamming or gland seal leakage", "isMandatory": true}
+      ]'::jsonb,
+      true, 1
+    )
+    on conflict (company_id, code) do update
+      set title = excluded.title
+    returning id
+  `,
+    [input.companyId],
+  );
+
+  await client.query(
+    `
+    insert into quality_checklist_templates (
+      company_id, code, title, category, description, items, is_active, row_version
+    ) values (
+      $1, 'TPL-ALM-01', 'Addressable Fire Alarm & Smoke Detection Checklist', 'fire_alarm',
+      'Protocol for addressable loop continuity, device addressing, and audibility checks.',
+      '[
+        {"itemKey": "loop_continuity", "title": "Loop Continuity & Insulation Check", "acceptanceCriteria": "Resistance < 25 ohms; insulation resistance > 10 Megohms", "isMandatory": true},
+        {"itemKey": "detector_addressing", "title": "Smoke Detector Address Verification", "acceptanceCriteria": "Panel address matches physical room/corridor schedule", "isMandatory": true},
+        {"itemKey": "sounder_db", "title": "Alarm Sounder dB Level Check", "acceptanceCriteria": "Sound level >= 85 dB(A) at bedhead / 65 dB(A) general", "isMandatory": true},
+        {"itemKey": "mcp_response", "title": "Manual Call Point Trip Test", "acceptanceCriteria": "Alarm signal registers at FACP within 3 seconds", "isMandatory": true}
+      ]'::jsonb,
+      true, 1
+    )
+    on conflict (company_id, code) do update
+      set title = excluded.title
+  `,
+    [input.companyId],
+  );
+
+  // 2. Quality Inspections
+  const ins1 = await one<IdRow>(
+    client,
+    `
+    insert into quality_inspections (
+      company_id, project_id, template_id, inspection_number, title, category,
+      inspection_date, inspector_user_id, witness_name, status,
+      results, summary_remarks, reviewed_by_user_id, reviewed_at, row_version
+    ) values (
+      $1, $2, $3, 'INS-2026-00001', 'Tower A Shaft 1 Wet Riser Hydrostatic Inspection', 'hydrant_piping',
+      current_date - 3, $4, 'Pankaj Shah (Client Rep)', 'passed',
+      '[
+        {"itemKey": "visual_alignment", "title": "Visual & Pipe Alignment Check", "status": "pass", "remarks": "Piping plumb and secure"},
+        {"itemKey": "flange_torque", "title": "Flange Bolt Torque Check", "status": "pass", "remarks": "Checked with calibrated torque wrench"},
+        {"itemKey": "pressure_hold", "title": "Hydrostatic Pressure Hold (10.5 Bar)", "status": "pass", "remarks": "Held 10.5 bar for 2 hrs with 0.04 bar drop"},
+        {"itemKey": "valve_operation", "title": "Landing Valve Full Stroke Operability", "status": "pass", "remarks": "Tested all 5 landing valves"}
+      ]'::jsonb,
+      'Wet riser installation fully compliant with NFPA 14 and IS 3844. Joint seals verified tight.',
+      $5, now() - interval '2 days', 1
+    )
+    on conflict (company_id, inspection_number) do nothing
+    returning id
+  `,
+    [input.companyId, input.projectId, hydTpl.id, input.engineerId, input.adminId],
+  );
+
+  // 3. Test Reports
+  await client.query(
+    `
+    insert into quality_test_reports (
+      company_id, project_id, inspection_id, report_number, test_type, test_date,
+      test_location, parameters, conducted_by_user_id, witnessed_by, status,
+      certificate_url, remarks, row_version
+    ) values (
+      $1, $2, $3, 'TR-2026-00001', 'hydrostatic_pressure', current_date - 3,
+      'Tower A - Shaft 1 Riser (Ground to 10th Floor)',
+      '{"testPressureBar": 10.5, "durationHours": 2.0, "pressureDropBar": 0.04, "result": "pass"}'::jsonb,
+      $4, 'Pankaj Shah (Client Rep)', 'verified',
+      'https://demo.firesafety.local/certs/TR-2026-00001.pdf',
+      'Hydrostatic test witnessed and certified by client consultant without leakage.', 1
+    )
+    on conflict (company_id, report_number) do nothing
+  `,
+    [input.companyId, input.projectId, ins1 ? ins1.id : null, input.engineerId],
+  );
+
+  // 4. Punch Items
+  await client.query(
+    `
+    insert into project_punch_items (
+      company_id, project_id, inspection_id, item_number, title, description,
+      location, severity, status, assigned_to_user_id, due_date, photo_url,
+      rectified_at, rectification_notes, closed_by_user_id, closed_at, closure_remarks,
+      reported_by_user_id, row_version
+    ) values (
+      $1, $2, $3, 'PCH-2026-00001', 'Torque loose flange bolts on Level 4 landing valve',
+      'Two M16 bolts on landing valve flange are hand-tight and require torqueing to 85 Nm.',
+      'Tower A, Level 4 landing valve', 'major', 'verified_closed', $4, current_date - 1, null,
+      now() - interval '1 day', 'Bolts torqued to 85 Nm with certified torque wrench; no weepage.',
+      $5, now() - interval '12 hours', 'Re-inspected during pressure hold; verified tight and closed.',
+      $4, 1
+    )
+    on conflict (company_id, item_number) do nothing
+  `,
+    [input.companyId, input.projectId, ins1 ? ins1.id : null, input.engineerId, input.adminId],
+  );
+
+  await client.query(
+    `
+    insert into project_punch_items (
+      company_id, project_id, item_number, title, description,
+      location, severity, status, assigned_to_user_id, due_date, photo_url,
+      reported_by_user_id, row_version
+    ) values (
+      $1, $2, 'PCH-2026-00002', 'Affix photoluminescent identification tag on main landing valve',
+      'Missing valve tag indicating zone and floor riser identification.',
+      'Tower A, Ground Floor Landing Valve', 'minor', 'assigned', $3, current_date + 4, null,
+      $3, 1
+    )
+    on conflict (company_id, item_number) do nothing
+  `,
+    [input.companyId, input.projectId, input.engineerId],
+  );
+
+  // 5. Handover Record with Statutory Evidence
+  await client.query(
+    `
+    insert into project_handover_records (
+      company_id, project_id, status,
+      clearance_certificate_number, clearance_certificate_issuer, clearance_certificate_date,
+      clearance_certificate_file_url, clearance_certificate_status,
+      noc_number, noc_issuer, noc_date, noc_expiry_date, noc_file_url, noc_status,
+      completion_document_number, completion_signatory_name, completion_date,
+      completion_document_file_url, completion_document_status,
+      row_version
+    ) values (
+      $1, $2, 'ready_for_inspection',
+      'FDC-2026-9810', 'Chief Fire Officer, Ahmedabad Municipal Corp', current_date - 2,
+      'https://demo.firesafety.local/docs/clearance-cert.pdf', 'accepted',
+      'NOC-2026-4401', 'Gujarat State Fire Prevention Services', current_date - 2, current_date + 365,
+      'https://demo.firesafety.local/docs/noc-cert.pdf', 'accepted',
+      'COMP-2026-ALPHA', 'Vikram Singhania (Director, Alpha Towers)', current_date - 1,
+      'https://demo.firesafety.local/docs/completion-doc.pdf', 'accepted',
+      1
+    )
+    on conflict (company_id, project_id) do update
+      set clearance_certificate_number = excluded.clearance_certificate_number,
+          clearance_certificate_status = excluded.clearance_certificate_status,
+          noc_number = excluded.noc_number,
+          noc_status = excluded.noc_status,
+          completion_document_number = excluded.completion_document_number,
+          completion_document_status = excluded.completion_document_status
+  `,
+    [input.companyId, input.projectId],
+  );
+}
+
 async function seedCurrentWorkflows(client: PoolClient, input: {
   companyId: string; companyName: string; adminId: string; managerId: string; executiveId: string;
   designerId: string; headId: string; purchaseId: string; purchaseManagerId: string; serviceCategoryId: string;
@@ -2395,6 +2567,7 @@ async function seed() {
       substitutionReviews: string | null;
       warehouses: string | null;
       projectMilestones: string | null;
+      qualityInspections: string | null;
     }>(
       client,
       `
@@ -2404,7 +2577,8 @@ async function seed() {
         to_regclass('public.procurement_requisitions')::text as "procurementRequisitions",
         to_regclass('public.procurement_substitution_reviews')::text as "substitutionReviews",
         to_regclass('public.warehouses')::text as "warehouses",
-        to_regclass('public.project_milestones')::text as "projectMilestones"
+        to_regclass('public.project_milestones')::text as "projectMilestones",
+        to_regclass('public.quality_inspections')::text as "qualityInspections"
     `,
     );
     if (!schema.designJobs || !schema.quotationRevisions || !schema.surveyRevisions || !schema.procurementRequisitions || !schema.substitutionReviews)
@@ -3233,6 +3407,16 @@ async function seed() {
         adminId,
       });
     }
+    if (schema.qualityInspections) {
+      stage = "quality inspections, test reports, punch items, and handover fixtures";
+      await ensureQualityScenario(client, {
+        companyId: company.id,
+        projectId: procurementProject.id,
+        engineerId: receiverId,
+        managerId: purchaseManagerId,
+        adminId,
+      });
+    }
     await ensureQuotationScenario(client, {
       companyId: company.id,
       jobId: designJobs[3]!.id,
@@ -3284,7 +3468,7 @@ async function seed() {
         `Demo seed complete for ${company.name}.`,
         `Created/refreshed ${userDefinitions.length} demo users, ${customers.length} customers and ${leads.length + currentWorkflows.scenarioCount} lead fixtures.`,
         `Ensured ${opportunities.length + currentWorkflows.scenarioCount} assigned opportunities, ${designJobs.length + currentWorkflows.scenarioCount} design jobs, 1 survey draft, 2 projects, ${2 + currentWorkflows.quotationCount} quotation checkpoints and 2 sourcing comparisons.`,
-        `Added ${referenceProducts.length} BOQ reference products, ${schema.warehouses ? "3 inventory warehouses & stock ledger fixtures, " : ""}${schema.projectMilestones ? "4 execution milestones, tasks & DPR site reports, " : ""}${currentWorkflows.scenarioCount} DEMO-LATEST-* checkpoints, including full-catalogue PDFs and accepted payment-plan examples.`,
+        `Added ${referenceProducts.length} BOQ reference products, ${schema.warehouses ? "3 inventory warehouses & stock ledger fixtures, " : ""}${schema.projectMilestones ? "4 execution milestones, tasks & DPR site reports, " : ""}${schema.qualityInspections ? "quality inspections, test reports & statutory handover records, " : ""}${currentWorkflows.scenarioCount} DEMO-LATEST-* checkpoints, including full-catalogue PDFs and accepted payment-plan examples.`,
         "Workflow starts: DEMO-LEAD-003 authorize design; 006 upload/review design; 007 finalize the survey draft and build BOQ; 004 build quotation; 008 approve quotation; 009 issue and record decision; DEMO-REQ-001 compare/select a supplier; DEMO-REQ-SUB-001 review a technical deviation as design head.",
         "Login: demo.admin@example.test",
         `Password: ${demoPassword}`,

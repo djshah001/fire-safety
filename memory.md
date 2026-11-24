@@ -1,5 +1,54 @@
 # Fire Safety — Decision and Status Memory
 
+## Phase 8: Quality, Inspection, Snag Lists & Statutory Handover — 2026-11-23
+
+- **Context & Invariants (Invariant 10)**:
+  - Implemented Phase 8 per `phase.md`, `rules.md`, and `architechture.md`: Site Quality Inspections, Standard Checklist Templates, Protocol Test Reports (Hydrostatic, Sounder dB, Detector Response), Punch Item / Snag List Tracking, and Statutory Handover Compliance.
+  - Enforced Invariant 10: The Fire Department Clearance Certificate, Fire Department NOC, and client Practical Completion Document are mandatory accepted evidence; no default waiver or invented issuer is permitted.
+  - Operational completion requires zero open critical/major punch items and all 3 statutory certificates uploaded and accepted.
+  - Commercial closure remains independent and requires prior operational completion.
+- **Database Schema & Migrations (`server/drizzle/0028_smart_morg.sql`)**:
+  - `quality_checklist_templates`: Checklist definitions with categories (`hydrant_piping`, `fire_alarm`, `sprinkler_system`, `fire_pump`, `extinguishers`, `general`), acceptance criteria, and JSON item matrices.
+  - `quality_inspections`: Formal site quality inspections with atomic `inspection_number` (`INS-YYYY-XXXXX`), categories, inspection dates, witness names, checklist item results (`pass`, `fail`, `na`), summary remarks, and reviewer sign-offs.
+  - `quality_test_reports`: Protocol test certificates (`TR-YYYY-XXXXX`) for `hydrostatic_pressure`, `flushing`, `smoke_detector_response`, `sounder_db_level`, `insulation_resistance`, `pump_flow_head`, and custom parameters JSON with verified URLs.
+  - `project_punch_items`: Site defect/snag registry (`PCH-YYYY-XXXXX`) tracking severity (`critical`, `major`, `minor`), status (`open`, `assigned`, `rectified`, `verified_closed`, `cancelled`), assignees, due dates, defect photos, rectification notes/photos, and independent closure remarks.
+  - `project_handover_records`: Handover status tracking the 3 mandatory statutory documents:
+    1. Fire Department Clearance Certificate (number, issuer, date, file URL, status: `pending`, `uploaded`, `accepted`, `rejected`)
+    2. Fire Department NOC (number, issuer, date, expiry date, file URL, status)
+    3. Practical Project Completion Document (number, client signatory name, date, file URL, status)
+    Plus operational completion gate (`operational_completion_date`, certifier, notes) and independent commercial closure gate (`commercial_closure_date`, settlement notes).
+  - Applied migration `0028_smart_morg.sql` to PostgreSQL.
+- **Backend Architecture & Security (`server/src/modules/quality/`)**:
+  - Permissions added to `permissionCatalog`:
+    - `project.quality.read`, `project.quality.manage`, `project.quality.review`, `project.punch_item.manage`, `project.punch_item.close`, `project.handover.manage`, `project.handover.certify`, `project.closure.execute`.
+  - Roles mapped: `project_manager`, `design_head`, `management`, and `system_admin`.
+  - Invariants strictly enforced:
+    - Operational Completion Gate: blocked if Clearance Certificate, Fire Dept NOC, or Completion Document is missing or not accepted.
+    - Zero Critical/Major Snags Gate: blocked if any critical or major punch item remains in `open`, `assigned`, or `rectified` status.
+    - Independent review / anti-self-approval: inspectors cannot sign off their own inspection, testing engineers cannot verify their own reports, and authors/assignees cannot close their own punch items unless administrator (audited administrator override per 2026-10-30 policy).
+    - Commercial closure remains independent and requires prior operational completion.
+  - Unit tests in `server/src/modules/quality/quality.service.test.ts` (11/11 passing).
+- **Frontend Architecture & UX (`client/src/features/projects/quality/`)**:
+  - `client/src/api/quality.ts`: Typed DTOs, TanStack query options, and mutation functions.
+  - `client/src/features/projects/quality/InspectionsTab.tsx`: Inspections directory, "Schedule Inspection" dialog with category and template selector, "Fill Checklist" dialog with pass/fail/na actions and remarks, and "Sign Off" dialog.
+  - `client/src/features/projects/quality/TestReportsTab.tsx`: Test certificates directory, "Log Test Report" dialog with dedicated hydrostatic pressure (bar, duration, drop) and sounder dB parameters, and certificate links.
+  - `client/src/features/projects/quality/PunchItemsTab.tsx`: Snag list with severity and status filters, "Log Punch Item" dialog, "Rectify" dialog with notes and photos, and "Verify & Close" dialog.
+  - `client/src/features/projects/quality/HandoverTab.tsx`: Three statutory certificate cards with update/upload dialogs, Operational Completion Gate card with real-time readiness checklist and "Certify Operational Completion" action, and independent Commercial Settlement closure card.
+  - `client/src/features/projects/ProjectPage.tsx`: Integrated multi-tab workspace across Overview, Tasks, DPR, Delays, Variations, Expenses, Inspections, Tests, Punch List, and Handover.
+- **Demo Fixtures Seeded (`server/src/scripts/seedDemo.ts`)**:
+  - Populated Alpha Towers (`procurementProject`) with:
+    - 2 Checklist Templates (`TPL-HYD-01` Hydrant Riser, `TPL-ALM-01` Fire Alarm).
+    - 1 Passed Inspection (`INS-2026-00001` for Tower A Shaft 1 Wet Riser).
+    - 1 Verified Hydrostatic Test Report (`TR-2026-00001` - 10.5 bar for 2 hrs with 0.04 bar drop).
+    - 2 Punch Items (`PCH-2026-00001` major verified closed, `PCH-2026-00002` minor assigned).
+    - 1 Handover record with accepted Clearance, NOC, and Completion Document ready for operational completion certification.
+- **Verification & Status**:
+  - `npm --workspace @fire-safety/server run typecheck`: 0 errors.
+  - `npm --workspace @fire-safety/server run lint`: 0 errors, 0 warnings across 146 files.
+  - `npm --workspace @fire-safety/server test`: 26/26 test files passing (117/117 tests passing, including 11/11 quality invariant tests and 6/6 foundation app tests).
+  - `npm --workspace @fire-safety/client run build`: Built production assets cleanly in 7.62s.
+  - PostgreSQL database migrated and seeded.
+
 ## Phase 7: Project Execution, Daily Progress Reports & Site Variations — 2026-11-11
 
 - **Context & Scope**:

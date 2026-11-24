@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../core/errors/appError.js';
 import { db, type Database } from '../../infrastructure/database/db.js';
+import { isAdministrator } from '../../core/security/administrator.js';
 import { createAuthRepository } from '../auth/auth.repository.js';
 import { hasPermission } from '../auth/auth.middleware.js';
 import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
@@ -34,6 +35,124 @@ export class ProjectService {
   private assert(principal: AuthenticatedPrincipal, permission: 'project.read' | 'project.start') {
     if (principal.mustChangePassword) throw new ForbiddenError('Change the temporary password before using this feature.');
     if (!hasPermission(principal, permission)) throw new ForbiddenError();
+  }
+
+  private async assertMemberManageAccess(principal: AuthenticatedPrincipal, projectId: string) {
+    if (principal.mustChangePassword) throw new ForbiddenError('Change the temporary password before using this feature.');
+    if (isAdministrator(principal)) return;
+    if (hasPermission(principal, 'project.member.manage')) return;
+
+    // Assigned project manager can manage members on their own project
+    const member = await createProjectRepository(this.database).findMember(principal.companyId, projectId, principal.userId);
+    if (member?.role === 'project_manager') return;
+
+    throw new ForbiddenError('Only the Project Manager or authorized administrators can manage project team members.');
+  }
+
+  async getEligibleMembers(principal: AuthenticatedPrincipal, projectId: string) {
+    this.assert(principal, 'project.read');
+    await this.assertMemberManageAccess(principal, projectId);
+    const repository = createProjectRepository(this.database);
+    const [allEligible, currentMembers] = await Promise.all([
+      createCrmRepository(this.database).listEligibleUsers(principal.companyId, 'project.read'),
+      repository.listMemberIds(principal.companyId, projectId),
+    ]);
+    const currentMemberIds = new Set(currentMembers.map((m) => m.userId));
+    return allEligible.filter((u) => !currentMemberIds.has(u.id));
+  }
+
+  async addMember(
+    principal: AuthenticatedPrincipal,
+    projectId: string,
+    input: { userId: string; role: 'project_manager' | 'sales' | 'design' | 'purchase' | 'member' | 'viewer' },
+    requestId: string,
+  ) {
+    this.assert(principal, 'project.read');
+    await this.assertMemberManageAccess(principal, projectId);
+    const repository = createProjectRepository(this.database);
+    const project = await repository.find(principal.companyId, principal.userId, projectId);
+    if (!project) throw new NotFoundError('Project not found.');
+
+    const eligible = await createCrmRepository(this.database).findEligibleUser(principal.companyId, input.userId, 'project.read');
+    if (!eligible) throw new AppError('VALIDATION_ERROR', 'The selected employee is not an active user eligible for project access.', 422);
+
+    await this.database.transaction(async (tx) => {
+      const repo = createProjectRepository(tx);
+      await repo.addMember({
+        companyId: principal.companyId,
+        projectId,
+        userId: input.userId,
+        role: input.role,
+        assignedByUserId: principal.userId,
+      });
+
+      await createNotificationRepository(tx).createMany([
+        {
+          companyId: principal.companyId,
+          recipientUserId: input.userId,
+          type: 'project.started',
+          severity: 'info',
+          title: 'Added to project team',
+          message: `You were assigned as ${input.role.replaceAll('_', ' ')} on ${project.projectNumber} · ${project.title}.`,
+          link: `/projects/${project.id}`,
+          targetType: 'project',
+          targetId: project.id,
+          dedupKey: `project-member-added:${project.id}:${input.userId}:${Date.now()}`,
+        },
+      ]);
+
+      await createAuthRepository(tx).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'project.member_added',
+        targetType: 'project',
+        targetId: project.id,
+        requestId,
+        metadata: { memberUserId: input.userId, role: input.role },
+      });
+    });
+
+    return this.get(principal, projectId);
+  }
+
+  async removeMember(
+    principal: AuthenticatedPrincipal,
+    projectId: string,
+    targetUserId: string,
+    requestId: string,
+  ) {
+    this.assert(principal, 'project.read');
+    await this.assertMemberManageAccess(principal, projectId);
+    const repository = createProjectRepository(this.database);
+    const project = await repository.find(principal.companyId, principal.userId, projectId);
+    if (!project) throw new NotFoundError('Project not found.');
+
+    const member = await repository.findMember(principal.companyId, projectId, targetUserId);
+    if (!member) throw new NotFoundError('Team member not found on this project.');
+
+    if (member.role === 'project_manager') {
+      const pmCount = await repository.countProjectManagers(principal.companyId, projectId);
+      if (pmCount <= 1) {
+        throw new AppError('VALIDATION_ERROR', 'Cannot remove the sole Project Manager. Assign another Project Manager first.', 422);
+      }
+    }
+
+    await this.database.transaction(async (tx) => {
+      const repo = createProjectRepository(tx);
+      await repo.removeMember(principal.companyId, projectId, targetUserId);
+
+      await createAuthRepository(tx).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'project.member_removed',
+        targetType: 'project',
+        targetId: project.id,
+        requestId,
+        metadata: { removedUserId: targetUserId, role: member.role },
+      });
+    });
+
+    return this.get(principal, projectId);
   }
 
   async list(principal: AuthenticatedPrincipal, input: { search?: string; status?: string; commercialState?: string; page: number; pageSize: number; sort: 'projectNumber' | 'title' | 'status' | 'startDate' | 'targetCompletionDate'; direction: 'asc' | 'desc' }) {
