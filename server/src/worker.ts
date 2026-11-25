@@ -4,8 +4,19 @@ import { checkDatabaseConnection, closeDatabase, pool } from './infrastructure/d
 import { createWorkerId, processOneOutboxJob } from './infrastructure/jobs/outboxWorker.js';
 
 const workerId = createWorkerId();
+const stopController = new AbortController();
 let stopping = false;
 let inFlightJob: Promise<boolean> | null = null;
+
+async function sleepOrAbort(ms: number) {
+  try {
+    await delay(ms, undefined, { signal: stopController.signal });
+  } catch (error) {
+    if ((error as { name?: string })?.name !== 'AbortError') {
+      throw error;
+    }
+  }
+}
 
 async function run() {
   await checkDatabaseConnection();
@@ -22,7 +33,7 @@ async function run() {
         consecutiveIdle++;
         // Adaptive idle backoff: 1s -> 2s -> 3s -> 4s -> max 5s to reduce idle DB load
         const idleDelay = Math.min(5_000, 1_000 + consecutiveIdle * 1_000);
-        await delay(idleDelay);
+        await sleepOrAbort(idleDelay);
       } else {
         consecutiveIdle = 0;
       }
@@ -30,7 +41,7 @@ async function run() {
       inFlightJob = null;
       consecutiveIdle = 0;
       logger.error({ err: error, workerId }, 'Worker polling failed');
-      await delay(5_000);
+      await sleepOrAbort(5_000);
     }
   }
 }
@@ -38,6 +49,7 @@ async function run() {
 async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
+  stopController.abort();
   logger.info({ signal, workerId }, 'Worker shutdown requested');
 
   // If a job is currently executing, wait for it to finish cleanly before closing database
@@ -53,12 +65,24 @@ async function shutdown(signal: string) {
     }
   }
 
-  await closeDatabase();
+  await closeDatabase().catch((databaseError: unknown) => {
+    logger.error({ err: databaseError, workerId }, 'Worker database pool shutdown failed');
+  });
   logger.info({ workerId }, 'Worker shutdown complete');
+  process.exit(0);
 }
 
 process.once('SIGINT', () => void shutdown('SIGINT'));
 process.once('SIGTERM', () => void shutdown('SIGTERM'));
+
+process.on('uncaughtException', (error) => {
+  logger.fatal({ err: error, workerId }, 'Uncaught exception in Fire Safety worker');
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logger.error({ reason, workerId }, 'Unhandled promise rejection in Fire Safety worker');
+});
 
 run().catch(async (error: unknown) => {
   logger.fatal({ err: error, workerId }, 'Worker failed to start');

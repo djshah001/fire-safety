@@ -1,6 +1,7 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { env } from '../../config/env.js';
+import { logger } from '../../core/logger/logger.js';
 import * as schema from './schema/index.js';
 
 export const pool = new Pool({
@@ -8,6 +9,10 @@ export const pool = new Pool({
   max: 10,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 3_000,
+});
+
+pool.on('error', (err) => {
+  logger.error({ err }, 'Unexpected PostgreSQL pool error on idle client');
 });
 
 export const db = drizzle(pool, { schema });
