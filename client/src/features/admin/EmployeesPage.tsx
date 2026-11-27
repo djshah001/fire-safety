@@ -1,6 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  CalendarOff,
   KeyRound,
   LoaderCircle,
   Plus,
@@ -68,6 +69,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { LeaveHandoverSheet } from "@/features/admin/LeaveHandoverSheet";
 
 const passwordSchema = z
   .string()
@@ -184,6 +186,7 @@ export function EmployeesPage() {
   const [temporaryPassword, setTemporaryPassword] = useState("");
 
   const [roleEmployee, setRoleEmployee] = useState<Employee>();
+  const [leaveEmployee, setLeaveEmployee] = useState<Employee>();
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
   const [roleReason, setRoleReason] = useState("");
 
@@ -606,28 +609,38 @@ export function EmployeesPage() {
                     </TableCell>
 
                     <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={
-                          employee.status === "active"
-                            ? "gap-1.5 border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                            : "gap-1.5"
-                        }
-                      >
-                        <span
-                          aria-hidden="true"
-                          className={`size-1.5 rounded-full ${
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge
+                          variant="outline"
+                          className={
                             employee.status === "active"
-                              ? "bg-emerald-500"
-                              : "bg-muted-foreground"
-                          }`}
-                        />
-                        {employee.status === "active"
-                          ? "Active"
-                          : employee.status === "disabled"
-                            ? "Disabled"
-                            : employee.status}
-                      </Badge>
+                              ? "gap-1.5 border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                              : "gap-1.5"
+                          }
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`size-1.5 rounded-full ${
+                              employee.status === "active"
+                                ? "bg-emerald-500"
+                                : "bg-muted-foreground"
+                            }`}
+                          />
+                          {employee.status === "active"
+                            ? "Active"
+                            : employee.status === "disabled"
+                              ? "Disabled"
+                              : employee.status}
+                        </Badge>
+                        {employee.isOnLeave && (
+                          <Badge
+                            variant="outline"
+                            className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px]"
+                          >
+                            On Leave
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
 
                     <TableCell>
@@ -664,6 +677,20 @@ export function EmployeesPage() {
                             />
                             Roles
                           </Button>
+                          {employee.status === "active" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              aria-label={`Manage leave and handover for ${employee.name}`}
+                              onClick={() => setLeaveEmployee(employee)}
+                            >
+                              <CalendarOff
+                                aria-hidden="true"
+                                className="size-4"
+                              />
+                              {employee.isOnLeave ? "On Leave" : "Leave"}
+                            </Button>
+                          )}
                           {(employee.id !== user.id || user.permissions.includes("system.access.all")) && (
                             <>
                               <Button
@@ -1245,6 +1272,14 @@ export function EmployeesPage() {
           )}
         </DialogContent>
       </Dialog>
+      <LeaveHandoverSheet
+        employee={leaveEmployee}
+        open={Boolean(leaveEmployee)}
+        onOpenChange={(open) => {
+          if (!open) setLeaveEmployee(undefined);
+        }}
+        onCompleted={refreshEmployees}
+      />
     </main>
   );
 }

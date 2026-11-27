@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { env } from '../../config/env.js';
 import { getRequestId } from '../../core/http/requestContext.js';
 import { sendData } from '../../core/http/response.js';
+import { isAdministrator } from '../../core/security/administrator.js';
+import { permissionCatalog } from '../../core/security/permissions.js';
 import { authService, requestMetadata } from './auth.service.js';
 import {
   changePasswordSchema,
@@ -19,13 +21,16 @@ import {
 import { getPrincipal } from './auth.types.js';
 
 function publicPrincipal(principal: ReturnType<typeof getPrincipal>) {
+  const granted = principal.grants.map((grant) => grant.permissionCode);
   return {
     id: principal.userId,
     companyId: principal.companyId,
     name: principal.name,
     email: principal.email,
     mustChangePassword: principal.mustChangePassword,
-    permissions: [...new Set(principal.grants.map((grant) => grant.permissionCode))],
+    permissions: isAdministrator(principal)
+      ? [...new Set([...granted, ...Object.keys(permissionCatalog)])]
+      : [...new Set(granted)],
   };
 }
 

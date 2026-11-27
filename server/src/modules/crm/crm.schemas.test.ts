@@ -71,4 +71,29 @@ describe('CRM request validation', () => {
       authorizationNotes: 'Prepare a preliminary layout.',
     })).toThrow();
   });
+
+  it('validates extended lead filters including owner, last modifier, and date ranges', () => {
+    const id = '00000000-0000-4000-8000-000000000010';
+    expect(
+      leadListQuerySchema.parse({
+        stage: 'qualified',
+        serviceCategoryId: id,
+        purposeId: id,
+        sectorId: id,
+        ownerUserId: id,
+        updatedByUserId: id,
+        converted: 'yes',
+        hasDesignJob: 'no',
+        source: 'Referral',
+        createdFrom: '2026-11-01',
+        createdTo: '2026-11-26',
+        updatedFrom: '2026-11-10',
+        updatedTo: '2026-11-26',
+        sort: 'ownerName',
+        direction: 'asc',
+      }),
+    ).toMatchObject({ stage: 'qualified', converted: 'yes', hasDesignJob: 'no', sort: 'ownerName' });
+    expect(() => leadListQuerySchema.parse({ createdFrom: '26-11-2026' })).toThrow();
+    expect(() => leadListQuerySchema.parse({ converted: 'maybe' })).toThrow();
+  });
 });

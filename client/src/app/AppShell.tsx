@@ -28,17 +28,13 @@ import {
   ShoppingCart,
   Search,
   X,
-  Sparkles,
 } from "lucide-react";
 import type { CSSProperties } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import type { CurrentUser } from "@/api/auth";
 import { logout } from "@/api/auth";
-import { ThemeToggle } from "@/components/theme/ThemeToggle";
-import { NotificationBell } from "@/features/notifications/NotificationBell";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -57,7 +53,6 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
-  SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -67,11 +62,11 @@ import {
   SidebarProvider,
   SidebarRail,
   SidebarSeparator,
-  SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import { MainShellArea } from "./MainShellArea";
+import { CommandPalette } from "@/components/CommandPalette";
 
 type NavItem = {
   to: string;
@@ -388,6 +383,8 @@ export function AppShell({ user }: { user: CurrentUser }) {
   const queryClient = useQueryClient();
   const searchInputRef = React.useRef<HTMLInputElement>(null);
 
+  const [commandOpen, setCommandOpen] = React.useState(false);
+
   const [searchQuery, setSearchQuery] = React.useState("");
 
   const logoutMutation = useMutation({
@@ -397,18 +394,6 @@ export function AppShell({ user }: { user: CurrentUser }) {
       navigate("/login", { replace: true });
     },
   });
-
-  // Global Keyboard Shortcut: Cmd+K / Ctrl+K to jump to search
-  React.useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
 
   const crm: NavItem[] = [
     {
@@ -606,7 +591,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
     filteredProcurement.length +
     filteredAdmin.length;
 
-  const pageTitle = currentPageTitle(location.pathname);
+  const _pageTitle = currentPageTitle(location.pathname);
 
   return (
     <SidebarProvider
@@ -661,7 +646,7 @@ export function AppShell({ user }: { user: CurrentUser }) {
               className="h-8.5 w-full rounded-lg border-sidebar-border/70 bg-sidebar-accent/40 pl-8 pr-12 text-xs placeholder:text-muted-foreground/50 transition-all focus-visible:bg-background focus-visible:ring-1 focus-visible:ring-primary/40"
             />
             <div className="absolute right-2 top-2 flex items-center gap-1">
-              {searchQuery ? (
+              {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery("")}
@@ -669,10 +654,6 @@ export function AppShell({ user }: { user: CurrentUser }) {
                 >
                   <X className="size-3" />
                 </button>
-              ) : (
-                <kbd className="pointer-events-none select-none rounded border border-sidebar-border bg-sidebar px-1 text-[9px] font-mono text-muted-foreground">
-                  ⌘K
-                </kbd>
               )}
             </div>
           </div>
@@ -844,8 +825,14 @@ export function AppShell({ user }: { user: CurrentUser }) {
         <SidebarRail />
       </Sidebar>
 
+      <CommandPalette
+        user={user}
+        open={commandOpen}
+        onOpenChange={setCommandOpen}
+      />
+
       {/* Main Content Area */}
-      <MainShellArea user={user} />
+      <MainShellArea user={user} onOpenCommand={() => setCommandOpen(true)} />
     </SidebarProvider>
   );
 }

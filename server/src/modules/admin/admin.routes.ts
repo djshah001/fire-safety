@@ -10,9 +10,12 @@ import {
   createRoleSchema,
   createUserSchema,
   deactivateRoleSchema,
+  employeeLeaveParamsSchema,
+  leaveHandoverSchema,
   listRolesQuerySchema,
   listUsersQuerySchema,
   replaceUserRolesSchema,
+  returnFromLeaveSchema,
   roleIdParamsSchema,
   updateRolePermissionsSchema,
   updateRoleSchema,
@@ -30,6 +33,11 @@ function employeeDto(user: {
   lastLoginAt: Date | null;
   disabledAt: Date | null;
   disabledReason: string | null;
+  isOnLeave?: boolean;
+  leaveStartDate?: string | null;
+  leaveEndDate?: string | null;
+  coveringEmployeeId?: string | null;
+  leaveReason?: string | null;
   createdAt: Date;
   roles?: Array<{ id: string; code: string; name: string }>;
 }) {
@@ -44,6 +52,11 @@ function employeeDto(user: {
     lastLoginAt: user.lastLoginAt,
     disabledAt: user.disabledAt,
     disabledReason: user.disabledReason,
+    isOnLeave: user.isOnLeave ?? false,
+    leaveStartDate: user.leaveStartDate ?? null,
+    leaveEndDate: user.leaveEndDate ?? null,
+    coveringEmployeeId: user.coveringEmployeeId ?? null,
+    leaveReason: user.leaveReason ?? null,
     createdAt: user.createdAt,
     ...(user.roles ? { roles: user.roles } : {}),
   };
@@ -163,6 +176,25 @@ export function createAdminRouter() {
       sendData(request, response, { user: employeeDto(user) });
     },
   );
+
+  router.get('/employees/:id/active-workload', requireCompanyPermission('identity.users.read'), async (request, response) => {
+    const { id } = employeeLeaveParamsSchema.parse(request.params);
+    sendData(request, response, await adminService.getEmployeeWorkload(getPrincipal(request), id));
+  });
+
+  router.post('/employees/:id/leave-handover', requireCsrf, requireCompanyPermission('identity.users.manage'), async (request, response) => {
+    const { id } = employeeLeaveParamsSchema.parse(request.params);
+    const input = leaveHandoverSchema.parse(request.body);
+    const result = await adminService.leaveHandover(getPrincipal(request), id, input, getRequestId(request));
+    sendData(request, response, { user: employeeDto(result.user), reassigned: result.reassigned });
+  });
+
+  router.post('/employees/:id/return-from-leave', requireCsrf, requireCompanyPermission('identity.users.manage'), async (request, response) => {
+    const { id } = employeeLeaveParamsSchema.parse(request.params);
+    const input = returnFromLeaveSchema.parse(request.body);
+    const user = await adminService.returnFromLeave(getPrincipal(request), id, input, getRequestId(request));
+    sendData(request, response, { user: employeeDto(user) });
+  });
 
   return router;
 }

@@ -36,18 +36,35 @@ export type CustomerDetail = CustomerSummary & {
 export type Lead = {
   id: string; leadNumber: string; inquiryName: string; companyName: string | null;
   contactName: string; phone: string | null; email: string | null; source: string;
-  stage: LeadStage; ownerUserId: string; rowVersion: number; updatedAt: string;
+  stage: LeadStage; ownerUserId: string; ownerName?: string; ownerIsOnLeave?: boolean;
+  createdByUserId?: string; createdByName?: string;
+  lastModifiedByUserId?: string; lastModifiedByName?: string;
+  opportunityId?: string | null; designJobId?: string | null; designStatus?: string | null;
+  rowVersion: number; updatedAt: string;
   serviceCategoryName?: string; address?: string | null; serviceCategoryId?: string;
   purposeId: string; purposeName: string; sectorId: string; sectorName: string;
   customerId?: string | null; primaryContactId?: string | null; siteId?: string | null;
   lostReason?: string | null; qualificationNotes?: string | null; createdAt?: string;
 };
 export type Opportunity = {
-  id: string; leadId: string; leadNumber?: string; title: string; customerId: string;
-  customerName?: string; siteId: string | null; commercialState: CommercialState;
-  rowVersion: number; updatedAt: string;
+  id: string; leadId: string; leadNumber?: string; leadStage?: string; title: string; customerId: string;
+  customerName?: string; siteId: string | null; siteName?: string | null; ownerName?: string;
+  designJobId?: string | null; designStatus?: string | null; attachmentCount?: number;
+  commercialState: CommercialState; rowVersion: number; createdAt?: string; updatedAt: string;
 };
-export type Assignee = { id: string; name: string; email: string };
+export type OpportunityDetail = Opportunity & {
+  qualificationNotes?: string | null;
+  primaryContactId: string;
+  contactName: string;
+  contactPhone: string | null;
+  contactEmail: string | null;
+  siteCity: string | null;
+};
+export type LeadFilterOptions = {
+  sources: string[];
+  users: Array<{ id: string; name: string; email: string; isOnLeave: boolean }>;
+};
+export type Assignee = { id: string; name: string; email: string; isOnLeave?: boolean };
 export type DesignJob = {
   id: string; leadId: string; opportunityId: string; title: string; status: string;
   designerUserId: string | null; designHeadUserId: string; surveyRequested: boolean;
@@ -66,6 +83,10 @@ export type Reminder = {
 export type LeadAttachment = {
   id: string; originalName: string; mimeType: string; sizeBytes: number; checksumSha256: string;
   createdByUserId: string; createdByName: string; createdAt: string;
+};
+export type OpportunityAttachment = {
+  id: string; opportunityId: string; originalName: string; mimeType: string; sizeBytes: number; checksumSha256: string;
+  uploadedByUserId: string; uploadedByName?: string; createdAt: string;
 };
 export type CrmImportType = 'customers' | 'open_leads';
 export type CrmImportIssue = { field?: string; message: string };
@@ -138,12 +159,41 @@ export const customerQuery = (id?: string) => queryOptions({
   },
 });
 
-export const leadsQuery = (filters: { search?: string; stage?: LeadStage; page?: number; pageSize?: number; sort?: 'leadNumber' | 'inquiryName' | 'stage' | 'updatedAt'; direction?: 'asc' | 'desc' } = {}) => queryOptions({
+export type LeadSortField = 'leadNumber' | 'inquiryName' | 'stage' | 'ownerName' | 'source' | 'createdAt' | 'updatedAt';
+
+export const leadsQuery = (filters: {
+  search?: string;
+  stage?: LeadStage;
+  serviceCategoryId?: string;
+  purposeId?: string;
+  sectorId?: string;
+  source?: string;
+  ownerUserId?: string;
+  updatedByUserId?: string;
+  converted?: 'yes' | 'no';
+  hasDesignJob?: 'yes' | 'no';
+  createdFrom?: string;
+  createdTo?: string;
+  updatedFrom?: string;
+  updatedTo?: string;
+  page?: number;
+  pageSize?: number;
+  sort?: LeadSortField;
+  direction?: 'asc' | 'desc';
+} = {}) => queryOptions({
   queryKey: ['crm', 'leads', filters] as const,
   queryFn: async ({ signal }) => {
     const response = await apiClient.get<ApiEnvelope<Page<Lead>>>('/crm/leads', {
       params: compactParams({ ...filters, page: filters.page ?? 1 }), signal,
     });
+    return response.data.data;
+  },
+});
+
+export const leadFilterOptionsQuery = queryOptions({
+  queryKey: ['crm', 'leads', 'filter-options'] as const,
+  queryFn: async ({ signal }) => {
+    const response = await apiClient.get<ApiEnvelope<LeadFilterOptions>>('/crm/leads/filter-options', { signal });
     return response.data.data;
   },
 });
@@ -219,6 +269,15 @@ export const opportunitiesQuery = (filters: { search?: string; state?: Commercia
       params: compactParams({ ...filters, page: filters.page ?? 1 }), signal,
     });
     return response.data.data;
+  },
+});
+
+export const opportunityQuery = (opportunityId?: string) => queryOptions({
+  queryKey: ['crm', 'opportunity', opportunityId] as const,
+  enabled: Boolean(opportunityId),
+  queryFn: async ({ signal }) => {
+    const response = await apiClient.get<ApiEnvelope<{ opportunity: OpportunityDetail }>>(`/crm/opportunities/${opportunityId}`, { signal });
+    return response.data.data.opportunity;
   },
 });
 
@@ -321,7 +380,7 @@ export async function commitCrmImport(batch: CrmImportBatch) {
 }
 
 export async function changeLeadStage(input: {
-  leadId: string; expectedVersion: number; stage: 'contacted' | 'on_hold' | 'lost'; reason?: string;
+  leadId: string; expectedVersion: number; stage: 'contacted' | 'on_hold' | 'lost' | 'resume'; reason?: string;
 }) {
   const response = await apiClient.post<ApiEnvelope<{ lead: Lead }>>(`/crm/leads/${input.leadId}/stage`, {
     expectedVersion: input.expectedVersion, stage: input.stage, reason: input.reason,
@@ -329,12 +388,61 @@ export async function changeLeadStage(input: {
   return response.data.data.lead;
 }
 
+export const opportunityAttachmentsQuery = (opportunityId?: string) => queryOptions({
+  queryKey: ['crm', 'opportunity', opportunityId, 'attachments'] as const,
+  enabled: Boolean(opportunityId),
+  queryFn: async ({ signal }) => {
+    const response = await apiClient.get<ApiEnvelope<{ items: OpportunityAttachment[] }>>(
+      `/crm/opportunities/${opportunityId}/attachments`,
+      { signal },
+    );
+    return response.data.data.items;
+  },
+});
+
+export async function checkCustomerDuplicateHints(input: { name: string; phone?: string; email?: string }) {
+  const response = await apiClient.post<ApiEnvelope<{ hints: DuplicateHint[] }>>(
+    '/crm/customers/duplicate-hints',
+    input,
+  );
+  return response.data.data.hints;
+}
+
 export async function qualifyLead(input: {
-  leadId: string; expectedVersion: number; customerId: string; primaryContactId: string;
-  siteId?: string; title: string; qualificationNotes: string;
+  leadId: string;
+  expectedVersion: number;
+  customerId?: string;
+  primaryContactId?: string;
+  siteId?: string;
+  newCustomer?: {
+    displayName: string;
+    legalName?: string;
+    customerType: 'business' | 'individual' | 'government' | 'other';
+    gstin?: string;
+    pan?: string;
+    contact: { name: string; jobTitle?: string; phone?: string; email?: string; isPrimary: boolean };
+    site?: { name: string; addressLine1: string; addressLine2?: string; city: string; state?: string; postalCode?: string; country?: string };
+  };
+  title: string;
+  qualificationNotes: string;
+  files?: File[];
 }) {
-  const response = await apiClient.post<ApiEnvelope<{ opportunity: Opportunity; replayed: boolean }>>(
-    `/crm/leads/${input.leadId}/qualify`, input,
+  const { leadId, files, ...payload } = input;
+  if (files && files.length > 0) {
+    const formData = new FormData();
+    formData.append('payload', JSON.stringify(payload));
+    for (const file of files) {
+      formData.append('files', file);
+    }
+    const response = await apiClient.post<ApiEnvelope<{ opportunity: Opportunity; attachments: OpportunityAttachment[]; replayed: boolean }>>(
+      `/crm/leads/${leadId}/convert`,
+      formData,
+    );
+    return response.data.data;
+  }
+  const response = await apiClient.post<ApiEnvelope<{ opportunity: Opportunity; attachments?: OpportunityAttachment[]; replayed: boolean }>>(
+    `/crm/leads/${leadId}/qualify`,
+    payload,
   );
   return response.data.data;
 }
@@ -368,11 +476,43 @@ export async function completeReminder(reminder: Reminder) {
   return response.data.data.reminder;
 }
 
-export async function uploadLeadAttachment(leadId: string, file: File) {
+export async function uploadOpportunityAttachments(opportunityId: string, files: File[]) {
   const data = new FormData();
-  data.append('file', file);
-  const response = await apiClient.post<ApiEnvelope<{ attachment: LeadAttachment }>>(`/crm/leads/${leadId}/attachments`, data);
-  return response.data.data.attachment;
+  for (const file of files) {
+    data.append('files', file);
+  }
+  const response = await apiClient.post<ApiEnvelope<{ items: OpportunityAttachment[] }>>(
+    `/crm/opportunities/${opportunityId}/attachments`,
+    data,
+  );
+  return response.data.data.items;
+}
+
+export async function downloadOpportunityAttachment(opportunityId: string, attachment: OpportunityAttachment) {
+  const response = await apiClient.get<Blob>(
+    `/crm/opportunities/${opportunityId}/attachments/${attachment.id}/download`,
+    { responseType: 'blob' },
+  );
+  const url = URL.createObjectURL(response.data);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = attachment.originalName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+export function opportunityAttachmentPreviewUrl(opportunityId: string, attachmentId: string) {
+  return apiClient.getUri({
+    url: `/crm/opportunities/${opportunityId}/attachments/${attachmentId}/download`,
+    params: { inline: 1 },
+  });
+}
+
+export function leadAttachmentPreviewUrl(leadId: string, attachmentId: string) {
+  return apiClient.getUri({
+    url: `/crm/leads/${leadId}/attachments/${attachmentId}/download`,
+    params: { inline: 1 },
+  });
 }
 
 export async function downloadLeadAttachment(leadId: string, attachment: LeadAttachment) {

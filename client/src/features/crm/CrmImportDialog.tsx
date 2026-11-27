@@ -11,6 +11,7 @@ import {
   type CrmImportType,
 } from '@/api/crm';
 import { getApiErrorMessage } from '@/api/client';
+import { FileDropzone } from '@/components/FileDropzone';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -112,14 +113,20 @@ export function CrmImportDialog({
         <div className="grid gap-4 rounded-lg border bg-muted/25 p-4 sm:grid-cols-[1fr_auto] sm:items-end">
           <div className="space-y-2">
             <Label htmlFor={`${type}-import-file`}>Excel workbook</Label>
-            <Input
-              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              disabled={staging.isPending || Boolean(batch)}
+            <FileDropzone
               id={`${type}-import-file`}
-              onChange={(event) => setFile(event.target.files?.[0])}
-              type="file"
+              label="Drag & drop .xlsx workbook, or browse"
+              hint="Only the supplied .xlsx columns are processed. The original file is retained privately for audit."
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              allowedExtensions={new Set(['.xlsx'])}
+              multiple={false}
+              maxFiles={1}
+              maxFileBytes={5 * 1024 * 1024}
+              disabled={staging.isPending || Boolean(batch)}
+              files={file ? [file] : []}
+              onFilesChange={(next) => setFile(next[0])}
+              compact
             />
-            <p className="text-xs text-muted-foreground">Only the supplied .xlsx columns are processed. The original file is retained privately for audit.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button disabled={template.isPending} onClick={() => template.mutate()} type="button" variant="outline">

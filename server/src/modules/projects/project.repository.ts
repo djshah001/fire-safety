@@ -119,7 +119,18 @@ export function createProjectRepository(executor: DatabaseExecutor) {
 
     async attachCommercialBaseline(input: typeof projectCommercialBaselines.$inferInsert) { const [row] = await executor.insert(projectCommercialBaselines).values(input).onConflictDoNothing().returning(); return row; },
     async acceptedQuotation(companyId: string, opportunityId: string) {
-      const [row] = await executor.select({ revisionId: quotationRevisions.id, decisionId: quotationCustomerDecisions.id, evidenceReference: quotationCustomerDecisions.evidenceReference, customerOrderReference: quotationCustomerDecisions.customerOrderReference, recordedAt: quotationCustomerDecisions.recordedAt, recordedByUserId: quotationCustomerDecisions.recordedByUserId })
+      const [row] = await executor.select({
+        revisionId: quotationRevisions.id,
+        revisionNumber: quotationRevisions.revisionNumber,
+        title: quotationRevisions.title,
+        currency: quotationRevisions.currency,
+        grandTotal: quotationRevisions.grandTotal,
+        decisionId: quotationCustomerDecisions.id,
+        evidenceReference: quotationCustomerDecisions.evidenceReference,
+        customerOrderReference: quotationCustomerDecisions.customerOrderReference,
+        recordedAt: quotationCustomerDecisions.recordedAt,
+        recordedByUserId: quotationCustomerDecisions.recordedByUserId,
+      })
         .from(quotationRevisions).innerJoin(quotationCustomerDecisions, and(eq(quotationCustomerDecisions.quotationRevisionId, quotationRevisions.id), eq(quotationCustomerDecisions.decision, 'accepted')))
         .innerJoin(boqRevisions, eq(boqRevisions.id, quotationRevisions.boqRevisionId)).innerJoin(designJobs, eq(designJobs.id, boqRevisions.designJobId))
         .where(and(eq(quotationRevisions.companyId, companyId), eq(designJobs.opportunityId, opportunityId))).orderBy(desc(quotationCustomerDecisions.recordedAt)).limit(1);

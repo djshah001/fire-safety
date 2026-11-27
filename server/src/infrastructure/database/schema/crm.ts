@@ -224,15 +224,18 @@ export const leads = pgTable('leads', {
   primaryContactId: uuid('primary_contact_id').references(() => customerContacts.id, { onDelete: 'restrict' }),
   siteId: uuid('site_id').references(() => sites.id, { onDelete: 'restrict' }),
   stage: leadStageEnum('stage').notNull().default('new'),
+  previousStage: leadStageEnum('previous_stage'),
   lostReason: varchar('lost_reason', { length: 500 }),
   qualificationNotes: varchar('qualification_notes', { length: 1000 }),
   rowVersion: integer('row_version').notNull().default(1),
   createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  updatedByUserId: uuid('updated_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('leads_company_number_uidx').on(table.companyId, table.leadNumber),
   index('leads_company_owner_stage_idx').on(table.companyId, table.ownerUserId, table.stage),
+  index('leads_company_updated_by_idx').on(table.companyId, table.updatedByUserId),
   index('leads_company_purpose_idx').on(table.companyId, table.purposeId),
   index('leads_company_sector_idx').on(table.companyId, table.sectorId),
   index('leads_company_phone_idx').on(table.companyId, table.phoneNormalized),
@@ -380,6 +383,7 @@ export const opportunities = pgTable('opportunities', {
   siteId: uuid('site_id').references(() => sites.id, { onDelete: 'restrict' }),
   title: varchar('title', { length: 200 }).notNull(),
   commercialState: opportunityCommercialStateEnum('commercial_state').notNull().default('unawarded'),
+  previousCommercialState: opportunityCommercialStateEnum('previous_commercial_state'),
   rowVersion: integer('row_version').notNull().default(1),
   createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -388,6 +392,23 @@ export const opportunities = pgTable('opportunities', {
   uniqueIndex('opportunities_company_lead_uidx').on(table.companyId, table.leadId),
   index('opportunities_company_customer_idx').on(table.companyId, table.customerId),
   check('opportunities_row_version_positive', sql`${table.rowVersion} > 0`),
+]);
+
+export const opportunityAttachments = pgTable('opportunity_attachments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  opportunityId: uuid('opportunity_id').notNull().references(() => opportunities.id, { onDelete: 'restrict' }),
+  originalName: varchar('original_name', { length: 255 }).notNull(),
+  storageName: varchar('storage_name', { length: 64 }).notNull(),
+  mimeType: varchar('mime_type', { length: 100 }).notNull(),
+  sizeBytes: integer('size_bytes').notNull(),
+  checksumSha256: varchar('checksum_sha256', { length: 64 }).notNull(),
+  uploadedByUserId: uuid('uploaded_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('opportunity_attachments_storage_name_uidx').on(table.storageName),
+  index('opportunity_attachments_opportunity_created_idx').on(table.companyId, table.opportunityId, table.createdAt),
+  check('opportunity_attachments_size_positive', sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 20971520`),
 ]);
 
 export const opportunityMembers = pgTable('opportunity_members', {
@@ -405,6 +426,7 @@ export const opportunityMembers = pgTable('opportunity_members', {
 export type Customer = typeof customers.$inferSelect;
 export type Lead = typeof leads.$inferSelect;
 export type Opportunity = typeof opportunities.$inferSelect;
+export type OpportunityAttachment = typeof opportunityAttachments.$inferSelect;
 export type CrmActivity = typeof crmActivities.$inferSelect;
 export type ReminderOccurrence = typeof reminderOccurrences.$inferSelect;
 export type LeadAttachment = typeof leadAttachments.$inferSelect;

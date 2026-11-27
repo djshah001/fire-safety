@@ -56,14 +56,16 @@ export class ProcurementService {
     }
     await Promise.all([...projects.values()].map(async (project) => {
       const memberIds = new Set((await repository.listProjectMemberIds(principal.companyId, project.id)).map((member) => member.userId));
-      project.managers = managers.filter((manager) => memberIds.has(manager.id) && manager.id !== principal.userId);
+      project.managers = managers.filter((manager) => memberIds.has(manager.id) && (manager.id !== principal.userId || isAdministrator(principal)));
     }));
     return { projects: [...projects.values()] };
   }
 
   async create(principal: AuthenticatedPrincipal, input: RequisitionInput, requestId: string) {
     this.assert(principal, 'procurement.requisition.create');
-    if (input.purchaseManagerUserId === principal.userId) throw validation('The buyer and purchase manager must be different employees.');
+    if (!isAdministrator(principal) && input.purchaseManagerUserId === principal.userId) {
+      throw validation('The buyer and purchase manager must be different employees.');
+    }
     const manager = await createCrmRepository(this.database).findEligibleUser(principal.companyId, input.purchaseManagerUserId, 'procurement.comparison.select');
     if (!manager) throw validation('Choose an active employee eligible for purchase comparison selection.');
 

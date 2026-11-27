@@ -11,6 +11,7 @@ import { hasPermission } from '../auth/auth.middleware.js';
 import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
 import { createNotificationRepository } from '../notifications/notification.repository.js';
 import { createProjectRepository } from '../projects/project.repository.js';
+import { calculateQuotedLine } from './boq.calculation.js';
 import { createEngineeringRepository } from './engineering.repository.js';
 import { renderQuotationExcel } from './quotation.excel.js';
 import { quotationDefaults } from './quotation.defaults.js';
@@ -68,7 +69,7 @@ function revisionDto(revision: RevisionRow, options: {
     issuedByUserId: revision.issuedByUserId, issuedAt: revision.issuedAt, rowVersion: revision.rowVersion,
     createdAt: revision.createdAt, updatedAt: revision.updatedAt,
     lines: options.lines.map((line) => ({
-      id: line.id, boqLineId: line.boqLineId, lineNumber: line.lineNumber, section: line.sectionSnapshot,
+      id: line.id, boqLineId: line.boqLineId, lineNumber: line.lineNumber, sortOrder: line.sortOrder, section: line.sectionSnapshot,
       itemCode: line.itemCodeSnapshot, itemName: line.itemNameSnapshot, specification: line.specificationSnapshot,
       offeringId: line.offeringId, boqCostOptionId: line.boqCostOptionId,
       brandId: line.brandId, brandName: line.brandNameSnapshot,
@@ -111,7 +112,7 @@ export class QuotationService {
     return job;
   }
 
-  async listQueue(principal: AuthenticatedPrincipal, input: { search?: string; status?: RevisionRow['status']; page: number; pageSize: number; sort: 'quotationNumber' | 'title' | 'status' | 'updatedAt' | 'grandTotal'; direction: 'asc' | 'desc' }) {
+  async listQueue(principal: AuthenticatedPrincipal, input: { search?: string; status?: RevisionRow['status']; commercialState?: 'unawarded' | 'quoted' | 'awarded' | 'lost' | 'on_hold'; sectorId?: string; assigneeUserId?: string; page: number; pageSize: number; sort: 'quotationNumber' | 'title' | 'status' | 'updatedAt' | 'grandTotal'; direction: 'asc' | 'desc' }) {
     this.assertPermission(principal, 'engineering.quotation.read');
     const result = await createQuotationRepository(this.database).listQueue(
       { companyId: principal.companyId, userId: principal.userId },
@@ -203,14 +204,14 @@ export class QuotationService {
       });
       const sourceLines = source ? await tx.listLines(principal.companyId, source.revision.id) : [];
       const sourceByBoqLine = new Map(sourceLines.map((line) => [line.boqLineId, line]));
-      for (const line of boqScope) {
+      for (const [index, line] of boqScope.entries()) {
         const copied = sourceByBoqLine.get(line.id);
         const options = boqCosts.filter((option) => option.boqLineId === line.id);
         const selected = copied?.offeringId ? options.find((option) => option.offeringId === copied.offeringId) : undefined;
         const lineSubtotal = selected?.lineTotal ?? '0';
         await tx.createLine({
           companyId: principal.companyId, quotationRevisionId: revision.id, boqLineId: line.id,
-          lineNumber: line.lineNumber, sectionSnapshot: line.section, itemCodeSnapshot: line.itemCodeSnapshot,
+          lineNumber: index + 1, sortOrder: line.sortOrder ?? index + 1, sectionSnapshot: line.section, itemCodeSnapshot: line.itemCodeSnapshot,
           itemNameSnapshot: line.itemNameSnapshot, specificationSnapshot: line.specificationSnapshot,
           offeringId: selected?.offeringId, boqCostOptionId: selected?.costOptionId,
           brandId: selected?.brandId, brandNameSnapshot: selected?.brandName,
@@ -257,37 +258,182 @@ export class QuotationService {
     });
   }
 
-  async updateLine(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, lineId: string, input: { offeringId: string; notes?: string; expectedRevisionVersion: number; expectedLineVersion: number }, requestId: string) {
+  private resolveLinePricing(
+    line: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['listLines']>>[number],
+    costOptions: Awaited<ReturnType<ReturnType<typeof createQuotationRepository>['listCostOptionsForBoqLines']>>,
+    input: {
+      offeringId?: string;
+      supplyRate?: string;
+      labourRate?: string;
+      miscellaneousRate?: string;
+      markupPercent?: string;
+      notes?: string | null;
+    },
+  ) {
+    let selected: typeof costOptions[number] | undefined;
+    if (input.offeringId) {
+      selected = costOptions.find((option) => option.offeringId === input.offeringId && option.boqLineId === line.boqLineId);
+      if (
+        !selected ||
+        !selected.offeringId ||
+        selected.supplyRate === null ||
+        selected.labourRate === null ||
+        selected.miscellaneousRate === null ||
+        selected.markupPercent === null ||
+        selected.markupAmount === null ||
+        selected.quotedUnitRate === null
+      ) {
+        throw validationError('Choose a fully costed brand/model option approved with this BOQ.');
+      }
+    }
+
+    const switchingOffering = Boolean(selected && selected.offeringId !== line.offeringId);
+    const supplyRate = input.supplyRate ?? (switchingOffering ? selected!.supplyRate! : line.supplyRate);
+    const labourRate = input.labourRate ?? (switchingOffering ? selected!.labourRate! : line.labourRate);
+    const miscellaneousRate = input.miscellaneousRate ?? (switchingOffering ? selected!.miscellaneousRate! : line.miscellaneousRate);
+    const markupPercent = input.markupPercent ?? (switchingOffering ? selected!.markupPercent! : line.markupPercent);
+
+    const calc = calculateQuotedLine({
+      quantity: line.quantity,
+      supplyRate,
+      labourRate,
+      miscellaneousRate,
+      markupPercent,
+    });
+    const unitRate = new Decimal(calc.quotedUnitRate).toFixed(2);
+    const resolvedNotes = input.notes === undefined ? line.notes : (input.notes || null);
+
+    return {
+      offeringId: selected ? selected.offeringId : line.offeringId,
+      boqCostOptionId: selected ? selected.id : line.boqCostOptionId,
+      brandId: selected ? selected.brandId : line.brandId,
+      brandNameSnapshot: selected ? selected.brandName : line.brandNameSnapshot,
+      manufacturerModelSnapshot: selected ? selected.manufacturerModel : line.manufacturerModelSnapshot,
+      manufacturerSkuSnapshot: selected ? selected.manufacturerSku : line.manufacturerSkuSnapshot,
+      unitRate,
+      supplyRate: new Decimal(supplyRate).toFixed(4),
+      labourRate: new Decimal(labourRate).toFixed(4),
+      miscellaneousRate: new Decimal(miscellaneousRate).toFixed(4),
+      markupPercent: new Decimal(markupPercent).toFixed(4),
+      markupAmount: calc.markupAmount,
+      quotedUnitRate: calc.quotedUnitRate,
+      discountAmount: line.discountAmount,
+      lineSubtotal: calc.lineAmount,
+      lineTotal: calc.lineAmount,
+      notes: resolvedNotes,
+    };
+  }
+
+  async updateLine(
+    principal: AuthenticatedPrincipal,
+    jobId: string,
+    revisionId: string,
+    lineId: string,
+    input: {
+      offeringId: string;
+      supplyRate?: string;
+      labourRate?: string;
+      miscellaneousRate?: string;
+      markupPercent?: string;
+      notes?: string;
+      expectedRevisionVersion: number;
+      expectedLineVersion: number;
+    },
+    requestId: string,
+  ) {
     const found = await this.draft(principal, jobId, revisionId);
     const repository = createQuotationRepository(this.database);
     const line = await repository.findLine(principal.companyId, revisionId, lineId);
     if (!line) throw new NotFoundError('Quotation line not found.');
     const costOptions = await repository.listCostOptionsForBoqLines(principal.companyId, [line.boqLineId]);
-    const selected = costOptions.find((option) => option.offeringId === input.offeringId);
-    if (!selected || !selected.offeringId || selected.supplyRate === null || selected.labourRate === null || selected.miscellaneousRate === null || selected.markupPercent === null || selected.markupAmount === null || selected.quotedUnitRate === null) {
-      throw validationError('Choose a fully costed brand/model option approved with this BOQ.');
-    }
+    const nextValues = this.resolveLinePricing(line, costOptions, {
+      offeringId: input.offeringId,
+      supplyRate: input.supplyRate,
+      labourRate: input.labourRate,
+      miscellaneousRate: input.miscellaneousRate,
+      markupPercent: input.markupPercent,
+      notes: input.notes === undefined ? null : input.notes,
+    });
     const currentLines = await repository.listLines(principal.companyId, revisionId);
-    const selectedLine = { lineSubtotal: selected.lineTotal, discountAmount: '0' };
-    const prospective = currentLines.map((entry) => entry.id === lineId ? { ...entry, ...selectedLine } : entry);
+    const prospective = currentLines.map((entry) => entry.id === lineId ? { ...entry, lineSubtotal: nextValues.lineSubtotal, discountAmount: nextValues.discountAmount } : entry);
     const calculated = totals(prospective, found.revision.additionalDiscount, found.revision.taxAmount, found.revision.roundingAdjustment);
     return this.database.transaction(async (transaction) => {
       const tx = createQuotationRepository(transaction);
-      const updatedLine = await tx.updateLine(principal.companyId, revisionId, lineId, input.expectedLineVersion, {
-        offeringId: selected.offeringId, boqCostOptionId: selected.id,
-        brandId: selected.brandId, brandNameSnapshot: selected.brandName,
-        manufacturerModelSnapshot: selected.manufacturerModel, manufacturerSkuSnapshot: selected.manufacturerSku,
-        unitRate: selected.quotedUnitRate!, supplyRate: selected.supplyRate!, labourRate: selected.labourRate!,
-        miscellaneousRate: selected.miscellaneousRate!, markupPercent: selected.markupPercent!,
-        markupAmount: selected.markupAmount!, quotedUnitRate: selected.quotedUnitRate!,
-        discountAmount: '0', lineSubtotal: selected.lineTotal, lineTotal: selected.lineTotal, notes: input.notes ?? null,
-      });
+      const updatedLine = await tx.updateLine(principal.companyId, revisionId, lineId, input.expectedLineVersion, nextValues);
       if (!updatedLine) throw new ConflictError('The quotation line changed. Refresh and try again.');
       const updatedRevision = await tx.updateDraft(principal.companyId, revisionId, input.expectedRevisionVersion, calculated);
       if (!updatedRevision) throw new ConflictError('The quotation changed. Refresh and try again.');
       await tx.addContributor(principal.companyId, revisionId, principal.userId);
-      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_line_configured', targetType: 'quotation_line', targetId: lineId, requestId, metadata: { designJobId: jobId, quotationRevisionId: revisionId, offeringId: selected.offeringId, brandId: selected.brandId, brandName: selected.brandName, manufacturerModel: selected.manufacturerModel, lineTotal: updatedLine.lineTotal } });
+      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_line_configured', targetType: 'quotation_line', targetId: lineId, requestId, metadata: { designJobId: jobId, quotationRevisionId: revisionId, offeringId: nextValues.offeringId, brandId: nextValues.brandId, brandName: nextValues.brandNameSnapshot, manufacturerModel: nextValues.manufacturerModelSnapshot, quotedUnitRate: nextValues.quotedUnitRate, lineTotal: updatedLine.lineTotal } });
       return updatedLine;
+    });
+  }
+
+  async updateLinesPricingBatch(
+    principal: AuthenticatedPrincipal,
+    jobId: string,
+    revisionId: string,
+    input: {
+      expectedVersion: number;
+      updates: Array<{
+        lineId: string;
+        expectedLineVersion?: number;
+        offeringId?: string;
+        supplyRate?: string;
+        labourRate?: string;
+        miscellaneousRate?: string;
+        markupPercent?: string;
+        notes?: string | null;
+      }>;
+    },
+    requestId: string,
+  ) {
+    const found = await this.draft(principal, jobId, revisionId);
+    const repository = createQuotationRepository(this.database);
+    const currentLines = await repository.listLines(principal.companyId, revisionId);
+    const byId = new Map(currentLines.map((entry) => [entry.id, entry]));
+    const costOptions = await repository.listCostOptionsForBoqLines(principal.companyId, currentLines.map((entry) => entry.boqLineId));
+
+    const patches = new Map<string, { expectedLineVersion: number; values: ReturnType<QuotationService['resolveLinePricing']> }>();
+    for (const update of input.updates) {
+      const existing = byId.get(update.lineId);
+      if (!existing) throw new NotFoundError('Quotation line not found.');
+      const values = this.resolveLinePricing(existing, costOptions, update);
+      patches.set(update.lineId, {
+        expectedLineVersion: update.expectedLineVersion ?? existing.rowVersion,
+        values,
+      });
+    }
+
+    const prospective = currentLines.map((entry) => {
+      const patch = patches.get(entry.id);
+      return patch ? { ...entry, lineSubtotal: patch.values.lineSubtotal, discountAmount: patch.values.discountAmount } : entry;
+    });
+    const calculated = totals(prospective, found.revision.additionalDiscount, found.revision.taxAmount, found.revision.roundingAdjustment);
+
+    return this.database.transaction(async (transaction) => {
+      const tx = createQuotationRepository(transaction);
+      const updatedRevision = await tx.updateDraft(principal.companyId, revisionId, input.expectedVersion, calculated);
+      if (!updatedRevision) throw new ConflictError('The quotation changed. Refresh and try again.');
+
+      for (const [lineId, patch] of patches.entries()) {
+        const updatedLine = await tx.updateLine(principal.companyId, revisionId, lineId, patch.expectedLineVersion, patch.values);
+        if (!updatedLine) throw new ConflictError('A quotation line changed concurrently. Refresh and try again.');
+      }
+
+      await tx.addContributor(principal.companyId, revisionId, principal.userId);
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'engineering.quotation_lines_pricing_updated',
+        targetType: 'quotation_revision',
+        targetId: revisionId,
+        requestId,
+        metadata: { designJobId: jobId, count: input.updates.length, grandTotal: calculated.grandTotal },
+      });
+
+      const lines = await tx.listLines(principal.companyId, revisionId);
+      return { revision: updatedRevision, lines };
     });
   }
 
@@ -415,7 +561,7 @@ export class QuotationService {
           createdByUserId: principal.userId,
         });
         await tx.setCommercialState(principal.companyId, context.opportunityId, 'quoted');
-        await tx.setLeadStage(principal.companyId, context.leadId, 'commercial_negotiation');
+        await tx.setLeadStage(principal.companyId, context.leadId, 'commercial_negotiation', { updatedByUserId: principal.userId });
         await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.quotation_issued_demo', targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, documentId: document.id, templateVersion: quotationPdfTemplateVersion, grandTotal: found.revision.grandTotal } });
         return { revision: updated, document: {
           id: document.id, originalName: document.originalName, mimeType: document.mimeType,
@@ -429,7 +575,20 @@ export class QuotationService {
     }
   }
 
-  async recordCustomerDecision(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, input: { decision: 'accepted' | 'declined'; evidenceReference: string; customerOrderReference?: string; notes?: string; expectedVersion: number }, requestId: string) {
+  async recordCustomerDecision(
+    principal: AuthenticatedPrincipal,
+    jobId: string,
+    revisionId: string,
+    input: {
+      decision: 'accepted' | 'declined';
+      leadOutcome?: 'keep_negotiating' | 'mark_lost' | 'put_on_hold';
+      evidenceReference: string;
+      customerOrderReference?: string;
+      notes?: string;
+      expectedVersion: number;
+    },
+    requestId: string,
+  ) {
     await this.job(principal, jobId, 'engineering.quotation.customer_decision');
     const repository = createQuotationRepository(this.database);
     const [found, context] = await Promise.all([
@@ -439,12 +598,13 @@ export class QuotationService {
     if (found.revision.status !== 'issued') throw new ConflictError('Record a customer decision only against an issued quotation revision.');
     return this.database.transaction(async (transaction) => {
       const tx = createQuotationRepository(transaction);
+      const now = new Date();
       const updated = await tx.transition(principal.companyId, revisionId, input.expectedVersion, 'issued', { status: input.decision });
       if (!updated) throw new ConflictError('The quotation changed or already has a customer decision.');
       const decision = await tx.createCustomerDecision({ companyId: principal.companyId, quotationRevisionId: revisionId, decision: input.decision, evidenceReference: input.evidenceReference, customerOrderReference: input.customerOrderReference, notes: input.notes, recordedByUserId: principal.userId });
       if (input.decision === 'accepted') {
         await tx.setCommercialState(principal.companyId, context.opportunityId, 'awarded');
-        await tx.setLeadStage(principal.companyId, context.leadId, 'won');
+        await tx.setLeadStage(principal.companyId, context.leadId, 'won', { updatedByUserId: principal.userId });
         const projects = createProjectRepository(transaction);
         const project = await projects.findByOpportunityUnscoped(principal.companyId, context.opportunityId);
         if (project) {
@@ -452,8 +612,72 @@ export class QuotationService {
           const recipients = (await projects.listMemberIds(principal.companyId, project.id)).map((member) => member.userId).filter((userId) => userId !== principal.userId);
           await createNotificationRepository(transaction).createMany(recipients.map((recipientUserId) => ({ companyId: principal.companyId, recipientUserId, type: 'project.commercially_awarded', severity: 'success' as const, title: 'Project commercially awarded', message: `${project.projectNumber} now has an accepted quotation baseline.`, link: `/projects/${project.id}`, targetType: 'project', targetId: project.id, dedupKey: `project-awarded:${project.id}:${revisionId}` })));
         }
+      } else if (input.leadOutcome === 'mark_lost' || input.leadOutcome === 'put_on_hold') {
+        const outcomeReason = input.notes || input.evidenceReference;
+        const jobSnapshot = await tx.findDesignJobSnapshot(principal.companyId, jobId);
+        if (input.leadOutcome === 'mark_lost') {
+          await tx.setCommercialState(principal.companyId, context.opportunityId, 'lost', null);
+          await tx.setLeadStage(principal.companyId, context.leadId, 'lost', { lostReason: outcomeReason, previousStage: null, updatedByUserId: principal.userId });
+        } else {
+          await tx.setCommercialState(
+            principal.companyId,
+            context.opportunityId,
+            'on_hold',
+            context.opportunityCommercialState,
+          );
+          await tx.setLeadStage(principal.companyId, context.leadId, 'on_hold', {
+            previousStage: context.leadStage,
+            updatedByUserId: principal.userId,
+          });
+        }
+        if (jobSnapshot) {
+          await tx.freezeDesignJobOnQuotationOutcome(
+            principal.companyId,
+            jobId,
+            input.leadOutcome,
+            jobSnapshot.status,
+            outcomeReason,
+            now,
+            principal.userId,
+          );
+        }
+        const salesMembers = await tx.listSalesAndDesignRecipients(principal.companyId, context.leadId, context.opportunityId);
+        const recipients = [...new Set([
+          ...salesMembers,
+          jobSnapshot?.designerUserId ?? null,
+          jobSnapshot?.designHeadUserId ?? null,
+        ].filter((id): id is string => Boolean(id) && id !== principal.userId))];
+        if (recipients.length > 0) {
+          await createNotificationRepository(transaction).createMany(recipients.map((recipientUserId) => ({
+            companyId: principal.companyId,
+            recipientUserId,
+            type: input.leadOutcome === 'mark_lost' ? 'engineering.quotation_declined_lost' : 'engineering.quotation_declined_hold',
+            severity: 'warning' as const,
+            title: input.leadOutcome === 'mark_lost'
+              ? 'Quotation declined — lead marked lost'
+              : 'Quotation declined — lead put on hold',
+            message: `${found.quotation.quotationNumber} R${found.revision.revisionNumber} was declined (${outcomeReason}).`,
+            link: `/engineering/design-jobs/${jobId}/quotations`,
+            targetType: 'quotation_revision',
+            targetId: revisionId,
+            dedupKey: `quotation-declined:${revisionId}:${input.leadOutcome}`,
+          })));
+        }
       }
-      await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: `engineering.quotation_customer_${input.decision}`, targetType: 'quotation_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId, evidenceReference: input.evidenceReference, customerOrderReference: input.customerOrderReference } });
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: `engineering.quotation_customer_${input.decision}`,
+        targetType: 'quotation_revision',
+        targetId: revisionId,
+        requestId,
+        metadata: {
+          designJobId: jobId,
+          evidenceReference: input.evidenceReference,
+          customerOrderReference: input.customerOrderReference,
+          leadOutcome: input.leadOutcome ?? null,
+        },
+      });
       return updated;
     });
   }

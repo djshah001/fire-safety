@@ -340,6 +340,13 @@ export async function deleteVendorDocument(vendorId: string, documentId: string)
   await apiClient.delete(`/masters/vendors/${vendorId}/documents/${documentId}`);
 }
 
+export function vendorDocumentUrl(vendorId: string, documentId: string, inline = true) {
+  return apiClient.getUri({
+    url: `/masters/vendors/${vendorId}/documents/${documentId}/download`,
+    params: inline ? { inline: 1 } : undefined,
+  });
+}
+
 // Public Vendor Onboarding APIs
 export const publicOnboardingInvitationQuery = (token?: string) => queryOptions({
   queryKey: ['public-onboarding', token] as const,

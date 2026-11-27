@@ -40,6 +40,12 @@ async function reset() {
     const targets = tableRows.rows.map((row) => row.tablename).filter((table) => !preservedTables.has(table));
     if (targets.length === 0) throw new Error('Demo reset found no operational tables.');
     await client.query(`truncate table ${targets.map(quoteIdentifier).join(', ')} restart identity`);
+    await client.query(`
+      update users
+      set is_on_leave = false, leave_start_date = null, leave_end_date = null,
+          covering_employee_id = null, leave_reason = null
+      where is_on_leave = true
+    `);
     await client.query(`delete from users where employee_code like 'DEMO-%' and email_normalized like 'demo.%@example.test'`);
     await client.query('commit');
     const counts = before.rows[0]!;

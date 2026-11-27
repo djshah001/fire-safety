@@ -1,10 +1,11 @@
 import { isAdministrator } from '../../core/security/administrator.js';
-import { ConflictError, ForbiddenError } from '../../core/errors/appError.js';
+import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../core/errors/appError.js';
 import { hashPassword } from '../../core/security/password.js';
 import { systemAdminPermissionCodes, type PermissionCode } from '../../core/security/permissions.js';
 import { db, type Database } from '../../infrastructure/database/db.js';
 import { createAuthRepository } from '../auth/auth.repository.js';
 import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
+import { createNotificationRepository } from '../notifications/notification.repository.js';
 import { createAdminRepository } from './admin.repository.js';
 
 export class AdminService {
@@ -333,6 +334,298 @@ export class AdminService {
         targetId: userId,
         requestId,
         metadata: { reason: input.reason },
+      });
+      return user;
+    });
+  }
+
+  async getEmployeeWorkload(principal: AuthenticatedPrincipal, employeeId: string) {
+    const repository = createAdminRepository(this.database);
+    const employee = await repository.findUser(principal.companyId, employeeId);
+    if (!employee) throw new NotFoundError('Employee not found.');
+    const workload = await repository.getEmployeeWorkload(principal.companyId, employeeId);
+    return {
+      employee: {
+        id: employee.id,
+        name: employee.name,
+        email: employee.email,
+        status: employee.status,
+        rowVersion: employee.rowVersion,
+        isOnLeave: employee.isOnLeave,
+        leaveStartDate: employee.leaveStartDate,
+        leaveEndDate: employee.leaveEndDate,
+        coveringEmployeeId: employee.coveringEmployeeId,
+        leaveReason: employee.leaveReason,
+      },
+      workload,
+    };
+  }
+
+  async leaveHandover(
+    principal: AuthenticatedPrincipal,
+    employeeId: string,
+    input: {
+      rowVersion: number;
+      leaveStartDate: string;
+      leaveEndDate?: string;
+      coveringEmployeeId: string;
+      leaveReason: string;
+      reassignLeads: boolean;
+      reassignReminders: boolean;
+      reassignDesignHeadJobs: boolean;
+      reassignDesignEngineerJobs: boolean;
+      reassignBoqReviews: boolean;
+      leadIds?: string[];
+      reminderIds?: string[];
+      designHeadJobIds?: string[];
+      designEngineerJobIds?: string[];
+      boqReviewIds?: string[];
+    },
+    requestId: string,
+  ) {
+    if (input.coveringEmployeeId === employeeId) {
+      throw new AppError('VALIDATION_ERROR', 'Choose a different employee to cover this handover.', 422);
+    }
+
+    return this.database.transaction(async (transaction) => {
+      const repository = createAdminRepository(transaction);
+      const [employee, covering] = await Promise.all([
+        repository.findUser(principal.companyId, employeeId),
+        repository.findUser(principal.companyId, input.coveringEmployeeId),
+      ]);
+      if (!employee || employee.status !== 'active') {
+        throw new NotFoundError('Active employee not found.');
+      }
+      if (!covering || covering.status !== 'active') {
+        throw new AppError('VALIDATION_ERROR', 'Covering employee must be an active user.', 422);
+      }
+      if (covering.isOnLeave) {
+        throw new ConflictError(`${covering.name} is currently marked On Leave. Choose an available covering employee.`);
+      }
+
+      const now = new Date();
+      const [coveringIsAdmin, canDesignHead, canDesignEngineer] = await Promise.all([
+        repository.userHasPermission(principal.companyId, covering.id, 'system.access.all', now),
+        repository.userHasPermission(principal.companyId, covering.id, 'engineering.design.review', now),
+        repository.userHasPermission(principal.companyId, covering.id, 'engineering.design.write', now),
+      ]);
+
+      const updatedEmployee = await repository.markUserOnLeave({
+        companyId: principal.companyId,
+        userId: employeeId,
+        rowVersion: input.rowVersion,
+        leaveStartDate: input.leaveStartDate,
+        leaveEndDate: input.leaveEndDate,
+        coveringEmployeeId: covering.id,
+        leaveReason: input.leaveReason,
+        now,
+      });
+      if (!updatedEmployee) {
+        throw new ConflictError('The employee changed before leave handover completed. Refresh and try again.');
+      }
+
+      const workload = await repository.getEmployeeWorkload(principal.companyId, employeeId);
+      const filterByIds = <T extends { id: string }>(items: T[], enabled: boolean, selectedIds?: string[]) => {
+        if (!enabled) return [];
+        if (!selectedIds) return items;
+        const set = new Set(selectedIds);
+        return items.filter((item) => set.has(item.id));
+      };
+
+      const selectedLeads = filterByIds(workload.leads, input.reassignLeads, input.leadIds);
+      const selectedReminders = filterByIds(workload.reminders, input.reassignReminders, input.reminderIds);
+      const selectedHeadJobs = filterByIds(workload.designHeadJobs, input.reassignDesignHeadJobs, input.designHeadJobIds);
+      const selectedEngineerJobs = filterByIds(workload.designEngineerJobs, input.reassignDesignEngineerJobs, input.designEngineerJobIds);
+      const selectedBoqs = filterByIds(workload.boqReviews, input.reassignBoqReviews, input.boqReviewIds);
+
+      if (selectedHeadJobs.length > 0 && !canDesignHead) {
+        throw new ConflictError(`${covering.name} lacks design review permission to take over Design Head tasks.`);
+      }
+      if (selectedEngineerJobs.length > 0 && !canDesignEngineer) {
+        throw new ConflictError(`${covering.name} lacks engineering design write permission to take over Design Engineer tasks.`);
+      }
+
+      const logEntries: Array<{
+        companyId: string;
+        fromUserId: string;
+        toUserId: string;
+        entityType: 'lead' | 'reminder' | 'design_job_head' | 'design_job_engineer' | 'boq_review';
+        entityId: string;
+        reason: string;
+        reassignedByUserId: string;
+      }> = [];
+
+      for (const lead of selectedLeads) {
+        await repository.reassignLeadOwner(principal.companyId, lead.id, covering.id, now, principal.userId);
+        logEntries.push({
+          companyId: principal.companyId,
+          fromUserId: employeeId,
+          toUserId: covering.id,
+          entityType: 'lead',
+          entityId: lead.id,
+          reason: input.leaveReason,
+          reassignedByUserId: principal.userId,
+        });
+      }
+
+      for (const reminder of selectedReminders) {
+        await repository.reassignReminder(
+          principal.companyId, reminder.id, reminder.ruleId, reminder.leadId, covering.id, now,
+        );
+        logEntries.push({
+          companyId: principal.companyId,
+          fromUserId: employeeId,
+          toUserId: covering.id,
+          entityType: 'reminder',
+          entityId: reminder.id,
+          reason: input.leaveReason,
+          reassignedByUserId: principal.userId,
+        });
+      }
+
+      for (const job of selectedHeadJobs) {
+        if (!coveringIsAdmin && job.designerUserId === covering.id) {
+          throw new ConflictError(
+            `Cannot assign ${covering.name} as Design Head on "${job.title}" because they are already its Design Engineer (self-approval is not allowed for non-administrators).`,
+          );
+        }
+        await repository.reassignDesignHead(principal.companyId, job.id, covering.id, now, principal.userId);
+        logEntries.push({
+          companyId: principal.companyId,
+          fromUserId: employeeId,
+          toUserId: covering.id,
+          entityType: 'design_job_head',
+          entityId: job.id,
+          reason: input.leaveReason,
+          reassignedByUserId: principal.userId,
+        });
+      }
+
+      for (const job of selectedEngineerJobs) {
+        if (!coveringIsAdmin && job.designHeadUserId === covering.id) {
+          throw new ConflictError(
+            `Cannot assign ${covering.name} as Design Engineer on "${job.title}" because they are already its Design Head (self-approval is not allowed for non-administrators).`,
+          );
+        }
+        await repository.reassignDesignEngineer(principal.companyId, job.id, covering.id, now, principal.userId);
+        logEntries.push({
+          companyId: principal.companyId,
+          fromUserId: employeeId,
+          toUserId: covering.id,
+          entityType: 'design_job_engineer',
+          entityId: job.id,
+          reason: input.leaveReason,
+          reassignedByUserId: principal.userId,
+        });
+      }
+
+      for (const boq of selectedBoqs) {
+        const transferCosting =
+          boq.costingUserId === employeeId && ['submitted', 'costing'].includes(boq.status);
+        const transferPurchaseHead =
+          boq.purchaseHeadUserId === employeeId && ['submitted', 'costing', 'purchase_review'].includes(boq.status);
+        const transferAdminApprover =
+          boq.adminApproverUserId === employeeId && ['submitted', 'costing', 'purchase_review', 'admin_review'].includes(boq.status);
+        if (!transferCosting && !transferPurchaseHead && !transferAdminApprover) continue;
+
+        if (!coveringIsAdmin && (transferPurchaseHead || transferAdminApprover)) {
+          const isContributor =
+            boq.createdByUserId === covering.id ||
+            boq.submittedByUserId === covering.id ||
+            await repository.hasBoqContributor(principal.companyId, boq.id, covering.id);
+          if (isContributor) {
+            throw new ConflictError(
+              `Cannot transfer BOQ review on "${boq.jobTitle}" R${boq.revisionNumber} to ${covering.name} because they prepared or contributed to it (self-approval is not allowed for non-administrators).`,
+            );
+          }
+        }
+        await repository.reassignBoqRole(
+          principal.companyId,
+          boq.id,
+          employeeId,
+          covering.id,
+          { costing: transferCosting, purchaseHead: transferPurchaseHead, adminApprover: transferAdminApprover },
+          now,
+        );
+        logEntries.push({
+          companyId: principal.companyId,
+          fromUserId: employeeId,
+          toUserId: covering.id,
+          entityType: 'boq_review',
+          entityId: boq.id,
+          reason: input.leaveReason,
+          reassignedByUserId: principal.userId,
+        });
+      }
+
+      await repository.insertReassignmentLogs(logEntries);
+
+      const summary = {
+        leads: selectedLeads.length,
+        reminders: selectedReminders.length,
+        designHeadJobs: selectedHeadJobs.length,
+        designEngineerJobs: selectedEngineerJobs.length,
+        boqReviews: logEntries.filter((entry) => entry.entityType === 'boq_review').length,
+      };
+
+      if (logEntries.length > 0) {
+        await createNotificationRepository(transaction).create({
+          companyId: principal.companyId,
+          recipientUserId: covering.id,
+          type: 'identity.leave_handover_assigned',
+          severity: 'info',
+          title: 'Leave handover tasks assigned to you',
+          message: `Covering for ${employee.name} (${input.leaveStartDate}${input.leaveEndDate ? ` to ${input.leaveEndDate}` : ''}): ${logEntries.length} item(s) reassigned.`,
+          link: '/crm/leads',
+          targetType: 'user',
+          targetId: employeeId,
+          dedupKey: `leave-handover:${employeeId}:${updatedEmployee.rowVersion}`,
+        });
+      }
+
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'identity.employee_leave_handover',
+        targetType: 'user',
+        targetId: employeeId,
+        requestId,
+        metadata: {
+          coveringEmployeeId: covering.id,
+          leaveStartDate: input.leaveStartDate,
+          leaveEndDate: input.leaveEndDate ?? null,
+          leaveReason: input.leaveReason,
+          reassignedCounts: summary,
+        },
+      });
+
+      return { user: updatedEmployee, reassigned: summary };
+    });
+  }
+
+  async returnFromLeave(
+    principal: AuthenticatedPrincipal,
+    employeeId: string,
+    input: { rowVersion: number; notes?: string },
+    requestId: string,
+  ) {
+    return this.database.transaction(async (transaction) => {
+      const now = new Date();
+      const user = await createAdminRepository(transaction).returnUserFromLeave(
+        principal.companyId,
+        employeeId,
+        input.rowVersion,
+        now,
+      );
+      if (!user) throw new ConflictError('The employee changed before returning from leave. Refresh and try again.');
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'identity.employee_returned_from_leave',
+        targetType: 'user',
+        targetId: employeeId,
+        requestId,
+        metadata: { notes: input.notes ?? null },
       });
       return user;
     });

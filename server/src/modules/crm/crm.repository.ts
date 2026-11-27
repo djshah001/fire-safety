@@ -6,10 +6,13 @@ import {
   eq,
   exists,
   gt,
+  gte,
   ilike,
   inArray,
   isNull,
+  lt,
   lte,
+  not,
   or,
   sql,
 } from 'drizzle-orm';
@@ -30,6 +33,7 @@ import {
   leads,
   marketSectors,
   opportunities,
+  opportunityAttachments,
   opportunityMembers,
   outboxJobs,
   reminderOccurrences,
@@ -437,7 +441,7 @@ export function createCrmRepository(executor: DatabaseExecutor) {
     },
 
     async listAssignees(companyId: string, now = new Date()) {
-      return executor.select({ id: users.id, name: users.name, email: users.email })
+      return executor.select({ id: users.id, name: users.name, email: users.email, isOnLeave: users.isOnLeave })
         .from(users).where(and(
           eq(users.companyId, companyId),
           eq(users.status, 'active'),
@@ -458,7 +462,7 @@ export function createCrmRepository(executor: DatabaseExecutor) {
     },
 
     async listEligibleUsers(companyId: string, permissionCode: string, now = new Date()) {
-      return executor.select({ id: users.id, name: users.name, email: users.email })
+      return executor.select({ id: users.id, name: users.name, email: users.email, isOnLeave: users.isOnLeave })
         .from(users).where(and(
           eq(users.companyId, companyId),
           eq(users.status, 'active'),
@@ -470,7 +474,7 @@ export function createCrmRepository(executor: DatabaseExecutor) {
               eq(userRoleAssignments.userId, users.id),
               eq(roles.companyId, companyId),
               eq(roles.isActive, true),
-              eq(rolePermissions.permissionCode, permissionCode),
+              inArray(rolePermissions.permissionCode, [permissionCode, 'system.access.all']),
               lte(userRoleAssignments.validFrom, now),
               or(isNull(userRoleAssignments.validUntil), gt(userRoleAssignments.validUntil, now)),
             ))),
@@ -491,7 +495,7 @@ export function createCrmRepository(executor: DatabaseExecutor) {
               eq(userRoleAssignments.userId, users.id),
               eq(roles.companyId, companyId),
               eq(roles.isActive, true),
-              eq(rolePermissions.permissionCode, permissionCode),
+              inArray(rolePermissions.permissionCode, [permissionCode, 'system.access.all']),
               lte(userRoleAssignments.validFrom, now),
               or(isNull(userRoleAssignments.validUntil), gt(userRoleAssignments.validUntil, now)),
             ))),
@@ -562,9 +566,11 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       expectedVersion: number,
       ownerUserId: string,
       now: Date,
+      updatedByUserId?: string,
     ) {
       const [lead] = await executor.update(leads).set({
         ownerUserId,
+        ...(updatedByUserId ? { updatedByUserId } : {}),
         rowVersion: sql`${leads.rowVersion} + 1`,
         updatedAt: now,
       }).where(and(
@@ -573,6 +579,13 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         eq(leads.rowVersion, expectedVersion),
       )).returning();
       return lead;
+    },
+
+    async touchLeadUpdatedBy(companyId: string, leadId: string, userId: string, now: Date) {
+      await executor.update(leads).set({
+        updatedByUserId: userId,
+        updatedAt: now,
+      }).where(and(eq(leads.companyId, companyId), eq(leads.id, leadId)));
     },
 
     async replaceLeadOwnerMember(companyId: string, leadId: string, ownerUserId: string) {
@@ -592,19 +605,93 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       });
     },
 
+    async listLeadFilterOptions(access: CrmAccess) {
+      const scope = leadAccessCondition(executor, access);
+      const [sources, activeUsers] = await Promise.all([
+        executor
+          .select({ source: leads.source })
+          .from(leads)
+          .where(and(eq(leads.companyId, access.companyId), scope))
+          .groupBy(leads.source)
+          .orderBy(asc(leads.source)),
+        executor
+          .select({ id: users.id, name: users.name, email: users.email, isOnLeave: users.isOnLeave })
+          .from(users)
+          .where(and(eq(users.companyId, access.companyId), eq(users.status, 'active')))
+          .orderBy(asc(users.name)),
+      ]);
+      return {
+        sources: sources.map((row) => row.source).filter(Boolean),
+        users: activeUsers,
+      };
+    },
+
     async listLeads(access: CrmAccess, input: {
-      stage?: typeof leads.$inferSelect.stage; search?: string; limit: number; offset: number;
-      sort: 'leadNumber' | 'inquiryName' | 'stage' | 'updatedAt'; direction: 'asc' | 'desc';
+      stage?: typeof leads.$inferSelect.stage;
+      serviceCategoryId?: string;
+      purposeId?: string;
+      sectorId?: string;
+      source?: string;
+      ownerUserId?: string;
+      updatedByUserId?: string;
+      converted?: 'yes' | 'no';
+      hasDesignJob?: 'yes' | 'no';
+      createdFrom?: string;
+      createdTo?: string;
+      updatedFrom?: string;
+      updatedTo?: string;
+      search?: string;
+      limit: number;
+      offset: number;
+      sort: 'leadNumber' | 'inquiryName' | 'stage' | 'ownerName' | 'source' | 'createdAt' | 'updatedAt';
+      direction: 'asc' | 'desc';
     }) {
       const search = input.search ? or(
         ilike(leads.leadNumber, `%${input.search}%`),
         ilike(leads.inquiryName, `%${input.search}%`),
         ilike(leads.companyName, `%${input.search}%`),
         ilike(leads.contactName, `%${input.search}%`),
+        ilike(leads.phone, `%${input.search}%`),
+        ilike(leads.email, `%${input.search}%`),
+        ilike(leads.source, `%${input.search}%`),
       ) : undefined;
+      const convertedFilter = input.converted
+        ? (input.converted === 'yes' ? exists : not)(
+            executor.select({ value: sql`1` }).from(opportunities).where(and(
+              eq(opportunities.companyId, leads.companyId),
+              eq(opportunities.leadId, leads.id),
+            )),
+          )
+        : undefined;
+      const designJobFilter = input.hasDesignJob
+        ? (input.hasDesignJob === 'yes' ? exists : not)(
+            executor.select({ value: sql`1` }).from(designJobs).where(and(
+              eq(designJobs.companyId, leads.companyId),
+              eq(designJobs.leadId, leads.id),
+            )),
+          )
+        : undefined;
+      const dayAfter = (dateString: string) => {
+        const d = new Date(`${dateString}T00:00:00.000Z`);
+        return new Date(d.getTime() + 86_400_000);
+      };
       const where = and(
         eq(leads.companyId, access.companyId),
         input.stage ? eq(leads.stage, input.stage) : undefined,
+        input.serviceCategoryId ? eq(leads.serviceCategoryId, input.serviceCategoryId) : undefined,
+        input.purposeId ? eq(leads.purposeId, input.purposeId) : undefined,
+        input.sectorId ? eq(leads.sectorId, input.sectorId) : undefined,
+        input.source ? ilike(leads.source, input.source) : undefined,
+        input.ownerUserId ? eq(leads.ownerUserId, input.ownerUserId) : undefined,
+        input.updatedByUserId
+          ? sql`coalesce(${leads.updatedByUserId}, ${leads.createdByUserId}) = ${input.updatedByUserId}`
+          : undefined,
+        convertedFilter,
+        designJobFilter,
+        input.createdFrom ? gte(leads.createdAt, new Date(`${input.createdFrom}T00:00:00.000Z`)) : undefined,
+        input.createdTo ? lt(leads.createdAt, dayAfter(input.createdTo)) : undefined,
+        input.updatedFrom ? gte(leads.updatedAt, new Date(`${input.updatedFrom}T00:00:00.000Z`)) : undefined,
+        input.updatedTo ? lt(leads.updatedAt, dayAfter(input.updatedTo)) : undefined,
         search,
         leadAccessCondition(executor, access),
       );
@@ -619,18 +706,32 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         source: leads.source,
         stage: leads.stage,
         ownerUserId: leads.ownerUserId,
+        ownerName: sql<string>`owner_user.name`,
+        ownerIsOnLeave: sql<boolean>`owner_user.is_on_leave`,
+        createdByUserId: leads.createdByUserId,
+        createdByName: sql<string>`created_user.name`,
+        lastModifiedByUserId: sql<string>`coalesce(${leads.updatedByUserId}, ${leads.createdByUserId})`,
+        lastModifiedByName: sql<string>`coalesce(updated_user.name, created_user.name)`,
+        opportunityId: opportunities.id,
+        designJobId: designJobs.id,
+        designStatus: designJobs.status,
         rowVersion: leads.rowVersion,
+        createdAt: leads.createdAt,
         updatedAt: leads.updatedAt,
+        serviceCategoryId: leads.serviceCategoryId,
         serviceCategoryName: serviceCategories.name,
         purposeId: leads.purposeId,
         purposeName: leadPurposes.name,
         sectorId: leads.sectorId,
         sectorName: marketSectors.name,
       };
-      const sortColumn = {
+      const sortExpr = {
         leadNumber: leads.leadNumber,
         inquiryName: leads.inquiryName,
         stage: leads.stage,
+        ownerName: sql`owner_user.name`,
+        source: leads.source,
+        createdAt: leads.createdAt,
         updatedAt: leads.updatedAt,
       }[input.sort];
       const order = input.direction === 'asc' ? asc : desc;
@@ -639,7 +740,12 @@ export function createCrmRepository(executor: DatabaseExecutor) {
           .innerJoin(serviceCategories, eq(serviceCategories.id, leads.serviceCategoryId))
           .innerJoin(leadPurposes, eq(leadPurposes.id, leads.purposeId))
           .innerJoin(marketSectors, eq(marketSectors.id, leads.sectorId))
-          .where(where).orderBy(order(sortColumn), order(leads.id)).limit(input.limit).offset(input.offset),
+          .innerJoin(sql`${users} owner_user`, sql`owner_user.id = ${leads.ownerUserId}`)
+          .innerJoin(sql`${users} created_user`, sql`created_user.id = ${leads.createdByUserId}`)
+          .leftJoin(sql`${users} updated_user`, sql`updated_user.id = ${leads.updatedByUserId}`)
+          .leftJoin(opportunities, and(eq(opportunities.companyId, leads.companyId), eq(opportunities.leadId, leads.id)))
+          .leftJoin(designJobs, and(eq(designJobs.companyId, leads.companyId), eq(designJobs.leadId, leads.id)))
+          .where(where).orderBy(order(sortExpr), order(leads.id)).limit(input.limit).offset(input.offset),
         executor.select({ count: count() }).from(leads).where(where),
       ]);
       return { items, total: totals[0]?.count ?? 0 };
@@ -657,28 +763,45 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         address: leads.address,
         source: leads.source,
         serviceCategoryId: leads.serviceCategoryId,
+        serviceCategoryName: serviceCategories.name,
         purposeId: leads.purposeId,
         sectorId: leads.sectorId,
         purposeName: leadPurposes.name,
         sectorName: marketSectors.name,
         ownerUserId: leads.ownerUserId,
+        ownerName: sql<string>`owner_user.name`,
+        ownerIsOnLeave: sql<boolean>`owner_user.is_on_leave`,
+        createdByUserId: leads.createdByUserId,
+        createdByName: sql<string>`created_user.name`,
+        lastModifiedByUserId: sql<string>`coalesce(${leads.updatedByUserId}, ${leads.createdByUserId})`,
+        lastModifiedByName: sql<string>`coalesce(updated_user.name, created_user.name)`,
         customerId: leads.customerId,
         primaryContactId: leads.primaryContactId,
         siteId: leads.siteId,
+        opportunityId: opportunities.id,
+        designJobId: designJobs.id,
+        designStatus: designJobs.status,
         stage: leads.stage,
+        previousStage: leads.previousStage,
         lostReason: leads.lostReason,
         qualificationNotes: leads.qualificationNotes,
         rowVersion: leads.rowVersion,
         createdAt: leads.createdAt,
         updatedAt: leads.updatedAt,
       }).from(leads)
+        .innerJoin(serviceCategories, eq(serviceCategories.id, leads.serviceCategoryId))
         .innerJoin(leadPurposes, eq(leadPurposes.id, leads.purposeId))
         .innerJoin(marketSectors, eq(marketSectors.id, leads.sectorId))
+        .innerJoin(sql`${users} owner_user`, sql`owner_user.id = ${leads.ownerUserId}`)
+        .innerJoin(sql`${users} created_user`, sql`created_user.id = ${leads.createdByUserId}`)
+        .leftJoin(sql`${users} updated_user`, sql`updated_user.id = ${leads.updatedByUserId}`)
+        .leftJoin(opportunities, and(eq(opportunities.companyId, leads.companyId), eq(opportunities.leadId, leads.id)))
+        .leftJoin(designJobs, and(eq(designJobs.companyId, leads.companyId), eq(designJobs.leadId, leads.id)))
         .where(and(
-        eq(leads.companyId, access.companyId),
-        eq(leads.id, leadId),
-        leadAccessCondition(executor, access),
-      )).limit(1);
+          eq(leads.companyId, access.companyId),
+          eq(leads.id, leadId),
+          leadAccessCondition(executor, access),
+        )).limit(1);
       return lead;
     },
 
@@ -697,10 +820,14 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       stage: typeof leads.$inferSelect.stage,
       lostReason: string | null,
       now: Date,
+      previousStage: typeof leads.$inferSelect.stage | null = null,
+      updatedByUserId?: string,
     ) {
       const [lead] = await executor.update(leads).set({
         stage,
+        previousStage,
         lostReason,
+        ...(updatedByUserId ? { updatedByUserId } : {}),
         rowVersion: sql`${leads.rowVersion} + 1`,
         updatedAt: now,
       }).where(and(
@@ -720,6 +847,7 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       primaryContactId: string;
       siteId?: string;
       qualificationNotes: string;
+      updatedByUserId?: string;
       now: Date;
     }) {
       const [lead] = await executor.update(leads).set({
@@ -727,6 +855,7 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         primaryContactId: input.primaryContactId,
         siteId: input.siteId,
         qualificationNotes: input.qualificationNotes,
+        ...(input.updatedByUserId ? { updatedByUserId: input.updatedByUserId } : {}),
         stage: 'qualified',
         rowVersion: sql`${leads.rowVersion} + 1`,
         updatedAt: input.now,
@@ -992,6 +1121,63 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       return opportunity;
     },
 
+    async findOpportunity(companyId: string, opportunityId: string) {
+      const [opportunity] = await executor.select().from(opportunities).where(and(
+        eq(opportunities.companyId, companyId), eq(opportunities.id, opportunityId),
+      )).limit(1);
+      return opportunity;
+    },
+
+    async findOpportunityWithAccess(access: CrmAccess, opportunityId: string) {
+      const [opportunity] = await executor.select().from(opportunities).where(and(
+        eq(opportunities.companyId, access.companyId),
+        eq(opportunities.id, opportunityId),
+        opportunityAccessCondition(executor, access),
+      )).limit(1);
+      return opportunity;
+    },
+
+    async findDesignJobByOpportunity(companyId: string, opportunityId: string) {
+      const [job] = await executor.select().from(designJobs).where(and(
+        eq(designJobs.companyId, companyId), eq(designJobs.opportunityId, opportunityId),
+      )).limit(1);
+      return job;
+    },
+
+    async listOpportunityAttachments(companyId: string, opportunityId: string) {
+      return executor.select({
+        id: opportunityAttachments.id,
+        opportunityId: opportunityAttachments.opportunityId,
+        originalName: opportunityAttachments.originalName,
+        mimeType: opportunityAttachments.mimeType,
+        sizeBytes: opportunityAttachments.sizeBytes,
+        checksumSha256: opportunityAttachments.checksumSha256,
+        uploadedByUserId: opportunityAttachments.uploadedByUserId,
+        uploadedByName: users.name,
+        createdAt: opportunityAttachments.createdAt,
+      }).from(opportunityAttachments)
+        .innerJoin(users, eq(users.id, opportunityAttachments.uploadedByUserId))
+        .where(and(
+          eq(opportunityAttachments.companyId, companyId),
+          eq(opportunityAttachments.opportunityId, opportunityId),
+        ))
+        .orderBy(desc(opportunityAttachments.createdAt), desc(opportunityAttachments.id));
+    },
+
+    async createOpportunityAttachments(values: Array<typeof opportunityAttachments.$inferInsert>) {
+      if (values.length === 0) return [];
+      return executor.insert(opportunityAttachments).values(values).returning();
+    },
+
+    async findOpportunityAttachment(companyId: string, opportunityId: string, attachmentId: string) {
+      const [attachment] = await executor.select().from(opportunityAttachments).where(and(
+        eq(opportunityAttachments.companyId, companyId),
+        eq(opportunityAttachments.opportunityId, opportunityId),
+        eq(opportunityAttachments.id, attachmentId),
+      )).limit(1);
+      return attachment;
+    },
+
     async findDesignJobByLead(companyId: string, leadId: string) {
       const [job] = await executor.select().from(designJobs).where(and(
         eq(designJobs.companyId, companyId), eq(designJobs.leadId, leadId),
@@ -999,9 +1185,97 @@ export function createCrmRepository(executor: DatabaseExecutor) {
       return job;
     },
 
-    async authorizeLeadForDesign(companyId: string, leadId: string, expectedVersion: number, now: Date) {
+    async updateOpportunityStateOnLeadChange(
+      companyId: string,
+      opportunityId: string,
+      commercialState: typeof opportunities.$inferSelect.commercialState,
+      previousCommercialState: typeof opportunities.$inferSelect.commercialState | null,
+      now: Date,
+    ) {
+      const [updated] = await executor.update(opportunities).set({
+        commercialState,
+        previousCommercialState,
+        rowVersion: sql`${opportunities.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(opportunities.companyId, companyId),
+        eq(opportunities.id, opportunityId),
+      )).returning();
+      return updated;
+    },
+
+    async pauseDesignJob(companyId: string, jobId: string, previousStatus: string, now: Date, updatedByUserId?: string) {
+      const [updated] = await executor.update(designJobs).set({
+        status: 'paused',
+        previousStatus,
+        ...(updatedByUserId ? { updatedByUserId } : {}),
+        rowVersion: sql`${designJobs.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(designJobs.companyId, companyId),
+        eq(designJobs.id, jobId),
+      )).returning();
+      return updated;
+    },
+
+    async cancelDesignJob(companyId: string, jobId: string, closedReason: string, now: Date, updatedByUserId?: string) {
+      const [updated] = await executor.update(designJobs).set({
+        status: 'cancelled',
+        previousStatus: null,
+        closedReason,
+        closedAt: now,
+        ...(updatedByUserId ? { updatedByUserId } : {}),
+        rowVersion: sql`${designJobs.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(designJobs.companyId, companyId),
+        eq(designJobs.id, jobId),
+      )).returning();
+      return updated;
+    },
+
+    async resumeDesignJob(companyId: string, jobId: string, status: string, now: Date, updatedByUserId?: string) {
+      const [updated] = await executor.update(designJobs).set({
+        status,
+        previousStatus: null,
+        ...(updatedByUserId ? { updatedByUserId } : {}),
+        rowVersion: sql`${designJobs.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(designJobs.companyId, companyId),
+        eq(designJobs.id, jobId),
+        eq(designJobs.status, 'paused'),
+      )).returning();
+      return updated;
+    },
+
+    async cancelPendingDesignDeadlines(companyId: string, jobId: string, now: Date) {
+      await executor.update(outboxJobs).set({
+        status: 'cancelled',
+        updatedAt: now,
+      }).where(and(
+        eq(outboxJobs.companyId, companyId),
+        eq(outboxJobs.type, 'engineering.design_deadline'),
+        eq(outboxJobs.status, 'pending'),
+        sql`${outboxJobs.payload}->>'jobId' = ${jobId}`,
+      ));
+    },
+
+    async enqueueResumedDesignDeadline(companyId: string, jobId: string, dueAt: Date, now: Date) {
+      const epoch = Math.floor(now.getTime() / 1_000);
+      await executor.insert(outboxJobs).values({
+        companyId,
+        type: 'engineering.design_deadline',
+        payload: { jobId, dueAt: dueAt.toISOString() },
+        dedupKey: `design-deadline:${jobId}:resume:${epoch}`,
+        dueAt,
+      }).onConflictDoNothing();
+    },
+
+    async authorizeLeadForDesign(companyId: string, leadId: string, expectedVersion: number, now: Date, updatedByUserId?: string) {
       const [lead] = await executor.update(leads).set({
         stage: 'design_authorized',
+        ...(updatedByUserId ? { updatedByUserId } : {}),
         rowVersion: sql`${leads.rowVersion} + 1`,
         updatedAt: now,
       }).where(and(
@@ -1037,12 +1311,19 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         id: opportunities.id,
         leadId: opportunities.leadId,
         leadNumber: leads.leadNumber,
+        leadStage: leads.stage,
         title: opportunities.title,
         customerId: opportunities.customerId,
         customerName: customers.displayName,
         siteId: opportunities.siteId,
+        siteName: sites.name,
+        ownerName: sql<string>`owner_user.name`,
+        designJobId: designJobs.id,
+        designStatus: designJobs.status,
+        attachmentCount: sql<number>`(select count(*)::int from ${opportunityAttachments} oa where oa.company_id = ${opportunities.companyId} and oa.opportunity_id = ${opportunities.id})`,
         commercialState: opportunities.commercialState,
         rowVersion: opportunities.rowVersion,
+        createdAt: opportunities.createdAt,
         updatedAt: opportunities.updatedAt,
       };
       const sortColumn = {
@@ -1056,6 +1337,9 @@ export function createCrmRepository(executor: DatabaseExecutor) {
         executor.select(selection).from(opportunities)
           .innerJoin(leads, eq(leads.id, opportunities.leadId))
           .innerJoin(customers, eq(customers.id, opportunities.customerId))
+          .innerJoin(sql`${users} owner_user`, sql`owner_user.id = ${leads.ownerUserId}`)
+          .leftJoin(sites, eq(sites.id, opportunities.siteId))
+          .leftJoin(designJobs, and(eq(designJobs.companyId, opportunities.companyId), eq(designJobs.opportunityId, opportunities.id)))
           .where(where).orderBy(order(sortColumn), order(opportunities.id))
           .limit(input.limit).offset(input.offset),
         executor.select({ count: count() }).from(opportunities)
@@ -1064,6 +1348,45 @@ export function createCrmRepository(executor: DatabaseExecutor) {
           .where(where),
       ]);
       return { items, total: totals[0]?.count ?? 0 };
+    },
+
+    async findOpportunityDetail(access: CrmAccess, opportunityId: string) {
+      const [item] = await executor.select({
+        id: opportunities.id,
+        leadId: opportunities.leadId,
+        leadNumber: leads.leadNumber,
+        leadStage: leads.stage,
+        qualificationNotes: leads.qualificationNotes,
+        title: opportunities.title,
+        customerId: opportunities.customerId,
+        customerName: customers.displayName,
+        primaryContactId: opportunities.primaryContactId,
+        contactName: customerContacts.name,
+        contactPhone: customerContacts.phone,
+        contactEmail: customerContacts.email,
+        siteId: opportunities.siteId,
+        siteName: sites.name,
+        siteCity: sites.city,
+        ownerName: sql<string>`owner_user.name`,
+        designJobId: designJobs.id,
+        designStatus: designJobs.status,
+        commercialState: opportunities.commercialState,
+        rowVersion: opportunities.rowVersion,
+        createdAt: opportunities.createdAt,
+        updatedAt: opportunities.updatedAt,
+      }).from(opportunities)
+        .innerJoin(leads, eq(leads.id, opportunities.leadId))
+        .innerJoin(customers, eq(customers.id, opportunities.customerId))
+        .innerJoin(customerContacts, eq(customerContacts.id, opportunities.primaryContactId))
+        .innerJoin(sql`${users} owner_user`, sql`owner_user.id = ${leads.ownerUserId}`)
+        .leftJoin(sites, eq(sites.id, opportunities.siteId))
+        .leftJoin(designJobs, and(eq(designJobs.companyId, opportunities.companyId), eq(designJobs.opportunityId, opportunities.id)))
+        .where(and(
+          eq(opportunities.companyId, access.companyId),
+          eq(opportunities.id, opportunityId),
+          opportunityAccessCondition(executor, access),
+        )).limit(1);
+      return item;
     },
   };
 }

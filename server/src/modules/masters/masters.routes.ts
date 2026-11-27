@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { AppError } from '../../core/errors/appError.js';
 import { getRequestId } from '../../core/http/requestContext.js';
 import { sendData } from '../../core/http/response.js';
-import { createPrivateUpload } from '../../infrastructure/storage/localFileStorage.js';
+import { createPrivateUpload, resolvePrivateFile } from '../../infrastructure/storage/localFileStorage.js';
 import { requireAuthentication, requireCsrf, requirePermission } from '../auth/auth.middleware.js';
 import { getPrincipal } from '../auth/auth.types.js';
 import {
@@ -238,6 +238,27 @@ export function createMastersRouter() {
   });
 
   // Vendor Documents
+  router.get('/vendors/:id/documents/:documentId/download', requirePermission('procurement.vendor.read'), async (request, response, next) => {
+    const { id } = masterIdParamsSchema.parse(request.params);
+    const documentId = request.params.documentId as string;
+    const doc = await mastersService.getVendorDocument(getPrincipal(request), id, documentId);
+    const filePath = resolvePrivateFile(doc.storageName);
+    if (request.query.inline === '1') {
+      response
+        .status(200)
+        .setHeader('Content-Type', doc.mimeType)
+        .setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.originalFileName)}"`)
+        .setHeader('X-Content-Type-Options', 'nosniff')
+        .setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; object-src 'self'; frame-ancestors 'self'; sandbox")
+        .sendFile(filePath, { dotfiles: 'allow' }, (error) => {
+          if (error && !response.headersSent) next(error);
+        });
+      return;
+    }
+    response.download(filePath, doc.originalFileName, (error) => {
+      if (error && !response.headersSent) next(error);
+    });
+  });
   router.post('/vendors/:id/documents', requireCsrf, requirePermission('procurement.vendor.manage'), vendorDocUpload.single('file'), async (request, response) => {
     const { id } = masterIdParamsSchema.parse(request.params);
     const documentType = (request.body.documentType as string) || 'other';

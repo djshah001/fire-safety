@@ -45,11 +45,14 @@ export function isValidCsrfToken(cookieToken?: string, headerToken?: string) {
 
 export function hasCompanyPermission(principal: AuthenticatedPrincipal, permissionCode: string) {
   return principal.grants.some((grant) =>
-    grant.permissionCode === permissionCode && grant.scopeKind === 'company' && grant.scopeId === null,
+    (grant.permissionCode === permissionCode || grant.permissionCode === 'system.access.all') &&
+    grant.scopeKind === 'company' &&
+    grant.scopeId === null,
   );
 }
 
 export function hasPermission(principal: AuthenticatedPrincipal, permissionCode: string) {
+  if (hasCompanyPermission(principal, 'system.access.all')) return true;
   return principal.grants.some((grant) => grant.permissionCode === permissionCode);
 }
 

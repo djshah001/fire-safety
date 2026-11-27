@@ -51,7 +51,7 @@ export function AuthorizeDesignDialog({ lead, open, onOpenChange }: {
         </DialogHeader>
         <div className="mt-5 space-y-4">
           <div className="space-y-2"><Label htmlFor="design-title">Design job title</Label><Input defaultValue={lead?.inquiryName} id="design-title" maxLength={200} minLength={2} name="title" required /></div>
-          <div className="space-y-2"><Label>Design head</Label><Select name="designHeadUserId" required><SelectTrigger aria-label="Design head"><SelectValue placeholder="Choose design head" /></SelectTrigger><SelectContent>{heads.data?.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
+          <div className="space-y-2"><Label>Design head</Label><Select name="designHeadUserId" required><SelectTrigger aria-label="Design head"><SelectValue placeholder="Choose design head" /></SelectTrigger><SelectContent>{heads.data?.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}{item.isOnLeave ? ' (On Leave)' : ''}</SelectItem>)}</SelectContent></Select></div>
           <div className="space-y-2"><Label htmlFor="authorization-notes">Authorization notes</Label><Textarea id="authorization-notes" maxLength={1_000} minLength={3} name="authorizationNotes" placeholder="Scope and customer context for the free design request" required /></div>
           <Label className="flex cursor-pointer items-start gap-3 rounded-lg border p-3">
             <Checkbox checked={surveyRequested} onCheckedChange={(value) => setSurveyRequested(value === true)} />

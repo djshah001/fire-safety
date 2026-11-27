@@ -17,7 +17,13 @@ const principal: AuthenticatedPrincipal = {
 
 describe('authentication guards', () => {
   it('gives administrator company visibility without broadening ordinary role grants', () => {
-    expect(hasExplicitCompanyGrant({ ...principal, grants: [{ permissionCode: 'system.access.all', scopeKind: 'company', scopeId: null, source: 'role' }] }, 'crm.lead.read')).toBe(true);
+    const adminPrincipal: AuthenticatedPrincipal = {
+      ...principal,
+      grants: [{ permissionCode: 'system.access.all', scopeKind: 'company', scopeId: null, source: 'role' }],
+    };
+    expect(hasExplicitCompanyGrant(adminPrincipal, 'crm.lead.read')).toBe(true);
+    expect(hasPermission(adminPrincipal, 'engineering.boq.create')).toBe(true);
+    expect(hasCompanyPermission(adminPrincipal, 'identity.users.manage')).toBe(true);
     expect(hasExplicitCompanyGrant(principal, 'crm.lead.read')).toBe(false);
   });
   it('requires an exact CSRF cookie and header match', () => {

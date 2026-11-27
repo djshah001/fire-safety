@@ -10,7 +10,26 @@ type Page<T> = { items: T[]; total: number; page: number; pageSize: number };
 export const projectsQuery = (filters: { search?: string; status?: ProjectStatus; commercialState?: CommercialState; page: number; pageSize: number; sort: 'projectNumber' | 'title' | 'status' | 'startDate' | 'targetCompletionDate'; direction: 'asc' | 'desc' }) => queryOptions({ queryKey: ['projects', 'list', filters] as const, queryFn: async ({ signal }) => (await apiClient.get<ApiEnvelope<Page<Project>>>('/projects', { params: filters, signal })).data.data });
 export const projectQuery = (projectId?: string) => queryOptions({ queryKey: ['projects', 'detail', projectId] as const, enabled: Boolean(projectId), queryFn: async ({ signal }) => (await apiClient.get<ApiEnvelope<ProjectDetail>>(`/projects/${projectId}`, { signal })).data.data });
 
-export type ProjectStartOptions = { context: { designJobId: string; opportunityId: string; customerId: string; siteId: string | null; siteName: string | null; siteStatus: 'active' | 'inactive' | null; customerName: string; title: string; commercialState: CommercialState }; designRevisions: Array<{ id: string; revisionNumber: number; title: string; decisionId: string; evidenceReference: string }>; boqRevisions: Array<{ id: string; revisionNumber: number; title: string; designRevisionId: string }>; eligibleMembers: Array<{ id: string; name: string; email: string }>; existingProjectId: string | null };
+export type AcceptedQuotationSummary = {
+  revisionId: string;
+  revisionNumber: number;
+  title: string;
+  currency: string;
+  grandTotal: string;
+  decisionId: string;
+  evidenceReference: string;
+  customerOrderReference: string | null;
+  recordedAt: string;
+};
+
+export type ProjectStartOptions = {
+  context: { designJobId: string; opportunityId: string; customerId: string; siteId: string | null; siteName: string | null; siteStatus: 'active' | 'inactive' | null; customerName: string; title: string; commercialState: CommercialState };
+  designRevisions: Array<{ id: string; revisionNumber: number; title: string; decisionId: string; evidenceReference: string }>;
+  boqRevisions: Array<{ id: string; revisionNumber: number; title: string; designRevisionId: string }>;
+  acceptedQuotation: AcceptedQuotationSummary | null;
+  eligibleMembers: Array<{ id: string; name: string; email: string; isOnLeave?: boolean }>;
+  existingProjectId: string | null;
+};
 export const projectStartOptionsQuery = (jobId?: string, enabled = true) => queryOptions({ queryKey: ['projects', 'start-options', jobId] as const, enabled: Boolean(jobId) && enabled, queryFn: async ({ signal }) => (await apiClient.get<ApiEnvelope<ProjectStartOptions>>(`/projects/start-options/${jobId}`, { signal })).data.data });
 export async function startProject(jobId: string, input: { title: string; designRevisionId: string; boqRevisionId?: string; projectManagerUserId: string; memberUserIds: string[]; startDate: string; targetCompletionDate: string; startReason: string; idempotencyKey: string }) { return (await apiClient.post<ApiEnvelope<ProjectDetail>>(`/projects/from-design/${jobId}`, input)).data.data; }
 

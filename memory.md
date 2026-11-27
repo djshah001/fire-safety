@@ -1,5 +1,114 @@
 # Fire Safety — Decision and Status Memory
 
+## Global Command Palette (`Cmd+K`) & Page Keyboard Shortcuts — 2026-11-27
+
+- **Shared Hotkeys & Global Search (`client/src/hooks/useHotkeys.ts`, `client/src/api/search.ts`)**:
+  - Created `useHotkeys` (ignoring modified chords and `INPUT`/`TEXTAREA`/`SELECT`/`contentEditable` focus targets).
+  - Created `searchGlobalMetadata` querying only permitted entity endpoints (`/crm/leads`, `/engineering/design-jobs`, `/projects`, `/masters/vendors`) with `AbortSignal` and strict RBAC gating.
+- **Command Palette & Shell Consolidation (`client/src/components/CommandPalette.tsx`, `client/src/app/AppShell.tsx`, `client/src/app/MainShellArea.tsx`)**:
+  - Wired `<CommandPaletteTrigger />` into the sticky `MainShellArea` header and `<CommandPalette />` inside `AppShell` (removing duplicate `Cmd+K` handlers and outdated routes).
+  - Supported `250ms` debounced permitted record search (`font-mono` codes, `size-3.5`/`text-xs` density), quick actions (`New Lead`, `View Notifications`), and role-visible navigation across CRM, Engineering, Projects, Procurement, Masters, and Administration.
+- **Deep-Links & Hotkeys (`LeadsPage.tsx`, `DesignJobsPage.tsx`, `MasterDataPage.tsx`, `ListToolbar.tsx`)**:
+  - Synced `?selectedId=` (opening `LeadWorkPanel` Sheet / `VendorDetailSheet`) and `?action=create` on `LeadsPage.tsx`, added optional `searchInputRef` to `ListToolbar`, and wired `c` / `f` / `Escape` hotkeys across `LeadsPage.tsx` and `f` on `DesignJobsPage.tsx`.
+
+## UI Motion Foundation & Quotation In-Place Pricing Edit — 2026-11-27
+
+- **Phase 1 UI Primitives & Global Motion (`client/src/lib/motion.ts`, `client/src/app/AppProviders.tsx`)**:
+  - Verified all required Shadcn/Radix primitives (`sheet`, `tabs`, `dropdown-menu`, `popover`, `separator`, `command`) in `client/src/components/ui/` and `<MotionConfig reducedMotion="user">` at the app root.
+  - Created `client/src/lib/motion.ts` exporting `EASE_STANDARD`, `DURATION_FAST`, `DURATION_BASE`, `SPRING_CRISP`, `TRANSITION_FAST`, `TRANSITION_BASE`, `FADE_UP_FAST`, `COLLAPSIBLE_PANEL`, and `FLOATING_BAR`.
+- **Quotation In-Place Line Pricing & UI/UX Upgrade (`server/src/modules/engineering/quotation.*`, `client/src/api/quotations.ts`, `client/src/features/engineering/QuotationWorkspacePage.tsx`)**:
+  - Added `PATCH /api/v1/engineering/design-jobs/:jobId/quotations/:revisionId/lines/pricing` (`quotationLinesBatchPricingSchema`, `quotationService.updateLinesPricingBatch`) and extended `quotationLineSchema` / `updateLine` with optional `supplyRate`, `labourRate`, `miscellaneousRate`, and `markupPercent` overrides while computing `markupAmount`, `quotedUnitRate`, `unitRate`, `lineSubtotal`, `lineTotal`, and revision totals server-side via `calculateQuotedLine`.
+  - Upgraded `QuotationWorkspacePage.tsx` with inline Brand/Make `<Popover>`+`<Command>` combobox, inline Supply Rate / Labour / Misc / Markup % `<Input>` cells with live client decimal preview (`calculateQuotationLinePreview`), inline line notes `<Popover>`, per-row Save (`Enter`)/Revert (`Esc`), animated floating batch save bar, stage progress stepper, and collapsible older revisions.
+
+## Administrator Full Create/Read/Update/Reassign Rights & BOQ Creation Fix — 2026-11-27
+
+- **Auth & Eligibility (`server/src/modules/auth/auth.middleware.ts`, `auth.routes.ts`, `server/src/modules/crm/crm.repository.ts`)**:
+  - Updated `hasPermission` and `hasCompanyPermission` (`auth.middleware.ts`) to grant any permission when the principal holds a company-wide `system.access.all` grant, matching `isAdministrator(principal)` and `hasExplicitCompanyGrant`.
+  - Expanded `/api/v1/auth/me` (`publicPrincipal`) for `isAdministrator(principal)` (`system.access.all`) to include all keys from `permissionCatalog`, ensuring every client-side `user.permissions.includes(...)` check reflects administrator privileges accurately.
+  - Updated `crmRepository.listEligibleUsers` & `findEligibleUser` to treat `system.access.all` as eligible alongside the target permission so administrators appear in assignment dropdowns and can assign themselves cleanly.
+- **BOQ Creation & Chain Reassignment (`boq.service.ts`, `boq.routes.ts`, `BoqWorkspacePage.tsx`)**:
+  - Fixed `BoqWorkspacePage.tsx` `canCreate` check (removed invalid `admin.roles.manage` check; added backend-computed `canCreateBoq` + `system.access.all` fallback).
+  - Updated `boqService.createRevision` so administrators (`isAdministrator`) can create a new BOQ revision from any non-draft state (including creating a new revision after an `approved` BOQ on the same design revision).
+  - Added `PATCH .../boqs/:boqId/reassign-chain` (`boqService.reassignChain`) + `Reassign Chain` dialog in `BoqWorkspacePage.tsx` for administrators to reassign `costingUserId`, `purchaseHeadUserId`, and `adminApproverUserId` on non-approved BOQs.
+- **Design Job & Procurement Reassignment (`engineering.service.ts`, `engineering.routes.ts`, `DesignJobPage.tsx`, `procurement.service.ts`)**:
+  - Added `GET /api/v1/engineering/design-jobs/:jobId/eligible-assignees` and `POST /api/v1/engineering/design-jobs/:jobId/reassign` (`engineeringService.reassignJob`) + `Reassign` button/dialog on `DesignJobPage.tsx` so administrators can reassign Design Head and/or Design Engineer at any active design stage.
+  - Permitted `isAdministrator(principal)` overrides on `assignDesigner` and `procurementService.create` / `createOptions` non-admin self-separation checks.
+
+## Engineering → BOQ → Quotation UX Overhaul & Customer PDF Redaction — 2026-11-26
+
+- **Database Schema & Migration (`server/drizzle/0031_nice_menace.sql`)**:
+  - Added integer `sort_order` column (default `1`, positive check constraint, `(company_id, *_revision_id, sort_order)` index) to both `boq_lines` and `quotation_lines`, backfilled existing rows via `sort_order = line_number`.
+  - Verified with `drizzle-kit check` and applied via `drizzle-kit migrate`.
+- **Backend BOQ & Quotation Enhancements (`server/src/modules/engineering/`)**:
+  - Updated all BOQ and Quotation queries (`listLines`, `listEstimateLines`, `listBoqLines`, `listApprovedBoqCostLines`, `quotationLines` queries) to order deterministically by `sort_order ASC, id ASC` and copy `sortOrder` across BOQ → Quotation creation.
+  - Added endpoints (mounted under both `/design-jobs/:jobId/boqs/:boqId/...` and `/boqs/:boqId/...`):
+    - `PATCH .../lines/quantities` (`saveQuantitiesBatch`: batch inline quantity updates with unit `allowFractional` checks and optimistic `rowVersion`).
+    - `PATCH .../lines/reorder` (`reorderLines`: validates exact BOQ line set, shifts & renumbers `line_number`/`sort_order`, increments `rowVersion`).
+    - `POST .../apply-template` (`applyTemplate`: `replace` resets lines/approval chain from active template at `0.0000`; `append` inserts only non-present template items; `getWorkspace` also exposes `availableTemplates`).
+    - `POST .../lines` & `DELETE .../lines/:lineId` for draft catalogue item additions and removals with sequential renumbering.
+    - `POST .../lines/bulk-delete`, `PATCH .../lines/bulk-update` (`sectionName` / `quantity`), and `PATCH .../costing/bulk-markup` (`decimal.js` recalculation + preferred-option summary preservation).
+    - Stale-rate detection (`hasStaleRates`, `staleLineIds`, `staleEstimateLineIds` on `costing` revisions) and `POST .../costing/refresh-rates` (re-snapshots active `item_rate_versions` while preserving confirmed markups and auditing).
+  - Extended `quotationListQuerySchema` / `listQueue` with `commercialState`, `sectorId`, and `assigneeUserId` filters plus `customerName`/`sectorName` queue fields.
+- **Customer Quotation PDF Redaction (`boq-reference-v6-customer`, supersedes 2026-10-31 PDF columns)**:
+  - Bumped `quotationPdfTemplateVersion` to `boq-reference-v6-customer`. Already-issued historical PDF snapshots keep their stored bytes untouched.
+  - Removed `Supply`, `Installation`, `Markup`, and `Miscellaneous` columns/values/rate notes from `quotation.template.ts`, rendering 7 clean customer-facing columns (**Sr. No.**, **Description / Specification**, **Make / Model**, **Unit**, **Qty**, all-inclusive **Unit Rate**, **Amount**).
+  - Retained the full 11-column cost breakdown inside internal ERP views and `quotation.excel.ts`.
+- **Frontend UX Overhaul (`client/src/features/engineering/`)**:
+  - Overhauled `BoqWorkspacePage.tsx` and added `BoqAddItemPopover.tsx` (`BoqAddItemDialog`): direct inline `<Input>` quantity entry with `Enter` navigation and sticky unsaved-edits bar + `409 Conflict` reload banner, searchable `cmdk` Catalogue Item picker, active Template Switcher dialog (`append`/`replace`), drag-and-drop & up/down row reordering, per-row delete, `<Checkbox>` multi-select with animated floating bulk action bars (Edit Section, Set Quantity, Remove Selected, Bulk Markup %), stale-rate banner + refresh button, and in-workspace search + Section/Category/Quantity/Costing filters.
+  - Added in-workspace search & Section/Make/Selection filters to `QuotationWorkspacePage.tsx`, and URL-backed filters (`status`, `commercialState`, `sectorId`, `assigneeUserId`/`designerUserId`) + quick filter chips to `BoqQueuePage.tsx` and `QuotationQueuePage.tsx`.
+- **Verification (2026-11-26)**:
+  - `npm --workspace @fire-safety/server run db:check` & `db:migrate`: Clean (`0031_nice_menace.sql` applied).
+  - `npm run typecheck --workspaces --if-present`: 0 errors (client & server).
+  - `npm --workspace @fire-safety/server run lint` & targeted client `oxlint`: 0 errors, 0 warnings in server and all changed client files.
+  - `npm --workspace @fire-safety/client run build`: 0 errors.
+  - `npm --workspace @fire-safety/server test`: 31/31 test files passing, 142/142 tests passing (including `boq.workflow.test.ts`, expanded `boq.schemas.test.ts`, `quotation.pdf.test.ts`, and `quotation.excel.test.ts`).
+
+## Post-Conversion Opportunity Uploads, Reusable Dropzone, Enhanced Tables/Filters & Last-Editor Audit — 2026-11-26
+
+- **Database Schema & Migration (`server/drizzle/0030_odd_polaris.sql`)**:
+  - Added nullable FK `updated_by_user_id` (`users.id`, indexed on `(company_id, updated_by_user_id)`) to both `leads` and `design_jobs`, backfilled existing rows from latest `audit_events` (fallback to `created_by_user_id` / `authorized_by_user_id`), and updated CRM, Engineering, Quotation, and Admin handover repositories/services to persist `updatedByUserId` on every Lead and Design Job change.
+  - Verified with `drizzle-kit check` and applied cleanly via `drizzle-kit migrate`.
+- **Backend Filters & Opportunity Detail API**:
+  - Expanded `GET /api/v1/crm/leads` (`leadListQuerySchema`) with filters for `stage`, `serviceCategoryId`, `purposeId`, `sectorId`, `source`, `ownerUserId`, `updatedByUserId`, `converted`, `hasDesignJob`, `createdFrom`/`createdTo`, `updatedFrom`/`updatedTo`, expanded search (`phone`, `email`, `source`), sortable `ownerName`/`source`/`createdAt`, plus `ownerName`, `ownerIsOnLeave`, `lastModifiedByName`, `createdByName`, `opportunityId`, `designJobId`, and `GET /api/v1/crm/leads/filter-options`.
+  - Expanded `GET /api/v1/engineering/design-jobs` (`designJobListQuerySchema`) with filters for all 12 `status` values, `designerUserId` (`unassigned` or user UUID), `designHeadUserId`, `surveyRequested`, `deadlineState` (`overdue`, `due_soon`, `on_track`, `completed`, `unassigned`), `sectorId`, `serviceCategoryId`, `updatedByUserId`, `authorizedFrom`/`authorizedTo`, `updatedFrom`/`updatedTo`, expanded search, sortable `authorizedAt`/`designDueAt`/`customerName`, plus `customerName`, `sectorName`, `serviceCategoryName`, `lastModifiedByName`, `authorizedByName`, and `GET /api/v1/engineering/design-jobs/filter-options`.
+  - Added `GET /api/v1/crm/opportunities/:opportunityId` and enriched `listOpportunities` DTOs with `ownerName`, `siteName`, `leadStage`, `designJobId`, `designStatus`, and `attachmentCount`.
+- **Frontend UI & Reusable Upload Architecture**:
+  - Created reusable drag-and-drop `FileDropzone` (`client/src/components/FileDropzone.tsx`) supporting controlled queues with `LocalImageThumb` previews and immediate-upload callbacks across `ConvertLeadDialog.tsx`, `OpportunityDocumentsCard.tsx`, `DesignJobPage.tsx` (Survey Draft dialog, `SurveyRevisionCard`, `RevisionCard`), `VendorDetailSheet.tsx`, and `CrmImportDialog.tsx`.
+  - Created `OpportunityDocumentsCard.tsx` (`client/src/features/crm/OpportunityDocumentsCard.tsx`) enabling post-conversion Opportunity Document uploads, image thumbnail previews, and downloads inside `LeadWorkPanel.tsx` (when `lead.opportunityId` is present), `OpportunitiesPage.tsx` (new row-click `OpportunityDetailSheet`), and `DesignJobPage.tsx`.
+  - Widened and redesigned `ConvertLeadDialog.tsx` (`sm:max-w-5xl lg:max-w-6xl`, two-column layout, duplicate-customer alert, existing customer summary preview, and drag-and-drop document queue).
+  - Upgraded `ListToolbar.tsx` (`quickFilters`, dismissible `activeChips`, wider filter Sheet) and overhauled `LeadsPage.tsx` and `DesignJobsPage.tsx` tables, filter sheets, and last-modified-by displays.
+- **Verification (2026-11-26)**:
+  - `npm --workspace @fire-safety/server run db:check` & `db:migrate`: Clean (`0030_odd_polaris.sql` applied).
+  - `npm run typecheck --workspaces`: 0 errors.
+  - `npm --workspace @fire-safety/server run lint`: 0 warnings, 0 errors across 150 files.
+  - `npm --workspace @fire-safety/client run build`: 2,775 modules transformed, built in 5.87s.
+  - `npm --workspace @fire-safety/server test`: 30/30 test files passing (135/135 tests, including filter schema validation and updated actor tracking assertions).
+
+## Workflow Loopbacks, Strict Project-Start Gate, Opportunity Attachments & Employee Leave Handover — 2026-11-26
+
+- **Superseding Confirmed Decisions**:
+  - **Strict Quotation-Acceptance Gate (Supersedes D21, B-06, B-22)**: A project can ONLY be started after both a customer-approved CAD design revision AND a formally **Accepted** quotation revision exist for the opportunity (`409 Conflict` with `missingRequirements: ['accepted_quotation']` otherwise).
+  - **Opportunity Attachments & Pre-filled Conversion**: Raw Lead file uploads are disabled (`409 LEAD_ATTACHMENTS_DISABLED`; historical `lead_attachments` remain readable). Lead → Opportunity conversion (`POST /crm/leads/:id/qualify` & `/convert`) accepts pre-filled Customer/Contact/Site creation or existing customer linking alongside multi-file PDF/JPEG/PNG uploads stored in `opportunity_attachments`, readable and previewable/downloadable by assigned Design Heads and Design Engineers.
+  - **End-to-End Status Loopbacks**:
+    - Design Customer Abandonment (`abandoned` with evidence + `lossReason`) marks `design_jobs` as `abandoned`, cancels pending `engineering.design_deadline` `outbox_jobs`, marks Lead & Opportunity `lost`, and notifies sales and design staff.
+    - Manual Lead `lost` / `on_hold` / `resume` transactionally cancels/pauses/resumes linked Opportunity commercial state and active `design_jobs` (cancelling or re-enqueuing design deadline alerts; `outboxWorker.ts` skips `paused`/`cancelled`/`abandoned` jobs).
+    - Quotation Decline requires `leadOutcome` (`keep_negotiating`, `mark_lost`, `put_on_hold`) and updates Lead, Opportunity, and active Design Job accordingly.
+  - **Employee Leave & Task Reassignment Handover**: Admins/managers can load active workload (`GET /api/v1/admin/employees/:id/active-workload`), mark an active employee On Leave (`POST /api/v1/admin/employees/:id/leave-handover`), atomically reassign selected Leads, Reminders, Design Head/Engineer jobs (preserving `designerAssignedAt`, `designDueAt`, and `bufferExtensionsUsed`), and pending BOQ reviews while enforcing non-admin self-approval checks, and record `task_reassignment_logs`, `audit_events`, and covering notifications (`POST /api/v1/admin/employees/:id/return-from-leave` clears leave).
+- **Database Schema & Migration (`server/drizzle/0029_curved_edwin_jarvis.sql`)**:
+  - Added `abandoned` to `design_customer_decision` enum.
+  - Added `opportunity_attachments`, `task_reassignment_logs`, `users` leave columns (`is_on_leave`, `leave_start_date`, `leave_end_date`, `covering_employee_id`, `leave_reason`), `leads.previous_stage`, `opportunities.previous_commercial_state`, and `design_jobs` `previous_status`, `closed_reason`, `closed_at` + expanded `design_jobs_status_valid` CHECK (`paused`, `cancelled`, `abandoned`).
+  - Verified with `drizzle-kit check` and applied cleanly with `drizzle-kit migrate`.
+- **Frontend UX Updates**:
+  - Added `ConvertLeadDialog.tsx` (`<Sheet>` with RHF + Zod, pre-filled customer/contact/site fields, debounced duplicate detection, and multi-file upload), disabled raw Lead uploads in `LeadWorkPanel.tsx`, added Opportunity / Client Documents card with sandboxed preview dialog in `DesignJobPage.tsx`, added Lead Hold/Resume/Lost & Design Abandonment & Quotation Decline `leadOutcome` controls, gated `StartProjectDialog.tsx` on `acceptedQuotation`, and added `LeaveHandoverSheet.tsx` + `On Leave` badges in `EmployeesPage.tsx` and assignment selectors.
+  - Added site survey image uploads inside the "Create Site Survey Draft" dialog and `SurveyRevisionCard` for both assigned Design Engineers and Design Heads (`server/src/modules/engineering/engineering.service.ts`, `client/src/features/engineering/DesignJobPage.tsx`), added shared `LocalImageThumb` + `UploadedFilePreviewDialog` (`client/src/components/ImagePreview.tsx`) so uploaded images render actual thumbnails and click-to-enlarge previews instead of plain filenames across Survey Revisions, Opportunity Documents, Legacy Lead Attachments (`?inline=1` in `crm.routes.ts`), `ConvertLeadDialog.tsx`, and Vendor Documents (`GET /api/v1/masters/vendors/:id/documents/:documentId/download` + `VendorDetailSheet.tsx`).
+- **Demo Seed Refresh & Verification (2026-11-26)**:
+  - Updated `server/src/scripts/resetDemo.ts` (clears leave flags before removing `DEMO-%` users) and `server/src/scripts/seedDemo.ts` (adds `DEMO-DE2`/`DEMO-DH2` covering staff + valid sample PNG files on Opportunity Documents and Survey Revisions), then ran `npm --workspace @fire-safety/server run reset:demo` and `npm --workspace @fire-safety/server run seed:demo` cleanly (10 demo users, 3 customers, 28 lead fixtures, 22 opportunities, 21 design jobs, 1 survey draft, 2 projects).
+  - `npm run typecheck --workspaces`: 0 errors across `@fire-safety/client` and `@fire-safety/server`.
+  - `npm --workspace @fire-safety/server run lint`: 0 warnings, 0 errors across 150 files (`oxlint src`).
+  - `npm --workspace @fire-safety/server test`: 30/30 test files passing (133/133 tests, including `crm.workflow.test.ts`, `engineering.loopbacks.test.ts`, `admin.leave.test.ts`, `project.service.test.ts`, and `app.test.ts` with loopback binding enabled).
+  - `npm --workspace @fire-safety/client run build`: 2,773 modules transformed, built production bundle cleanly in 6.21s.
+  - Also reconciled stale `phase.md` table entry for P6 (already implemented locally on 2026-11-11).
+
 ## Phase 8: Quality, Inspection, Snag Lists & Statutory Handover — 2026-11-23
 
 - **Context & Invariants (Invariant 10)**:

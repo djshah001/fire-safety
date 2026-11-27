@@ -1,10 +1,10 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { AppError } from '../../core/errors/appError.js';
 import { getRequestId } from '../../core/http/requestContext.js';
 import { sendData } from '../../core/http/response.js';
-import { requireAuthentication, requireCsrf, requirePermission } from '../auth/auth.middleware.js';
+import { hasPermission, requireAuthentication, requireCsrf, requirePermission } from '../auth/auth.middleware.js';
 import { getPrincipal } from '../auth/auth.types.js';
-import { createPrivateUpload, resolvePrivateFile } from '../../infrastructure/storage/localFileStorage.js';
+import { createPrivateUpload, removePrivateFile, resolvePrivateFile } from '../../infrastructure/storage/localFileStorage.js';
 import {
   activityInputSchema,
   authorizeDesignInputSchema,
@@ -19,6 +19,7 @@ import {
   customerInputSchema,
   customerListQuerySchema,
   designAssigneeQuerySchema,
+  duplicateHintsInputSchema,
   crmImportTypeParamsSchema,
   idParamsSchema,
   leadInputSchema,
@@ -26,6 +27,8 @@ import {
   leadChildParamsSchema,
   leadListQuerySchema,
   leadStageInputSchema,
+  opportunityAttachmentParamsSchema,
+  opportunityChildParamsSchema,
   opportunityListQuerySchema,
   qualifyLeadInputSchema,
   reminderInputSchema,
@@ -118,7 +121,12 @@ function leadDto(lead: {
   id: string; leadNumber: string; inquiryName: string; companyName: string | null;
   contactName: string; phone: string | null; email: string | null; source: string;
   stage: 'new' | 'contacted' | 'qualified' | 'design_authorized' | 'commercial_negotiation' | 'won' | 'lost' | 'on_hold';
-  ownerUserId: string; rowVersion: number; updatedAt: Date; serviceCategoryName?: string;
+  ownerUserId: string; ownerName?: string; ownerIsOnLeave?: boolean;
+  createdByUserId?: string; createdByName?: string;
+  lastModifiedByUserId?: string; lastModifiedByName?: string;
+  opportunityId?: string | null; designJobId?: string | null; designStatus?: string | null;
+  purposeId?: string; purposeName?: string; sectorId?: string; sectorName?: string;
+  rowVersion: number; updatedAt: Date; serviceCategoryName?: string;
   address?: string | null; serviceCategoryId?: string; customerId?: string | null;
   primaryContactId?: string | null; siteId?: string | null; lostReason?: string | null;
   qualificationNotes?: string | null; createdAt?: Date;
@@ -134,7 +142,21 @@ function leadDto(lead: {
     source: lead.source,
     stage: lead.stage,
     ownerUserId: lead.ownerUserId,
+    ownerName: lead.ownerName,
+    ownerIsOnLeave: lead.ownerIsOnLeave,
+    createdByUserId: lead.createdByUserId,
+    createdByName: lead.createdByName,
+    lastModifiedByUserId: lead.lastModifiedByUserId,
+    lastModifiedByName: lead.lastModifiedByName,
+    opportunityId: lead.opportunityId ?? null,
+    designJobId: lead.designJobId ?? null,
+    designStatus: lead.designStatus ?? null,
+    purposeId: lead.purposeId,
+    purposeName: lead.purposeName,
+    sectorId: lead.sectorId,
+    sectorName: lead.sectorName,
     rowVersion: lead.rowVersion,
+    createdAt: lead.createdAt,
     updatedAt: lead.updatedAt,
     ...('serviceCategoryName' in lead ? { serviceCategoryName: lead.serviceCategoryName } : {}),
     ...('address' in lead ? {
@@ -145,7 +167,6 @@ function leadDto(lead: {
       siteId: lead.siteId,
       lostReason: lead.lostReason,
       qualificationNotes: lead.qualificationNotes,
-      createdAt: lead.createdAt,
     } : {}),
   };
 }
@@ -153,18 +174,27 @@ function leadDto(lead: {
 function opportunityDto(opportunity: {
   id: string; leadId: string; customerId: string; siteId: string | null; title: string;
   commercialState: 'unawarded' | 'quoted' | 'awarded' | 'lost' | 'on_hold'; rowVersion: number;
-  leadNumber?: string; customerName?: string; updatedAt: Date;
+  leadNumber?: string; leadStage?: string; customerName?: string; siteName?: string | null;
+  ownerName?: string; designJobId?: string | null; designStatus?: string | null;
+  attachmentCount?: number; createdAt?: Date; updatedAt: Date;
 }) {
   return {
     id: opportunity.id,
     leadId: opportunity.leadId,
     leadNumber: opportunity.leadNumber,
+    leadStage: opportunity.leadStage,
     title: opportunity.title,
     customerId: opportunity.customerId,
     customerName: opportunity.customerName,
     siteId: opportunity.siteId,
+    siteName: opportunity.siteName ?? null,
+    ownerName: opportunity.ownerName,
+    designJobId: opportunity.designJobId ?? null,
+    designStatus: opportunity.designStatus ?? null,
+    attachmentCount: opportunity.attachmentCount,
     commercialState: opportunity.commercialState,
     rowVersion: opportunity.rowVersion,
+    createdAt: opportunity.createdAt,
     updatedAt: opportunity.updatedAt,
   };
 }
@@ -181,6 +211,23 @@ function attachmentDto(attachment: {
     checksumSha256: attachment.checksumSha256,
     createdByUserId: attachment.createdByUserId,
     createdByName: attachment.createdByName,
+    createdAt: attachment.createdAt,
+  };
+}
+
+function opportunityAttachmentDto(attachment: {
+  id: string; opportunityId: string; originalName: string; mimeType: string; sizeBytes: number; checksumSha256: string;
+  uploadedByUserId: string; createdAt: Date; uploadedByName?: string;
+}) {
+  return {
+    id: attachment.id,
+    opportunityId: attachment.opportunityId,
+    originalName: attachment.originalName,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+    checksumSha256: attachment.checksumSha256,
+    uploadedByUserId: attachment.uploadedByUserId,
+    uploadedByName: attachment.uploadedByName,
     createdAt: attachment.createdAt,
   };
 }
@@ -211,6 +258,7 @@ export function createCrmRouter() {
   const attachmentUpload = createPrivateUpload({
     allowedMimeTypes: new Set(['application/pdf', 'image/jpeg', 'image/png']),
     maxFileBytes: 20 * 1024 * 1024,
+    maxFiles: 10,
   });
   const importUpload = createPrivateUpload({
     allowedMimeTypes: new Set([
@@ -275,6 +323,18 @@ export function createCrmRouter() {
     sendData(request, response, {
       customer: customerDetailDto(result.customer), duplicateHints: result.duplicateHints,
     }, 201);
+  });
+  router.post('/customers/duplicate-hints', requireCsrf, async (request, response) => {
+    const principal = getPrincipal(request);
+    if (
+      !hasPermission(principal, 'crm.customer.read') &&
+      !hasPermission(principal, 'crm.lead.qualify') &&
+      !hasPermission(principal, 'crm.lead.write')
+    ) {
+      throw new AppError('FORBIDDEN', 'You do not have permission to check customer duplicates.', 403);
+    }
+    const hints = await crmService.checkDuplicateHints(principal, duplicateHintsInputSchema.parse(request.body));
+    sendData(request, response, { hints });
   });
   router.get('/customers/:id', requirePermission('crm.customer.read'), async (request, response) => {
     const { id } = idParamsSchema.parse(request.params);
@@ -368,6 +428,9 @@ export function createCrmRouter() {
     const result = await crmService.listLeads(getPrincipal(request), leadListQuerySchema.parse(request.query));
     sendData(request, response, { ...result, items: result.items.map(leadDto) });
   });
+  router.get('/leads/filter-options', requirePermission('crm.lead.read'), async (request, response) => {
+    sendData(request, response, await crmService.listLeadFilterOptions(getPrincipal(request)));
+  });
   router.post('/leads', requireCsrf, requirePermission('crm.lead.write'), async (request, response) => {
     const result = await crmService.createLead(
       getPrincipal(request), leadInputSchema.parse(request.body), getRequestId(request),
@@ -421,29 +484,33 @@ export function createCrmRouter() {
     '/leads/:leadId/attachments',
     requireCsrf,
     requirePermission('crm.lead.write'),
-    async (request, _response, next) => {
-      try {
-        const { leadId } = leadChildParamsSchema.parse(request.params);
-        await crmService.getLead(getPrincipal(request), leadId);
-        next();
-      } catch (error) {
-        next(error);
-      }
-    },
-    attachmentUpload.single('file'),
-    async (request, response) => {
+    async (request, _response) => {
       const { leadId } = leadChildParamsSchema.parse(request.params);
-      if (!request.file) throw new AppError('VALIDATION_ERROR', 'Choose a file to upload.', 422);
-      const attachment = await crmService.createAttachment(
-        getPrincipal(request), leadId, request.file, getRequestId(request),
+      await crmService.getLead(getPrincipal(request), leadId);
+      throw new AppError(
+        'LEAD_ATTACHMENTS_DISABLED',
+        'Attachments are disabled on raw leads. Upload documents when converting the lead to an opportunity.',
+        409,
       );
-      sendData(request, response, { attachment: attachmentDto(attachment) }, 201);
     },
   );
   router.get('/leads/:leadId/attachments/:attachmentId/download', requirePermission('crm.lead.read'), async (request, response, next) => {
     const { leadId, attachmentId } = leadAttachmentParamsSchema.parse(request.params);
     const attachment = await crmService.getAttachment(getPrincipal(request), leadId, attachmentId);
-    response.download(resolvePrivateFile(attachment.storageName), attachment.originalName, (error) => {
+    const filePath = resolvePrivateFile(attachment.storageName);
+    if (request.query.inline === '1') {
+      response
+        .status(200)
+        .setHeader('Content-Type', attachment.mimeType)
+        .setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(attachment.originalName)}"`)
+        .setHeader('X-Content-Type-Options', 'nosniff')
+        .setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; object-src 'self'; frame-ancestors 'self'; sandbox")
+        .sendFile(filePath, { dotfiles: 'allow' }, (error) => {
+          if (error && !response.headersSent) next(error);
+        });
+      return;
+    }
+    response.download(filePath, attachment.originalName, (error) => {
       if (error && !response.headersSent) next(error);
     });
   });
@@ -454,13 +521,49 @@ export function createCrmRouter() {
     );
     sendData(request, response, { lead: leadDto(lead) });
   });
-  router.post('/leads/:id/qualify', requireCsrf, requirePermission('crm.lead.qualify'), async (request, response) => {
-    const { id } = idParamsSchema.parse(request.params);
-    const result = await crmService.qualifyLead(
-      getPrincipal(request), id, qualifyLeadInputSchema.parse(request.body), getRequestId(request),
-    );
-    sendData(request, response, { opportunity: opportunityDto(result.opportunity), replayed: result.replayed }, result.replayed ? 200 : 201);
-  });
+
+  const maybeUploadOpportunityFiles = (request: Request, response: Response, next: NextFunction) => {
+    if (request.is('multipart/form-data')) {
+      attachmentUpload.array('files', 10)(request, response, next);
+      return;
+    }
+    next();
+  };
+
+  const handleQualifyLead = async (request: Request, response: Response) => {
+    const files = Array.isArray(request.files) ? request.files : [];
+    try {
+      const { id } = idParamsSchema.parse(request.params);
+      let rawBody: unknown = request.body;
+      if (typeof request.body?.payload === 'string') {
+        try {
+          rawBody = JSON.parse(request.body.payload);
+        } catch {
+          throw new AppError('VALIDATION_ERROR', 'Invalid conversion payload.', 422);
+        }
+      }
+      const input = qualifyLeadInputSchema.parse(rawBody);
+      const result = await crmService.qualifyLead(
+        getPrincipal(request), id, input, getRequestId(request), files,
+      );
+      sendData(
+        request,
+        response,
+        {
+          opportunity: opportunityDto(result.opportunity),
+          attachments: result.attachments.map(opportunityAttachmentDto),
+          replayed: result.replayed,
+        },
+        result.replayed ? 200 : 201,
+      );
+    } catch (error) {
+      await Promise.all(files.map((file) => removePrivateFile(file.filename)));
+      throw error;
+    }
+  };
+
+  router.post('/leads/:id/qualify', requireCsrf, requirePermission('crm.lead.qualify'), maybeUploadOpportunityFiles, handleQualifyLead);
+  router.post('/leads/:id/convert', requireCsrf, requirePermission('crm.lead.qualify'), maybeUploadOpportunityFiles, handleQualifyLead);
   router.post('/leads/:id/authorize-design', requireCsrf, requirePermission('crm.lead.authorize_design'), async (request, response) => {
     const { id } = idParamsSchema.parse(request.params);
     const result = await crmService.authorizeDesign(
@@ -473,6 +576,53 @@ export function createCrmRouter() {
       getPrincipal(request), opportunityListQuerySchema.parse(request.query),
     );
     sendData(request, response, { ...result, items: result.items.map(opportunityDto) });
+  });
+  router.get('/opportunities/:opportunityId', requirePermission('crm.opportunity.read'), async (request, response) => {
+    const { opportunityId } = opportunityChildParamsSchema.parse(request.params);
+    sendData(request, response, { opportunity: await crmService.getOpportunityDetail(getPrincipal(request), opportunityId) });
+  });
+  router.get('/opportunities/:opportunityId/attachments', async (request, response) => {
+    const { opportunityId } = opportunityChildParamsSchema.parse(request.params);
+    const items = await crmService.listOpportunityAttachments(getPrincipal(request), opportunityId);
+    sendData(request, response, { items: items.map(opportunityAttachmentDto) });
+  });
+  router.post(
+    '/opportunities/:opportunityId/attachments',
+    requireCsrf,
+    attachmentUpload.array('files', 10),
+    async (request, response) => {
+      const files = Array.isArray(request.files) ? request.files : [];
+      try {
+        const { opportunityId } = opportunityChildParamsSchema.parse(request.params);
+        const items = await crmService.createOpportunityAttachments(
+          getPrincipal(request), opportunityId, files, getRequestId(request),
+        );
+        sendData(request, response, { items: items.map(opportunityAttachmentDto) }, 201);
+      } catch (error) {
+        await Promise.all(files.map((file) => removePrivateFile(file.filename)));
+        throw error;
+      }
+    },
+  );
+  router.get('/opportunities/:opportunityId/attachments/:attachmentId/download', async (request, response, next) => {
+    const { opportunityId, attachmentId } = opportunityAttachmentParamsSchema.parse(request.params);
+    const attachment = await crmService.getOpportunityAttachment(getPrincipal(request), opportunityId, attachmentId);
+    const filePath = resolvePrivateFile(attachment.storageName);
+    if (request.query.inline === '1') {
+      response
+        .status(200)
+        .setHeader('Content-Type', attachment.mimeType)
+        .setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(attachment.originalName)}"`)
+        .setHeader('X-Content-Type-Options', 'nosniff')
+        .setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; object-src 'self'; frame-ancestors 'self'; sandbox")
+        .sendFile(filePath, { dotfiles: 'allow' }, (error) => {
+          if (error && !response.headersSent) next(error);
+        });
+      return;
+    }
+    response.download(filePath, attachment.originalName, (error) => {
+      if (error && !response.headersSent) next(error);
+    });
   });
 
   return router;

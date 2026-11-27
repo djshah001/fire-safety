@@ -12,8 +12,10 @@ import {
   estimateCostLines,
   leads,
   leadMembers,
+  marketSectors,
   opportunities,
   opportunityMembers,
+  outboxJobs,
   quotationCustomerDecisions,
   quotationIssueDocuments,
   quotationLines,
@@ -25,7 +27,7 @@ import {
 
 export function createQuotationRepository(executor: DatabaseExecutor) {
   return {
-    async listQueue(access: { companyId: string; userId: string }, input: { search?: string; status?: typeof quotationRevisions.$inferSelect.status; limit: number; offset: number; sort: 'quotationNumber' | 'title' | 'status' | 'updatedAt' | 'grandTotal'; direction: 'asc' | 'desc' }) {
+    async listQueue(access: { companyId: string; userId: string }, input: { search?: string; status?: typeof quotationRevisions.$inferSelect.status; commercialState?: typeof opportunities.$inferSelect.commercialState; sectorId?: string; assigneeUserId?: string; limit: number; offset: number; sort: 'quotationNumber' | 'title' | 'status' | 'updatedAt' | 'grandTotal'; direction: 'asc' | 'desc' }) {
       const latestNumbers = executor.select({
         quotationId: quotationRevisions.quotationId,
         revisionNumber: max(quotationRevisions.revisionNumber).as('latest_revision_number'),
@@ -45,8 +47,13 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
       );
       const filters = [eq(designJobs.companyId, access.companyId), accessFilter!];
       if (input.status) filters.push(eq(latest.status, input.status));
+      if (input.commercialState) filters.push(eq(opportunities.commercialState, input.commercialState));
+      if (input.sectorId) filters.push(eq(leads.sectorId, input.sectorId));
+      if (input.assigneeUserId) {
+        filters.push(or(eq(designJobs.designerUserId, input.assigneeUserId), eq(designJobs.designHeadUserId, input.assigneeUserId))!);
+      }
       if (input.search) filters.push(or(
-        ilike(designJobs.title, `%${input.search}%`), ilike(leads.leadNumber, `%${input.search}%`), ilike(quotations.quotationNumber, `%${input.search}%`),
+        ilike(designJobs.title, `%${input.search}%`), ilike(leads.leadNumber, `%${input.search}%`), ilike(quotations.quotationNumber, `%${input.search}%`), ilike(customers.displayName, `%${input.search}%`),
       )!);
       const where = and(...filters);
       const sortColumn = input.sort === 'quotationNumber' ? quotations.quotationNumber
@@ -59,6 +66,9 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
         jobId: designJobs.id,
         jobTitle: designJobs.title,
         leadNumber: leads.leadNumber,
+        customerName: customers.displayName,
+        sectorId: leads.sectorId,
+        sectorName: marketSectors.name,
         opportunityCommercialState: opportunities.commercialState,
         quotationId: quotations.id,
         quotationNumber: quotations.quotationNumber,
@@ -71,7 +81,9 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
       };
       const from = () => executor.select(baseFields).from(designJobs)
         .innerJoin(leads, eq(leads.id, designJobs.leadId))
+        .innerJoin(marketSectors, eq(marketSectors.id, leads.sectorId))
         .innerJoin(opportunities, eq(opportunities.id, designJobs.opportunityId))
+        .innerJoin(customers, eq(customers.id, opportunities.customerId))
         .leftJoin(quotations, eq(quotations.designJobId, designJobs.id))
         .leftJoin(latestNumbers, eq(latestNumbers.quotationId, quotations.id))
         .leftJoin(latest, and(eq(latest.quotationId, latestNumbers.quotationId), eq(latest.revisionNumber, latestNumbers.revisionNumber)));
@@ -79,7 +91,9 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
         from().where(where).orderBy(order, asc(designJobs.id)).limit(input.limit).offset(input.offset),
         executor.select({ value: count() }).from(designJobs)
           .innerJoin(leads, eq(leads.id, designJobs.leadId))
+          .innerJoin(marketSectors, eq(marketSectors.id, leads.sectorId))
           .innerJoin(opportunities, eq(opportunities.id, designJobs.opportunityId))
+          .innerJoin(customers, eq(customers.id, opportunities.customerId))
           .leftJoin(quotations, eq(quotations.designJobId, designJobs.id))
           .leftJoin(latestNumbers, eq(latestNumbers.quotationId, quotations.id))
           .leftJoin(latest, and(eq(latest.quotationId, latestNumbers.quotationId), eq(latest.revisionNumber, latestNumbers.revisionNumber)))
@@ -133,7 +147,7 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
     listBoqLines(companyId: string, boqRevisionId: string) {
       return executor.select().from(boqLines).where(and(
         eq(boqLines.companyId, companyId), eq(boqLines.boqRevisionId, boqRevisionId),
-      )).orderBy(asc(boqLines.lineNumber));
+      )).orderBy(asc(boqLines.sortOrder), asc(boqLines.id));
     },
 
     listApprovedBoqCostLines(companyId: string, boqRevisionId: string) {
@@ -152,7 +166,7 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
       }).from(boqLines).innerJoin(estimateCostLines, and(
         eq(estimateCostLines.boqLineId, boqLines.id), eq(estimateCostLines.boqRevisionId, boqRevisionId),
       )).where(and(eq(boqLines.companyId, companyId), eq(boqLines.boqRevisionId, boqRevisionId)))
-        .orderBy(asc(boqLines.lineNumber));
+        .orderBy(asc(boqLines.sortOrder), asc(boqLines.id));
     },
 
     listCostOptionsForBoqLines(companyId: string, boqLineIds: string[]) {
@@ -228,7 +242,7 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
     listLines(companyId: string, revisionId: string) {
       return executor.select().from(quotationLines).where(and(
         eq(quotationLines.companyId, companyId), eq(quotationLines.quotationRevisionId, revisionId),
-      )).orderBy(asc(quotationLines.lineNumber));
+      )).orderBy(asc(quotationLines.sortOrder), asc(quotationLines.id));
     },
 
     async findLine(companyId: string, revisionId: string, lineId: string) {
@@ -319,20 +333,117 @@ export function createQuotationRepository(executor: DatabaseExecutor) {
       return row;
     },
 
-    async setCommercialState(companyId: string, opportunityId: string, state: 'quoted' | 'awarded') {
-      const allowed = state === 'quoted' ? ['unawarded'] as const : ['unawarded', 'quoted'] as const;
-      const [row] = await executor.update(opportunities).set({ commercialState: state, rowVersion: sql`${opportunities.rowVersion} + 1`, updatedAt: new Date() }).where(and(
+    async setCommercialState(
+      companyId: string,
+      opportunityId: string,
+      state: 'quoted' | 'awarded' | 'lost' | 'on_hold',
+      previousCommercialState: typeof opportunities.$inferSelect.commercialState | null = null,
+    ) {
+      const allowed = state === 'quoted'
+        ? ['unawarded'] as const
+        : state === 'awarded'
+          ? ['unawarded', 'quoted', 'on_hold'] as const
+          : ['unawarded', 'quoted', 'on_hold'] as const;
+      const [row] = await executor.update(opportunities).set({
+        commercialState: state,
+        previousCommercialState,
+        rowVersion: sql`${opportunities.rowVersion} + 1`,
+        updatedAt: new Date(),
+      }).where(and(
         eq(opportunities.companyId, companyId), eq(opportunities.id, opportunityId), inArray(opportunities.commercialState, allowed),
       )).returning();
       return row;
     },
 
-    async setLeadStage(companyId: string, leadId: string, stage: 'commercial_negotiation' | 'won') {
-      const allowed = stage === 'commercial_negotiation' ? ['qualified', 'design_authorized'] as const : ['qualified', 'design_authorized', 'commercial_negotiation'] as const;
-      const [row] = await executor.update(leads).set({ stage, rowVersion: sql`${leads.rowVersion} + 1`, updatedAt: new Date() }).where(and(
+    async setLeadStage(
+      companyId: string,
+      leadId: string,
+      stage: 'commercial_negotiation' | 'won' | 'lost' | 'on_hold',
+      options: {
+        lostReason?: string | null;
+        previousStage?: typeof leads.$inferSelect.stage | null;
+        updatedByUserId?: string;
+      } = {},
+    ) {
+      const allowed = stage === 'commercial_negotiation'
+        ? ['qualified', 'design_authorized'] as const
+        : ['qualified', 'design_authorized', 'commercial_negotiation', 'on_hold'] as const;
+      const [row] = await executor.update(leads).set({
+        stage,
+        previousStage: options.previousStage ?? null,
+        lostReason: options.lostReason ?? null,
+        ...(options.updatedByUserId ? { updatedByUserId: options.updatedByUserId } : {}),
+        rowVersion: sql`${leads.rowVersion} + 1`,
+        updatedAt: new Date(),
+      }).where(and(
         eq(leads.companyId, companyId), eq(leads.id, leadId), inArray(leads.stage, allowed),
       )).returning();
       return row;
+    },
+
+    async findDesignJobSnapshot(companyId: string, jobId: string) {
+      const [job] = await executor.select({
+        id: designJobs.id,
+        title: designJobs.title,
+        status: designJobs.status,
+        designerUserId: designJobs.designerUserId,
+        designHeadUserId: designJobs.designHeadUserId,
+      }).from(designJobs).where(and(
+        eq(designJobs.companyId, companyId), eq(designJobs.id, jobId),
+      )).limit(1);
+      return job;
+    },
+
+    async freezeDesignJobOnQuotationOutcome(
+      companyId: string,
+      jobId: string,
+      outcome: 'mark_lost' | 'put_on_hold',
+      currentStatus: string,
+      reason: string,
+      now: Date,
+      updatedByUserId?: string,
+    ) {
+      if (['cancelled', 'abandoned'].includes(currentStatus)) return;
+      if (outcome === 'mark_lost') {
+        await executor.update(designJobs).set({
+          status: 'cancelled',
+          previousStatus: null,
+          closedReason: reason,
+          closedAt: now,
+          ...(updatedByUserId ? { updatedByUserId } : {}),
+          rowVersion: sql`${designJobs.rowVersion} + 1`,
+          updatedAt: now,
+        }).where(and(eq(designJobs.companyId, companyId), eq(designJobs.id, jobId)));
+      } else if (currentStatus !== 'paused') {
+        await executor.update(designJobs).set({
+          status: 'paused',
+          previousStatus: currentStatus,
+          ...(updatedByUserId ? { updatedByUserId } : {}),
+          rowVersion: sql`${designJobs.rowVersion} + 1`,
+          updatedAt: now,
+        }).where(and(eq(designJobs.companyId, companyId), eq(designJobs.id, jobId)));
+      }
+      await executor.update(outboxJobs).set({
+        status: 'cancelled',
+        updatedAt: now,
+      }).where(and(
+        eq(outboxJobs.companyId, companyId),
+        eq(outboxJobs.type, 'engineering.design_deadline'),
+        eq(outboxJobs.status, 'pending'),
+        sql`${outboxJobs.payload}->>'jobId' = ${jobId}`,
+      ));
+    },
+
+    async listSalesAndDesignRecipients(companyId: string, leadId: string, opportunityId: string) {
+      const [leadRows, oppRows] = await Promise.all([
+        executor.select({ userId: leadMembers.userId }).from(leadMembers).where(and(
+          eq(leadMembers.companyId, companyId), eq(leadMembers.leadId, leadId),
+        )),
+        executor.select({ userId: opportunityMembers.userId }).from(opportunityMembers).where(and(
+          eq(opportunityMembers.companyId, companyId), eq(opportunityMembers.opportunityId, opportunityId),
+        )),
+      ]);
+      return [...new Set([...leadRows.map((r) => r.userId), ...oppRows.map((r) => r.userId)])];
     },
   };
 }

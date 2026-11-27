@@ -8,7 +8,7 @@ import {
   type PdfQuotation,
 } from "./quotation.template.js";
 
-export const quotationPdfTemplateVersion = "boq-reference-v5-columns";
+export const quotationPdfTemplateVersion = "boq-reference-v6-customer";
 
 async function logoDataUrl() {
   if (!env.PDF_LOGO_PATH) return undefined;

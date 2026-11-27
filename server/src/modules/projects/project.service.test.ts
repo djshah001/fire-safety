@@ -118,3 +118,160 @@ describe('ProjectService - Team Member Management', () => {
     );
   });
 });
+
+describe('ProjectService - Strict Quotation Acceptance Gate', () => {
+  const companyId = 'b0000000-0000-4000-8000-000000000001';
+  const starterId = 'a0000000-0000-4000-8000-000000000010';
+  const pmId = 'a0000000-0000-4000-8000-000000000011';
+  const jobId = 'c0000000-0000-4000-8000-000000000001';
+  const oppId = 'd0000000-0000-4000-8000-000000000001';
+  const customerId = 'e0000000-0000-4000-8000-000000000001';
+  const siteId = 'e1000000-0000-4000-8000-000000000001';
+  const designRevId = 'f1000000-0000-4000-8000-000000000001';
+  const decisionId = 'f2000000-0000-4000-8000-000000000001';
+  const quoteRevId = 'f3000000-0000-4000-8000-000000000001';
+  const quoteDecisionId = 'f4000000-0000-4000-8000-000000000001';
+
+  const starterPrincipal: AuthenticatedPrincipal = {
+    sessionId: 'session-start',
+    userId: starterId,
+    companyId,
+    name: 'Project Starter',
+    email: 'starter@firesafety.test',
+    mustChangePassword: false,
+    grants: [
+      { permissionCode: 'project.start', scopeKind: 'company', scopeId: null, source: 'role' },
+      { permissionCode: 'project.read', scopeKind: 'company', scopeId: null, source: 'role' },
+    ],
+  };
+
+  it('blocks project start with 409 Conflict when no accepted quotation exists', async () => {
+    const service = new ProjectService({} as never);
+    vi.spyOn(await import('../engineering/engineering.repository.js'), 'createEngineeringRepository').mockReturnValue({
+      findJob: vi.fn().mockResolvedValue({ id: jobId, opportunityId: oppId }),
+    } as never);
+    vi.spyOn(await import('./project.repository.js'), 'createProjectRepository').mockReturnValue({
+      startContext: vi.fn().mockResolvedValue({
+        designJobId: jobId,
+        opportunityId: oppId,
+        customerId,
+        siteId,
+        siteName: 'Plant 1',
+        siteStatus: 'active',
+        siteCustomerId: customerId,
+        customerName: 'Acme Corp',
+        title: 'Hydrant Job',
+        commercialState: 'quoted',
+        timezone: 'Asia/Kolkata',
+      }),
+      acceptedQuotation: vi.fn().mockResolvedValue(undefined),
+    } as never);
+
+    await expect(
+      service.start(
+        starterPrincipal,
+        jobId,
+        {
+          title: 'Project Alpha',
+          designRevisionId: designRevId,
+          projectManagerUserId: pmId,
+          memberUserIds: [],
+          startDate: '2026-11-01',
+          targetCompletionDate: '2026-12-01',
+          startReason: 'Starting project',
+          idempotencyKey: 'key-no-quote',
+        },
+        'req-no-quote',
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      details: { missingRequirements: ['accepted_quotation'] },
+    });
+  });
+
+  it('attaches both design and commercial baselines when an accepted quotation exists', async () => {
+    const service = new ProjectService({
+      transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({})),
+    } as never);
+    vi.spyOn(await import('../engineering/engineering.repository.js'), 'createEngineeringRepository').mockReturnValue({
+      findJob: vi.fn().mockResolvedValue({ id: jobId, opportunityId: oppId }),
+    } as never);
+    const attachCommercialBaseline = vi.fn().mockResolvedValue({});
+    const createDesignBaseline = vi.fn().mockResolvedValue({});
+    const mockRepo = {
+      startContext: vi.fn().mockResolvedValue({
+        designJobId: jobId,
+        opportunityId: oppId,
+        customerId,
+        siteId,
+        siteName: 'Plant 1',
+        siteStatus: 'active',
+        siteCustomerId: customerId,
+        customerName: 'Acme Corp',
+        title: 'Hydrant Job',
+        commercialState: 'awarded',
+        timezone: 'Asia/Kolkata',
+      }),
+      acceptedQuotation: vi.fn().mockResolvedValue({
+        revisionId: quoteRevId,
+        revisionNumber: 1,
+        title: 'Q1',
+        currency: 'INR',
+        grandTotal: '150000.00',
+        decisionId: quoteDecisionId,
+        evidenceReference: 'PO-1234',
+        customerOrderReference: 'PO-1234',
+        recordedAt: new Date('2026-11-20T10:00:00Z'),
+        recordedByUserId: starterId,
+      }),
+      listApprovedDesigns: vi.fn().mockResolvedValue([
+        { id: designRevId, revisionNumber: 1, title: 'R1', decisionId, evidenceReference: 'Client email' },
+      ]),
+      listApprovedBoqs: vi.fn().mockResolvedValue([]),
+      reserveIdempotency: vi.fn().mockResolvedValue({ id: 'idem-1' }),
+      findByOpportunity: vi.fn().mockResolvedValue(undefined),
+      allocateNumber: vi.fn().mockResolvedValue('FS-PRJ-2026-000009'),
+      create: vi.fn().mockResolvedValue({ id: 'prj-9', projectNumber: 'FS-PRJ-2026-000009', title: 'Project Alpha' }),
+      createMembers: vi.fn().mockResolvedValue([]),
+      createDesignBaseline,
+      attachCommercialBaseline,
+      completeIdempotency: vi.fn().mockResolvedValue(undefined),
+      find: vi.fn().mockResolvedValue({ id: 'prj-9', projectNumber: 'FS-PRJ-2026-000009', title: 'Project Alpha' }),
+      detailParts: vi.fn().mockResolvedValue({ members: [], designBaseline: null, commercialBaseline: null }),
+    };
+    vi.spyOn(await import('./project.repository.js'), 'createProjectRepository').mockReturnValue(mockRepo as never);
+    vi.spyOn(await import('../crm/crm.repository.js'), 'createCrmRepository').mockReturnValue({
+      findEligibleUser: vi.fn().mockResolvedValue({ id: pmId, name: 'PM', email: 'pm@test' }),
+    } as never);
+    vi.spyOn(await import('../notifications/notification.repository.js'), 'createNotificationRepository').mockReturnValue({
+      createMany: vi.fn().mockResolvedValue([]),
+    } as never);
+    vi.spyOn(await import('../auth/auth.repository.js'), 'createAuthRepository').mockReturnValue({
+      appendAuditEvent: vi.fn().mockResolvedValue({}),
+    } as never);
+
+    const res = await service.start(
+      starterPrincipal,
+      jobId,
+      {
+        title: 'Project Alpha',
+        designRevisionId: designRevId,
+        projectManagerUserId: pmId,
+        memberUserIds: [],
+        startDate: '2026-11-01',
+        targetCompletionDate: '2026-12-01',
+        startReason: 'Accepted PO received',
+        idempotencyKey: 'key-with-quote',
+      },
+      'req-with-quote',
+    );
+    expect(res.project.id).toBe('prj-9');
+    expect(createDesignBaseline).toHaveBeenCalledTimes(1);
+    expect(attachCommercialBaseline).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quotationRevisionId: quoteRevId,
+        quotationCustomerDecisionId: quoteDecisionId,
+      }),
+    );
+  });
+});

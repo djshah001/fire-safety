@@ -191,7 +191,20 @@ export function MasterDataPage() {
   const [rateOffering, setRateOffering] = useState<ItemOffering>();
 
   // Vendor-specific state
-  const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
+  const selectedVendorIdParam =
+    config.resource === "vendors" ? params.get("selectedId") : null;
+  const [selectedVendorId, setSelectedVendorIdState] = useState<string | null>(
+    selectedVendorIdParam,
+  );
+  const effectiveSelectedVendorId = selectedVendorId ?? selectedVendorIdParam;
+  const setSelectedVendorId = (id: string | null) => {
+    setSelectedVendorIdState(id);
+    if (!id && params.has("selectedId")) {
+      const next = new URLSearchParams(params);
+      next.delete("selectedId");
+      setParams(next, { replace: true });
+    }
+  };
   const [vendorFormOpen, setVendorFormOpen] = useState(false);
   const [editingVendor, setEditingVendor] = useState<Vendor | undefined>(
     undefined,
@@ -1133,8 +1146,8 @@ export function MasterDataPage() {
             onOpenChange={setWhatsappInviteOpen}
           />
           <VendorDetailSheet
-            vendorId={selectedVendorId}
-            open={Boolean(selectedVendorId)}
+            vendorId={effectiveSelectedVendorId}
+            open={Boolean(effectiveSelectedVendorId)}
             onOpenChange={(open) => {
               if (!open) setSelectedVendorId(null);
             }}

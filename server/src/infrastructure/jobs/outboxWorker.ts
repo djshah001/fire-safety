@@ -112,6 +112,7 @@ export async function materializeDesignDeadlineNotifications(pool: Pool, job: Cl
     from design_jobs design
     cross join lateral unnest(array[design.designer_user_id, design.design_head_user_id]) as recipient(user_id)
     where design.id = $1 and design.company_id = $2
+      and design.status not in ('paused', 'cancelled', 'abandoned')
       and design.designer_completed_at is null
       and design.design_due_at = $3::timestamptz
       and recipient.user_id is not null

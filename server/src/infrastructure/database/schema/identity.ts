@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { boolean, check, index, integer, pgEnum, pgTable, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { type AnyPgColumn, boolean, check, date, index, integer, pgEnum, pgTable, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 import { companies } from './organizations.js';
 
 export const userStatusEnum = pgEnum('user_status', ['active', 'disabled']);
@@ -20,6 +20,11 @@ export const users = pgTable('users', {
   disabledAt: timestamp('disabled_at', { withTimezone: true }),
   disabledReason: varchar('disabled_reason', { length: 500 }),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+  isOnLeave: boolean('is_on_leave').notNull().default(false),
+  leaveStartDate: date('leave_start_date'),
+  leaveEndDate: date('leave_end_date'),
+  coveringEmployeeId: uuid('covering_employee_id').references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
+  leaveReason: varchar('leave_reason', { length: 500 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -68,6 +73,27 @@ export const passwordResetTokens = pgTable('password_reset_tokens', {
   index('password_reset_tokens_user_idx').on(table.userId, table.expiresAt),
 ]);
 
+export const taskReassignmentLogs = pgTable('task_reassignment_logs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  fromUserId: uuid('from_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  toUserId: uuid('to_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  entityType: varchar('entity_type', { length: 40 }).notNull(),
+  entityId: uuid('entity_id').notNull(),
+  reason: varchar('reason', { length: 500 }).notNull(),
+  reassignedByUserId: uuid('reassigned_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('task_reassignment_logs_from_idx').on(table.companyId, table.fromUserId, table.createdAt),
+  index('task_reassignment_logs_entity_idx').on(table.companyId, table.entityType, table.entityId),
+  check(
+    'task_reassignment_logs_entity_type_valid',
+    sql`${table.entityType} in ('lead', 'reminder', 'design_job_head', 'design_job_engineer', 'boq_review')`,
+  ),
+  check('task_reassignment_logs_users_distinct', sql`${table.fromUserId} <> ${table.toUserId}`),
+]);
+
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type AuthSession = typeof authSessions.$inferSelect;
+export type TaskReassignmentLog = typeof taskReassignmentLogs.$inferSelect;

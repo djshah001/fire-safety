@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import {
   BellPlus,
+  ChevronDown,
   CircleDot,
   FileUp,
   Loader2,
@@ -12,16 +13,6 @@ import {
   Settings2,
   UserRoundCheck,
   X,
-  Phone,
-  Mail,
-  Building,
-  Target,
-  ArrowRight,
-  ShieldCheck,
-  DraftingCompass,
-  CheckCircle2,
-  Clock,
-  Sparkles,
 } from "lucide-react";
 
 import type { CurrentUser } from "@/api/auth";
@@ -33,19 +24,21 @@ import {
   createLead,
   createLeadClassification,
   createServiceCategory,
-  customerQuery,
-  customersQuery,
   leadClassificationsQuery,
+  leadFilterOptionsQuery,
   leadQuery,
   leadsQuery,
-  qualifyLead,
   serviceCategoriesQuery,
   type DuplicateHint,
   type Lead,
+  type LeadSortField,
   type LeadStage,
 } from "@/api/crm";
 import { getApiErrorMessage } from "@/api/client";
-import { ListToolbar } from "@/components/data-table/ListToolbar";
+import {
+  ListToolbar,
+  type ActiveFilterChip,
+} from "@/components/data-table/ListToolbar";
 import {
   ServerDataTable,
   type ServerColumn,
@@ -69,6 +62,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -78,23 +77,28 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { LeadWorkPanel } from "@/features/crm/LeadWorkPanel";
-import { CrmImportDialog } from "@/features/crm/CrmImportDialog";
 import { AuthorizeDesignDialog } from "@/features/crm/AuthorizeDesignDialog";
+import { ConvertLeadDialog } from "@/features/crm/ConvertLeadDialog";
+import { CrmImportDialog } from "@/features/crm/CrmImportDialog";
+import { LeadWorkPanel } from "@/features/crm/LeadWorkPanel";
+import { useHotkeys } from "@/hooks/useHotkeys";
 import { cn } from "@/lib/utils";
 
-const stages: LeadStage[] = [
+const ACTIVE_STAGES: LeadStage[] = [
   "new",
   "contacted",
   "qualified",
   "design_authorized",
   "commercial_negotiation",
-  "won",
-  "lost",
-  "on_hold",
 ];
+
+const TERMINAL_STAGES: LeadStage[] = ["won", "lost", "on_hold"];
+
+const ALL_STAGES: LeadStage[] = [...ACTIVE_STAGES, ...TERMINAL_STAGES];
 
 const formatStage = (stage: string) =>
   stage.replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase());
@@ -102,7 +106,10 @@ const formatStage = (stage: string) =>
 export function LeadsPage() {
   const { user } = useOutletContext<{ user: CurrentUser }>();
   const canWrite = user.permissions.includes("crm.lead.write");
+  const canQualify = user.permissions.includes("crm.lead.qualify");
   const canAssign = user.permissions.includes("crm.lead.assign");
+  const canUploadOpportunityDocs =
+    canWrite || canQualify || user.permissions.includes("system.access.all");
   const canManageCategories = user.permissions.includes(
     "crm.service_category.manage",
   );
@@ -111,11 +118,18 @@ export function LeadsPage() {
   );
 
   const [params, setParams] = useSearchParams();
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [modal, setModal] = useState<
-    "create" | "category" | "purpose" | "sector" | "qualify"
+    "create" | "category" | "purpose" | "sector"
   >();
-  const [selectedId, setSelectedId] = useState<string>();
-  const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const selectedId = params.get("selectedId") || undefined;
+  const setSelectedId = (id?: string) => {
+    const next = new URLSearchParams(params);
+    if (id) next.set("selectedId", id);
+    else next.delete("selectedId");
+    setParams(next, { replace: true });
+  };
+  const [showConvertDialog, setShowConvertDialog] = useState(false);
   const [duplicates, setDuplicates] = useState<DuplicateHint[]>([]);
   const [lostLead, setLostLead] = useState<Lead>();
   const [lostReason, setLostReason] = useState("");
@@ -129,27 +143,66 @@ export function LeadsPage() {
 
   const search = params.get("search") ?? "";
   const stage = (
-    stages.includes(params.get("stage") as LeadStage)
+    ALL_STAGES.includes(params.get("stage") as LeadStage)
       ? params.get("stage")
       : undefined
   ) as LeadStage | undefined;
+  const serviceCategoryId = params.get("serviceCategoryId") || undefined;
+  const purposeId = params.get("purposeId") || undefined;
+  const sectorId = params.get("sectorId") || undefined;
+  const source = params.get("source") || undefined;
+  const ownerUserId = params.get("ownerUserId") || undefined;
+  const updatedByUserId = params.get("updatedByUserId") || undefined;
+  const converted = (
+    params.get("converted") === "yes" || params.get("converted") === "no"
+      ? params.get("converted")
+      : undefined
+  ) as "yes" | "no" | undefined;
+  const hasDesignJob = (
+    params.get("hasDesignJob") === "yes" || params.get("hasDesignJob") === "no"
+      ? params.get("hasDesignJob")
+      : undefined
+  ) as "yes" | "no" | undefined;
+  const createdFrom = params.get("createdFrom") || undefined;
+  const createdTo = params.get("createdTo") || undefined;
+  const updatedFrom = params.get("updatedFrom") || undefined;
+  const updatedTo = params.get("updatedTo") || undefined;
+
   const page = Math.max(1, Number(params.get("page")) || 1);
   const pageSize = [10, 20, 50, 100].includes(Number(params.get("pageSize")))
     ? Number(params.get("pageSize"))
     : 20;
   const sort = (
-    ["leadNumber", "inquiryName", "stage", "updatedAt"].includes(
-      params.get("sort") ?? "",
-    )
+    [
+      "leadNumber",
+      "inquiryName",
+      "stage",
+      "ownerName",
+      "source",
+      "createdAt",
+      "updatedAt",
+    ].includes(params.get("sort") ?? "")
       ? params.get("sort")
       : "updatedAt"
-  ) as "leadNumber" | "inquiryName" | "stage" | "updatedAt";
+  ) as LeadSortField;
   const direction = params.get("direction") === "asc" ? "asc" : "desc";
 
   const leads = useQuery(
     leadsQuery({
       search: search || undefined,
       stage,
+      serviceCategoryId,
+      purposeId,
+      sectorId,
+      source,
+      ownerUserId,
+      updatedByUserId,
+      converted,
+      hasDesignJob,
+      createdFrom,
+      createdTo,
+      updatedFrom,
+      updatedTo,
       page,
       pageSize,
       sort,
@@ -159,15 +212,9 @@ export function LeadsPage() {
   const categories = useQuery(serviceCategoriesQuery());
   const purposes = useQuery(leadClassificationsQuery("purposes"));
   const sectors = useQuery(leadClassificationsQuery("sectors"));
+  const filterOptions = useQuery(leadFilterOptionsQuery);
   const assignees = useQuery({ ...assigneesQuery, enabled: canAssign });
   const selectedLead = useQuery(leadQuery(selectedId));
-  const customers = useQuery({
-    ...customersQuery(),
-    enabled: modal === "qualify",
-  });
-  const selectedCustomer = useQuery(
-    customerQuery(selectedCustomerId || undefined),
-  );
   const queryClient = useQueryClient();
 
   const creation = useMutation({
@@ -227,7 +274,7 @@ export function LeadsPage() {
   const stageChange = useMutation({
     mutationFn: (input: {
       lead: Lead;
-      stage: "contacted" | "on_hold" | "lost";
+      stage: "contacted" | "on_hold" | "lost" | "resume";
       reason?: string;
     }) =>
       changeLeadStage({
@@ -237,39 +284,17 @@ export function LeadsPage() {
         reason: input.reason,
       }),
     async onSuccess(lead) {
-      await queryClient.invalidateQueries({ queryKey: ["crm", "leads"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["crm", "leads"] }),
+        queryClient.invalidateQueries({ queryKey: ["crm", "opportunities"] }),
+        queryClient.invalidateQueries({
+          queryKey: ["engineering", "design-jobs"],
+        }),
+      ]);
       queryClient.setQueryData(["crm", "lead", lead.id], lead);
       setLostLead(undefined);
       setLostReason("");
       toast.success("Lead stage updated.");
-    },
-  });
-
-  const qualification = useMutation({
-    mutationFn: (form: FormData) => {
-      if (!selectedLead.data) throw new Error("Lead is unavailable.");
-      return qualifyLead({
-        leadId: selectedLead.data.id,
-        expectedVersion: selectedLead.data.rowVersion,
-        customerId: String(form.get("customerId")),
-        primaryContactId: String(form.get("primaryContactId")),
-        siteId: String(form.get("siteId")) || undefined,
-        title: String(form.get("title")),
-        qualificationNotes: String(form.get("qualificationNotes")),
-      });
-    },
-    async onSuccess() {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["crm", "leads"] }),
-        queryClient.invalidateQueries({ queryKey: ["crm", "opportunities"] }),
-        queryClient.invalidateQueries({ queryKey: ["crm", "customers"] }),
-      ]);
-      if (selectedId)
-        await queryClient.invalidateQueries({
-          queryKey: ["crm", "lead", selectedId],
-        });
-      setModal(undefined);
-      toast.success("Lead qualified into opportunity.");
     },
   });
 
@@ -327,12 +352,68 @@ export function LeadsPage() {
     },
   });
 
-  function updateFilter(name: "search" | "stage", value: string) {
+  const actionParam = params.get("action");
+
+  useEffect(() => {
+    if (actionParam === "create") {
+      if (canWrite) {
+        setDuplicates([]);
+        setModal("create");
+      }
+      const next = new URLSearchParams(params);
+      next.delete("action");
+      setParams(next, { replace: true });
+    }
+  }, [actionParam, canWrite, params, setParams]);
+
+  useHotkeys({
+    c: () => {
+      if (canWrite && !modal) {
+        setDuplicates([]);
+        creation.reset();
+        setModal("create");
+      }
+    },
+    f: () => {
+      searchInputRef.current?.focus();
+    },
+    escape: () => {
+      if (selectedId) {
+        setSelectedId(undefined);
+      } else if (selectedLeads.size > 0) {
+        setSelectedLeads(new Map());
+      }
+    },
+  });
+
+  function updateFilter(name: string, value?: string) {
     setSelectedLeads(new Map());
     const next = new URLSearchParams(params);
     if (value && value !== "all") next.set(name, value);
     else next.delete(name);
     next.delete("page");
+    setParams(next, { replace: true });
+  }
+
+  function clearAllFilters() {
+    setSelectedLeads(new Map());
+    const next = new URLSearchParams(params);
+    [
+      "stage",
+      "serviceCategoryId",
+      "purposeId",
+      "sectorId",
+      "source",
+      "ownerUserId",
+      "updatedByUserId",
+      "converted",
+      "hasDesignJob",
+      "createdFrom",
+      "createdTo",
+      "updatedFrom",
+      "updatedTo",
+      "page",
+    ].forEach((key) => next.delete(key));
     setParams(next, { replace: true });
   }
 
@@ -344,48 +425,192 @@ export function LeadsPage() {
     setParams(next, { replace: true });
   }
 
-  const columns: Array<ServerColumn<Lead, typeof sort>> = [
+  const userNameMap = new Map(
+    (filterOptions.data?.users ?? []).map((u) => [u.id, u.name]),
+  );
+  const categoryNameMap = new Map(
+    (categories.data ?? []).map((c) => [c.id, c.name]),
+  );
+  const purposeNameMap = new Map(
+    (purposes.data ?? []).map((p) => [p.id, p.name]),
+  );
+  const sectorNameMap = new Map(
+    (sectors.data ?? []).map((s) => [s.id, s.name]),
+  );
+
+  const activeChips: ActiveFilterChip[] = [
+    stage
+      ? {
+          key: "stage",
+          label: `Stage: ${formatStage(stage)}`,
+          onRemove: () => updateFilter("stage"),
+        }
+      : null,
+    serviceCategoryId
+      ? {
+          key: "serviceCategoryId",
+          label: `Service: ${categoryNameMap.get(serviceCategoryId) ?? "Selected"}`,
+          onRemove: () => updateFilter("serviceCategoryId"),
+        }
+      : null,
+    purposeId
+      ? {
+          key: "purposeId",
+          label: `Purpose: ${purposeNameMap.get(purposeId) ?? "Selected"}`,
+          onRemove: () => updateFilter("purposeId"),
+        }
+      : null,
+    sectorId
+      ? {
+          key: "sectorId",
+          label: `Sector: ${sectorNameMap.get(sectorId) ?? "Selected"}`,
+          onRemove: () => updateFilter("sectorId"),
+        }
+      : null,
+    source
+      ? {
+          key: "source",
+          label: `Source: ${source}`,
+          onRemove: () => updateFilter("source"),
+        }
+      : null,
+    ownerUserId
+      ? {
+          key: "ownerUserId",
+          label: `Owner: ${userNameMap.get(ownerUserId) ?? "Selected"}`,
+          onRemove: () => updateFilter("ownerUserId"),
+        }
+      : null,
+    updatedByUserId
+      ? {
+          key: "updatedByUserId",
+          label: `Last edited by: ${userNameMap.get(updatedByUserId) ?? "Selected"}`,
+          onRemove: () => updateFilter("updatedByUserId"),
+        }
+      : null,
+    converted
+      ? {
+          key: "converted",
+          label: converted === "yes" ? "Converted only" : "Unconverted only",
+          onRemove: () => updateFilter("converted"),
+        }
+      : null,
+    hasDesignJob
+      ? {
+          key: "hasDesignJob",
+          label: hasDesignJob === "yes" ? "Design authorized" : "No design job",
+          onRemove: () => updateFilter("hasDesignJob"),
+        }
+      : null,
+    createdFrom || createdTo
+      ? {
+          key: "createdRange",
+          label: `Created: ${createdFrom ?? "…"} → ${createdTo ?? "…"}`,
+          onRemove: () => {
+            const next = new URLSearchParams(params);
+            next.delete("createdFrom");
+            next.delete("createdTo");
+            next.delete("page");
+            setParams(next, { replace: true });
+          },
+        }
+      : null,
+    updatedFrom || updatedTo
+      ? {
+          key: "updatedRange",
+          label: `Updated: ${updatedFrom ?? "…"} → ${updatedTo ?? "…"}`,
+          onRemove: () => {
+            const next = new URLSearchParams(params);
+            next.delete("updatedFrom");
+            next.delete("updatedTo");
+            next.delete("page");
+            setParams(next, { replace: true });
+          },
+        }
+      : null,
+  ].filter((chip): chip is ActiveFilterChip => Boolean(chip));
+
+  const columns: Array<ServerColumn<Lead, LeadSortField>> = [
     {
       key: "lead",
       label: "Lead / Inquiry",
       sort: "inquiryName",
-      className: "min-w-[240px]",
+      className: "min-w-[230px]",
       cell: (lead) => (
-        <div className="space-y-0.5">
-          <p className="font-semibold text-xs text-foreground hover:text-primary transition-colors">
+        <div className="space-y-1">
+          <p className="font-semibold text-xs text-foreground leading-snug">
             {lead.inquiryName}
           </p>
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground font-mono">
-            <span>{lead.leadNumber}</span>
-            <span>•</span>
-            <span className="font-sans text-foreground/80">
-              {lead.serviceCategoryName}
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className="font-mono font-medium text-foreground/80">
+              {lead.leadNumber}
             </span>
+            {lead.companyName && (
+              <>
+                <span>•</span>
+                <span className="truncate max-w-[140px]">
+                  {lead.companyName}
+                </span>
+              </>
+            )}
+            <Badge
+              variant="outline"
+              className="text-[10px] px-1.5 py-0 h-4 font-normal"
+            >
+              {lead.source}
+            </Badge>
           </div>
         </div>
       ),
     },
     {
       key: "classification",
-      label: "Purpose / Sector",
-      className: "min-w-[180px]",
+      label: "Service & Sector",
+      className: "min-w-[175px]",
       cell: (lead) => (
         <div className="space-y-0.5">
-          <p className="text-xs font-medium text-foreground">{lead.purposeName}</p>
-          <p className="text-[11px] text-muted-foreground">{lead.sectorName}</p>
+          <p className="text-xs font-medium text-foreground truncate max-w-[180px]">
+            {lead.serviceCategoryName ?? "—"}
+          </p>
+          <p className="text-[11px] text-muted-foreground truncate max-w-[180px]">
+            {lead.purposeName} · {lead.sectorName}
+          </p>
         </div>
       ),
     },
     {
       key: "contact",
       label: "Contact Person",
-      className: "min-w-[200px]",
+      className: "min-w-[175px]",
       cell: (lead) => (
         <div className="space-y-0.5">
-          <p className="text-xs font-medium text-foreground">{lead.contactName}</p>
-          <p className="text-[11px] text-muted-foreground font-mono truncate max-w-[180px]">
-            {lead.companyName || lead.phone || lead.email}
+          <p className="text-xs font-medium text-foreground">
+            {lead.contactName}
           </p>
+          <p className="text-[11px] text-muted-foreground font-mono truncate max-w-[170px]">
+            {lead.phone || lead.email || "—"}
+          </p>
+        </div>
+      ),
+    },
+    {
+      key: "owner",
+      label: "Owner",
+      sort: "ownerName",
+      className: "min-w-[140px]",
+      cell: (lead) => (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-xs font-medium text-foreground">
+            {lead.ownerName ?? "—"}
+          </span>
+          {lead.ownerIsOnLeave && (
+            <Badge
+              variant="outline"
+              className="text-[10px] text-amber-600 border-amber-500/40 px-1 py-0 h-4"
+            >
+              On Leave
+            </Badge>
+          )}
         </div>
       ),
     },
@@ -393,17 +618,48 @@ export function LeadsPage() {
       key: "stage",
       label: "Stage",
       sort: "stage",
-      className: "min-w-[120px]",
-      cell: (lead) => <StatusBadge status={lead.stage} />,
+      className: "min-w-[145px]",
+      cell: (lead) => (
+        <div className="flex flex-col items-start gap-1">
+          <StatusBadge status={lead.stage} />
+          <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+            {lead.opportunityId && (
+              <span className="rounded bg-muted px-1.5 py-0.5">
+                Opportunity
+              </span>
+            )}
+            {lead.designJobId && (
+              <span className="rounded bg-primary/10 text-primary px-1.5 py-0.5">
+                Design
+              </span>
+            )}
+          </div>
+        </div>
+      ),
     },
     {
       key: "updated",
-      label: "Updated",
+      label: "Last Change",
       sort: "updatedAt",
-      className: "tabular-nums text-xs font-mono text-muted-foreground",
-      cell: (lead) => new Date(lead.updatedAt).toLocaleDateString(),
+      className: "min-w-[155px] tabular-nums text-xs",
+      cell: (lead) => (
+        <div className="space-y-0.5">
+          <p className="font-mono text-[11px] text-foreground">
+            {new Date(lead.updatedAt).toLocaleDateString()} ·{" "}
+            {new Date(lead.updatedAt).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </p>
+          <p className="text-[11px] text-muted-foreground truncate max-w-[150px]">
+            by {lead.lastModifiedByName ?? lead.createdByName ?? "System"}
+          </p>
+        </div>
+      ),
     },
   ];
+
+  const isTerminalSelected = Boolean(stage && TERMINAL_STAGES.includes(stage));
 
   return (
     <main className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
@@ -416,43 +672,37 @@ export function LeadsPage() {
           <h1 className="mt-1 text-2xl sm:text-3xl font-semibold tracking-tight text-foreground">
             Leads Register
           </h1>
-          <p className="mt-1.5 max-w-3xl text-sm text-muted-foreground leading-relaxed">
-            Only assigned leads appear in this scope. Purpose and market sector classify
-            the enquiry; the chosen sector selects its matching technical BOQ template.
+          <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground leading-relaxed">
+            Click any lead to open its workspace drawer for activity logs,
+            follow-ups, documents, and stage progression.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {canManageCategories && (
-            <>
-              <Button
-                onClick={() => setModal("category")}
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs"
-              >
-                <Settings2 className="size-3.5 mr-1" />
-                Services
-              </Button>
-              <Button
-                onClick={() => setModal("purpose")}
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs"
-              >
-                <Plus className="size-3.5 mr-1" />
-                Purpose
-              </Button>
-              <Button
-                onClick={() => setModal("sector")}
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs"
-              >
-                <Plus className="size-3.5 mr-1" />
-                Sector
-              </Button>
-            </>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-8 text-xs">
+                  <Settings2 className="size-3.5 mr-1.5" />
+                  Configure
+                  <ChevronDown className="size-3 ml-1 opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem onClick={() => setModal("category")}>
+                  <Plus className="size-3.5 mr-2" />
+                  Service Category
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setModal("purpose")}>
+                  <Plus className="size-3.5 mr-2" />
+                  Lead Purpose
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setModal("sector")}>
+                  <Plus className="size-3.5 mr-2" />
+                  Market Sector
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
           {canWrite && (
             <Button
@@ -461,7 +711,7 @@ export function LeadsPage() {
               size="sm"
               className="h-8 text-xs"
             >
-              <FileUp className="size-3.5 mr-1" />
+              <FileUp className="size-3.5 mr-1.5" />
               Import
             </Button>
           )}
@@ -475,7 +725,7 @@ export function LeadsPage() {
               size="sm"
               className="h-8 text-xs"
             >
-              <Plus className="size-3.5 mr-1" />
+              <Plus className="size-3.5 mr-1.5" />
               Add Lead
             </Button>
           )}
@@ -486,307 +736,461 @@ export function LeadsPage() {
       <div className="mt-6">
         <ListToolbar
           search={search}
+          searchInputRef={searchInputRef}
+          searchPlaceholder="Search by lead #, inquiry, company, contact, phone, email, or source…"
           onSearch={(value) => updateFilter("search", value)}
-          activeFilters={stage ? 1 : 0}
-          onClear={() => updateFilter("stage", "all")}
+          activeFilters={activeChips.length}
+          activeChips={activeChips}
+          onClear={clearAllFilters}
+          quickFilters={
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant={!stage ? "secondary" : "ghost"}
+                className="h-7 px-2.5 text-[11px]"
+                onClick={() => updateFilter("stage")}
+              >
+                All
+              </Button>
+              {ACTIVE_STAGES.map((item) => (
+                <Button
+                  key={item}
+                  type="button"
+                  size="sm"
+                  variant={stage === item ? "secondary" : "ghost"}
+                  className="h-7 px-2.5 text-[11px]"
+                  onClick={() =>
+                    updateFilter("stage", stage === item ? undefined : item)
+                  }
+                >
+                  {formatStage(item)}
+                </Button>
+              ))}
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={isTerminalSelected ? "secondary" : "ghost"}
+                    className="h-7 px-2.5 text-[11px]"
+                  >
+                    {isTerminalSelected ? formatStage(stage!) : "Closed / Hold"}
+                    <ChevronDown className="size-3 ml-1 opacity-60" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-36">
+                  {TERMINAL_STAGES.map((item) => (
+                    <DropdownMenuItem
+                      key={item}
+                      onClick={() =>
+                        updateFilter("stage", stage === item ? undefined : item)
+                      }
+                    >
+                      {formatStage(item)}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          }
         >
-          <div className="space-y-1.5">
-            <Label className="text-xs font-semibold">Filter by Stage</Label>
-            <Select
-              onValueChange={(value) => updateFilter("stage", value)}
-              value={stage ?? "all"}
-            >
-              <SelectTrigger className="w-full h-9 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All stages</SelectItem>
-                {stages.map((item) => (
-                  <SelectItem key={item} value={item} className="text-xs">
-                    {formatStage(item)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          {/* Grouped Filter Popover (Duplicate Pipeline Stage removed) */}
+          <div className="space-y-4">
+            {/* Section 1: Classification */}
+            <div className="space-y-2.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Classification
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">
+                    Service Category
+                  </Label>
+                  <Select
+                    onValueChange={(value) =>
+                      updateFilter("serviceCategoryId", value)
+                    }
+                    value={serviceCategoryId ?? "all"}
+                  >
+                    <SelectTrigger className="w-full h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All services</SelectItem>
+                      {categories.data?.map((item) => (
+                        <SelectItem
+                          key={item.id}
+                          value={item.id}
+                          className="text-xs"
+                        >
+                          {item.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Lead Purpose</Label>
+                  <Select
+                    onValueChange={(value) => updateFilter("purposeId", value)}
+                    value={purposeId ?? "all"}
+                  >
+                    <SelectTrigger className="w-full h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All purposes</SelectItem>
+                      {purposes.data?.map((item) => (
+                        <SelectItem
+                          key={item.id}
+                          value={item.id}
+                          className="text-xs"
+                        >
+                          {item.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Market Sector</Label>
+                  <Select
+                    onValueChange={(value) => updateFilter("sectorId", value)}
+                    value={sectorId ?? "all"}
+                  >
+                    <SelectTrigger className="w-full h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All sectors</SelectItem>
+                      {sectors.data?.map((item) => (
+                        <SelectItem
+                          key={item.id}
+                          value={item.id}
+                          className="text-xs"
+                        >
+                          {item.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Lead Source</Label>
+                  <Select
+                    onValueChange={(value) => updateFilter("source", value)}
+                    value={source ?? "all"}
+                  >
+                    <SelectTrigger className="w-full h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All sources</SelectItem>
+                      {filterOptions.data?.sources.map((item) => (
+                        <SelectItem key={item} value={item} className="text-xs">
+                          {item}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Section 2: Ownership & Conversion */}
+            <div className="space-y-2.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Ownership & Conversion
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">
+                    Assigned Owner
+                  </Label>
+                  <Select
+                    onValueChange={(value) =>
+                      updateFilter("ownerUserId", value)
+                    }
+                    value={ownerUserId ?? "all"}
+                  >
+                    <SelectTrigger className="w-full h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All owners</SelectItem>
+                      {filterOptions.data?.users.map((item) => (
+                        <SelectItem
+                          key={item.id}
+                          value={item.id}
+                          className="text-xs"
+                        >
+                          {item.name}
+                          {item.isOnLeave ? " (On Leave)" : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">
+                    Last Modified By
+                  </Label>
+                  <Select
+                    onValueChange={(value) =>
+                      updateFilter("updatedByUserId", value)
+                    }
+                    value={updatedByUserId ?? "all"}
+                  >
+                    <SelectTrigger className="w-full h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Anyone</SelectItem>
+                      {filterOptions.data?.users.map((item) => (
+                        <SelectItem
+                          key={item.id}
+                          value={item.id}
+                          className="text-xs"
+                        >
+                          {item.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">
+                    Opportunity Conversion
+                  </Label>
+                  <Select
+                    onValueChange={(value) => updateFilter("converted", value)}
+                    value={converted ?? "all"}
+                  >
+                    <SelectTrigger className="w-full h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All leads</SelectItem>
+                      <SelectItem value="yes">
+                        Converted to Opportunity
+                      </SelectItem>
+                      <SelectItem value="no">Not yet converted</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">
+                    Design Authorization
+                  </Label>
+                  <Select
+                    onValueChange={(value) =>
+                      updateFilter("hasDesignJob", value)
+                    }
+                    value={hasDesignJob ?? "all"}
+                  >
+                    <SelectTrigger className="w-full h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All</SelectItem>
+                      <SelectItem value="yes">Has Design Job</SelectItem>
+                      <SelectItem value="no">No Design Job</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Section 3: Date Ranges */}
+            <div className="space-y-2.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Date Ranges
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Created From</Label>
+                  <Input
+                    type="date"
+                    className="h-9 text-xs"
+                    value={createdFrom ?? ""}
+                    onChange={(e) => updateFilter("createdFrom", e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">Created To</Label>
+                  <Input
+                    type="date"
+                    className="h-9 text-xs"
+                    value={createdTo ?? ""}
+                    onChange={(e) => updateFilter("createdTo", e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">
+                    Last Updated From
+                  </Label>
+                  <Input
+                    type="date"
+                    className="h-9 text-xs"
+                    value={updatedFrom ?? ""}
+                    onChange={(e) => updateFilter("updatedFrom", e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold">
+                    Last Updated To
+                  </Label>
+                  <Input
+                    type="date"
+                    className="h-9 text-xs"
+                    value={updatedTo ?? ""}
+                    onChange={(e) => updateFilter("updatedTo", e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
           </div>
         </ListToolbar>
       </div>
 
-      {/* Embedded Lead Work Panel (Activities / Reminders / Files) */}
-      {selectedLead.data && (
-        <div className="mt-6">
-          <LeadWorkPanel
-            lead={selectedLead.data}
-            canAssign={canAssign}
-            assignees={assignees.data ?? []}
-          />
-        </div>
-      )}
-
-      {/* Main Table + Sticky Inspector Layout */}
-      <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <Card className="shadow-xs overflow-hidden">
-          <CardHeader className="border-b bg-card/60 p-4 pb-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-sm font-semibold">Assigned Leads</CardTitle>
-                <CardDescription className="text-xs">
-                  {leads.data
-                    ? `${leads.data.total} visible record${leads.data.total === 1 ? "" : "s"}`
-                    : "Loading records…"}
-                </CardDescription>
-              </div>
-              <Badge variant="outline" className="text-[11px] font-mono">
-                Page {page}
-              </Badge>
+      {/* Full-Width Leads Table (Zero Layout Shift) */}
+      <Card className="mt-6 shadow-xs overflow-hidden">
+        <CardHeader className="border-b bg-card/60 p-4 pb-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-sm font-semibold">
+                Assigned Leads
+              </CardTitle>
+              <CardDescription className="text-xs">
+                {leads.data
+                  ? `${leads.data.total} visible record${leads.data.total === 1 ? "" : "s"}`
+                  : "Loading records…"}
+              </CardDescription>
             </div>
-          </CardHeader>
+            <Badge variant="outline" className="text-[11px] font-mono">
+              Page {page}
+            </Badge>
+          </div>
+        </CardHeader>
 
-          <CardContent className="p-0">
-            {leads.isError ? (
-              <Alert className="m-4" variant="destructive">
-                <AlertDescription className="text-xs">
-                  {getApiErrorMessage(leads.error)}
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <ServerDataTable
-                columns={columns}
-                rows={leads.data?.items ?? []}
-                rowKey={(lead) => lead.id}
-                loading={leads.isPending}
-                empty={<EmptyLeads />}
-                sort={sort}
-                direction={direction}
-                onSort={(nextSort, nextDirection) =>
-                  updateList({
-                    sort: nextSort,
-                    direction: nextDirection,
-                    page: 1,
-                  })
-                }
-                page={page}
-                pageSize={pageSize}
-                total={leads.data?.total ?? 0}
-                onPageChange={(nextPage) => updateList({ page: nextPage })}
-                onPageSizeChange={(nextSize) =>
-                  updateList({ pageSize: nextSize, page: 1 })
-                }
-                onRowClick={(lead) => setSelectedId(lead.id)}
-                selection={
-                  canWrite || canAssign
-                    ? {
-                        selectedKeys: new Set(selectedLeads.keys()),
-                        rowLabel: (lead) => lead.inquiryName,
-                        onToggle: (lead, selected) =>
-                          setSelectedLeads((current) => {
-                            const next = new Map(current);
+        <CardContent className="p-0">
+          {leads.isError ? (
+            <Alert className="m-4" variant="destructive">
+              <AlertDescription className="text-xs">
+                {getApiErrorMessage(leads.error)}
+              </AlertDescription>
+            </Alert>
+          ) : (
+            <ServerDataTable
+              columns={columns}
+              rows={leads.data?.items ?? []}
+              rowKey={(lead) => lead.id}
+              loading={leads.isPending}
+              empty={<EmptyLeads />}
+              sort={sort}
+              direction={direction}
+              onSort={(nextSort, nextDirection) =>
+                updateList({
+                  sort: nextSort,
+                  direction: nextDirection,
+                  page: 1,
+                })
+              }
+              page={page}
+              pageSize={pageSize}
+              total={leads.data?.total ?? 0}
+              onPageChange={(nextPage) => updateList({ page: nextPage })}
+              onPageSizeChange={(nextSize) =>
+                updateList({ pageSize: nextSize, page: 1 })
+              }
+              onRowClick={(lead) => setSelectedId(lead.id)}
+              selection={
+                canWrite || canAssign
+                  ? {
+                      selectedKeys: new Set(selectedLeads.keys()),
+                      rowLabel: (lead) => lead.inquiryName,
+                      onToggle: (lead, selected) =>
+                        setSelectedLeads((current) => {
+                          const next = new Map(current);
+                          if (selected) next.set(lead.id, lead);
+                          else next.delete(lead.id);
+                          return next;
+                        }),
+                      onToggleAll: (pageRows, selected) =>
+                        setSelectedLeads((current) => {
+                          const next = new Map(current);
+                          pageRows.forEach((lead) => {
                             if (selected) next.set(lead.id, lead);
                             else next.delete(lead.id);
-                            return next;
-                          }),
-                        onToggleAll: (pageRows, selected) =>
-                          setSelectedLeads((current) => {
-                            const next = new Map(current);
-                            pageRows.forEach((lead) => {
-                              if (selected) next.set(lead.id, lead);
-                              else next.delete(lead.id);
-                            });
-                            return next;
-                          }),
-                      }
-                    : undefined
-                }
-              />
-            )}
-          </CardContent>
-        </Card>
+                          });
+                          return next;
+                        }),
+                    }
+                  : undefined
+              }
+            />
+          )}
+        </CardContent>
+      </Card>
 
-        {/* Sticky Detail Inspector Drawer */}
-        <Card className="self-start xl:sticky xl:top-20 shadow-xs border-border/80">
-          {!selectedId ? (
-            <CardContent className="p-8 text-center text-xs text-muted-foreground">
-              <Target className="mx-auto mb-2 size-6 text-muted-foreground/40" />
-              Select a lead from the table to inspect details, actions, and qualifications.
-            </CardContent>
-          ) : selectedLead.isPending ? (
-            <CardContent className="p-5 space-y-3">
-              <Skeleton className="h-5 w-24" />
-              <Skeleton className="h-6 w-48" />
-              <Skeleton className="h-32 w-full" />
-            </CardContent>
+      {/* Unified Slide-Over Lead Workspace Sheet */}
+      <Sheet
+        open={Boolean(selectedId)}
+        onOpenChange={(open) => {
+          if (!open) setSelectedId(undefined);
+        }}
+      >
+        <SheetContent
+          side="right"
+          className="w-full p-0 sm:max-w-2xl flex flex-col gap-0"
+        >
+          {selectedLead.isPending ? (
+            <div className="p-6 space-y-4">
+              <Skeleton className="h-5 w-28" />
+              <Skeleton className="h-7 w-64" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-48 w-full" />
+            </div>
           ) : selectedLead.isError ? (
-            <CardContent className="p-4">
+            <div className="p-6">
               <Alert variant="destructive">
                 <AlertDescription className="text-xs">
                   {getApiErrorMessage(selectedLead.error)}
                 </AlertDescription>
               </Alert>
-            </CardContent>
-          ) : (
-            <>
-              <CardHeader className="border-b bg-card/60 p-4 pb-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-mono font-semibold text-primary">
-                    {selectedLead.data.leadNumber}
-                  </span>
-                  <StatusBadge status={selectedLead.data.stage} />
-                </div>
-                <CardTitle className="text-base font-semibold pt-1">
-                  {selectedLead.data.inquiryName}
-                </CardTitle>
-                <CardDescription className="text-xs">
-                  {selectedLead.data.contactName}
-                  {selectedLead.data.companyName ? ` (${selectedLead.data.companyName})` : ""}
-                </CardDescription>
-              </CardHeader>
-
-              <CardContent className="p-4 space-y-4">
-                {/* Contact Links */}
-                <div className="grid grid-cols-1 gap-1.5 rounded-lg border bg-muted/20 p-2.5 text-xs">
-                  {selectedLead.data.phone && (
-                    <a
-                      href={`tel:${selectedLead.data.phone}`}
-                      className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      <Phone className="size-3.5 text-primary" />
-                      <span>{selectedLead.data.phone}</span>
-                    </a>
-                  )}
-                  {selectedLead.data.email && (
-                    <a
-                      href={`mailto:${selectedLead.data.email}`}
-                      className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors truncate"
-                    >
-                      <Mail className="size-3.5 text-primary" />
-                      <span className="truncate">{selectedLead.data.email}</span>
-                    </a>
-                  )}
-                  {selectedLead.data.address && (
-                    <p className="flex items-start gap-2 text-[11px] text-muted-foreground pt-1 border-t">
-                      <Building className="size-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                      <span>{selectedLead.data.address}</span>
-                    </p>
-                  )}
-                </div>
-
-                {/* Classification Pills */}
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="rounded-md border p-2 bg-card">
-                    <span className="text-[10px] text-muted-foreground block">
-                      Purpose
-                    </span>
-                    <span className="font-medium text-foreground truncate block">
-                      {selectedLead.data.purposeName}
-                    </span>
-                  </div>
-                  <div className="rounded-md border p-2 bg-card">
-                    <span className="text-[10px] text-muted-foreground block">
-                      Sector
-                    </span>
-                    <span className="font-medium text-foreground truncate block">
-                      {selectedLead.data.sectorName}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Stage Progression Actions */}
-                {["new", "contacted", "on_hold"].includes(
-                  selectedLead.data.stage,
-                ) && (
-                  <div className="space-y-2 border-t pt-3">
-                    <Label className="text-xs font-semibold text-muted-foreground">
-                      Pipeline Actions
-                    </Label>
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        disabled={stageChange.isPending}
-                        onClick={() =>
-                          stageChange.mutate({
-                            lead: selectedLead.data,
-                            stage:
-                              selectedLead.data.stage === "contacted"
-                                ? "on_hold"
-                                : "contacted",
-                          })
-                        }
-                        variant="outline"
-                        className="h-8 text-xs flex-1"
-                      >
-                        {selectedLead.data.stage === "contacted"
-                          ? "Put on hold"
-                          : "Mark contacted"}
-                      </Button>
-                      <Button
-                        size="sm"
-                        disabled={stageChange.isPending}
-                        onClick={() => {
-                          setLostReason("");
-                          setLostLead(selectedLead.data);
-                        }}
-                        variant="destructive"
-                        className="h-8 text-xs"
-                      >
-                        Mark lost
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          setSelectedCustomerId("");
-                          qualification.reset();
-                          setModal("qualify");
-                        }}
-                        className="h-8 text-xs w-full"
-                      >
-                        Qualify into Opportunity →
-                      </Button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Authorize Design Stage */}
-                {selectedLead.data.stage === "qualified" &&
-                  canAuthorizeDesign && (
-                    <div className="space-y-2 border-t pt-3">
-                      <Button
-                        size="sm"
-                        className="w-full h-8 text-xs"
-                        onClick={() => setShowAuthorizeDesign(true)}
-                      >
-                        <DraftingCompass className="size-3.5 mr-1.5" />
-                        Authorize Free Design
-                      </Button>
-                      <p className="text-[11px] text-muted-foreground leading-tight">
-                        Triggers engineering handoff while opportunity remains unawarded.
-                      </p>
-                    </div>
-                  )}
-
-                {selectedLead.data.stage === "design_authorized" && (
-                  <Alert className="bg-primary/5 border-primary/20">
-                    <ShieldCheck className="size-4 text-primary" />
-                    <AlertTitle className="text-xs font-semibold">
-                      Design Authorized
-                    </AlertTitle>
-                    <AlertDescription className="text-xs text-muted-foreground">
-                      Ready for CAD workspace engineering. Commercial award is independent.
-                    </AlertDescription>
-                  </Alert>
-                )}
-
-                {stageChange.isError && (
-                  <Alert variant="destructive">
-                    <AlertDescription className="text-xs">
-                      {getApiErrorMessage(stageChange.error)}
-                    </AlertDescription>
-                  </Alert>
-                )}
-              </CardContent>
-            </>
-          )}
-        </Card>
-      </div>
+            </div>
+          ) : selectedLead.data ? (
+            <LeadWorkPanel
+              lead={selectedLead.data}
+              canAssign={canAssign}
+              canUploadOpportunityDocs={canUploadOpportunityDocs}
+              canAuthorizeDesign={canAuthorizeDesign}
+              assignees={assignees.data ?? []}
+              stageChangePending={stageChange.isPending}
+              stageChangeError={stageChange.isError ? stageChange.error : null}
+              onStageChange={(input) => stageChange.mutate(input)}
+              onMarkLost={(lead) => {
+                setLostReason("");
+                setLostLead(lead);
+              }}
+              onConvert={() => setShowConvertDialog(true)}
+              onAuthorizeDesign={() => setShowAuthorizeDesign(true)}
+            />
+          ) : null}
+        </SheetContent>
+      </Sheet>
 
       {/* Floating Animated Bulk Action Bar */}
       <AnimatePresence>
@@ -802,7 +1206,9 @@ export function LeadsPage() {
               <span className="flex size-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
                 {selectedLeads.size}
               </span>
-              <span className="text-xs font-medium text-foreground">Selected</span>
+              <span className="text-xs font-medium text-foreground">
+                Selected
+              </span>
             </div>
 
             <div className="flex items-center gap-1.5">
@@ -872,8 +1278,13 @@ export function LeadsPage() {
               </SelectTrigger>
               <SelectContent>
                 {assignees.data?.map((assignee) => (
-                  <SelectItem key={assignee.id} value={assignee.id} className="text-xs">
+                  <SelectItem
+                    key={assignee.id}
+                    value={assignee.id}
+                    className="text-xs"
+                  >
                     {assignee.name} ({assignee.email})
+                    {assignee.isOnLeave ? " · On Leave" : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -902,7 +1313,8 @@ export function LeadsPage() {
               {bulkAssignment.isPending && (
                 <Loader2 className="size-3.5 mr-1.5 animate-spin" />
               )}
-              Assign {selectedLeads.size} Lead{selectedLeads.size === 1 ? "" : "s"}
+              Assign {selectedLeads.size} Lead
+              {selectedLeads.size === 1 ? "" : "s"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -925,13 +1337,17 @@ export function LeadsPage() {
             <DialogHeader>
               <DialogTitle>Schedule Batch Reminders</DialogTitle>
               <DialogDescription className="text-xs">
-                Create a linked follow-up for each of the {selectedLeads.size} selected leads.
+                Create a linked follow-up for each of the {selectedLeads.size}{" "}
+                selected leads.
               </DialogDescription>
             </DialogHeader>
 
             <div className="mt-4 grid gap-3.5 sm:grid-cols-2">
               <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="bulk-reminder-title" className="text-xs font-semibold">
+                <Label
+                  htmlFor="bulk-reminder-title"
+                  className="text-xs font-semibold"
+                >
                   Reminder Title
                 </Label>
                 <Input
@@ -945,7 +1361,10 @@ export function LeadsPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="bulk-reminder-due" className="text-xs font-semibold">
+                <Label
+                  htmlFor="bulk-reminder-due"
+                  className="text-xs font-semibold"
+                >
                   Due At
                 </Label>
                 <Input
@@ -977,7 +1396,7 @@ export function LeadsPage() {
                     items={[
                       { label: "Assign to me", value: "self" },
                       ...(assignees.data?.map((assignee) => ({
-                        label: assignee.name,
+                        label: `${assignee.name}${assignee.isOnLeave ? " (On Leave)" : ""}`,
                         value: assignee.id,
                       })) ?? []),
                     ]}
@@ -1094,7 +1513,7 @@ export function LeadsPage() {
                 <SelectField
                   items={
                     assignees.data?.map((item) => ({
-                      label: item.name,
+                      label: `${item.name}${item.isOnLeave ? " (On Leave)" : ""}`,
                       value: item.id,
                     })) ?? []
                   }
@@ -1118,7 +1537,8 @@ export function LeadsPage() {
             </div>
 
             <p className="mt-3 text-[11px] text-muted-foreground">
-              A contact name and either phone or email are required to create a lead.
+              A contact name and either phone or email are required to create a
+              lead.
             </p>
 
             {duplicates.length > 0 && <DuplicateNotice items={duplicates} />}
@@ -1147,8 +1567,18 @@ export function LeadsPage() {
             }}
           >
             <div className="space-y-3.5">
-              <Field label="Code" name="code" placeholder="FIRE_ALARM" required />
-              <Field label="Display Name" name="name" placeholder="Fire Alarm Systems" required />
+              <Field
+                label="Code"
+                name="code"
+                placeholder="FIRE_ALARM"
+                required
+              />
+              <Field
+                label="Display Name"
+                name="name"
+                placeholder="Fire Alarm Systems"
+                required
+              />
             </div>
 
             {categoryCreation.isError && (
@@ -1185,13 +1615,19 @@ export function LeadsPage() {
               <Field
                 label="Classification Code"
                 name="code"
-                placeholder={modal === "purpose" ? "ANNUAL_RENEWAL" : "EDUCATION"}
+                placeholder={
+                  modal === "purpose" ? "ANNUAL_RENEWAL" : "EDUCATION"
+                }
                 required
               />
               <Field
                 label="Classification Name"
                 name="name"
-                placeholder={modal === "purpose" ? "Annual Maintenance Contract" : "Educational Institutions"}
+                placeholder={
+                  modal === "purpose"
+                    ? "Annual Maintenance Contract"
+                    : "Educational Institutions"
+                }
                 required
               />
             </div>
@@ -1209,103 +1645,11 @@ export function LeadsPage() {
         </Modal>
       )}
 
-      {/* Qualify Lead Modal */}
-      {modal === "qualify" && selectedLead.data && (
-        <Modal
-          description="Link an in-scope customer account and generate an unawarded opportunity."
-          title="Qualify Lead"
-          onClose={() => setModal(undefined)}
-        >
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              qualification.mutate(new FormData(event.currentTarget));
-            }}
-          >
-            <div className="space-y-3.5">
-              <SelectField
-                items={
-                  customers.data?.items.map((item) => ({
-                    label: item.displayName,
-                    value: item.id,
-                  })) ?? []
-                }
-                label="Customer Account"
-                name="customerId"
-                onValueChange={setSelectedCustomerId}
-                placeholder="Choose in-scope customer…"
-                required
-                value={selectedCustomerId || undefined}
-              />
-
-              <SelectField
-                disabled={!selectedCustomer.data}
-                items={
-                  selectedCustomer.data?.contacts
-                    .filter((item) => item.status === "active")
-                    .map((item) => ({ label: item.name, value: item.id })) ?? []
-                }
-                label="Primary Contact Person"
-                name="primaryContactId"
-                placeholder={
-                  selectedCustomer.data ? "Choose contact person…" : "Select customer first"
-                }
-                required
-              />
-
-              <SelectField
-                disabled={!selectedCustomer.data}
-                items={
-                  selectedCustomer.data?.sites
-                    .filter((item) => item.status === "active")
-                    .map((item) => ({ label: item.name, value: item.id })) ?? []
-                }
-                label="Customer Site (optional)"
-                name="siteId"
-                placeholder={
-                  selectedCustomer.data ? "Select site location (optional)…" : "Select customer first"
-                }
-              />
-
-              <Field
-                defaultValue={selectedLead.data.inquiryName}
-                label="Opportunity Title"
-                name="title"
-                required
-              />
-
-              <div className="space-y-1.5">
-                <Label htmlFor="qualification-notes" className="text-xs font-semibold">
-                  Qualification Notes
-                </Label>
-                <Textarea
-                  id="qualification-notes"
-                  minLength={3}
-                  name="qualificationNotes"
-                  rows={3}
-                  className="text-sm"
-                  placeholder="Scope scope details, budget expectations, timeline…"
-                  required
-                />
-              </div>
-            </div>
-
-            <p className="mt-3 text-[11px] text-muted-foreground leading-tight">
-              Creates an unawarded opportunity. Does not confirm quotations or project start.
-            </p>
-
-            {qualification.isError && (
-              <ErrorMessage error={qualification.error} />
-            )}
-
-            <ModalActions
-              pending={qualification.isPending}
-              submit="Create Opportunity"
-              onCancel={() => setModal(undefined)}
-            />
-          </form>
-        </Modal>
-      )}
+      <ConvertLeadDialog
+        lead={selectedLead.data}
+        onOpenChange={setShowConvertDialog}
+        open={showConvertDialog}
+      />
 
       {/* Mark Lead Lost Modal */}
       <Dialog
@@ -1329,13 +1673,17 @@ export function LeadsPage() {
               <DialogHeader>
                 <DialogTitle>Mark Lead as Lost</DialogTitle>
                 <DialogDescription className="text-xs">
-                  Record why this inquiry will not progress. The record and reason remain permanently audited.
+                  Record why this inquiry will not progress. The record and
+                  reason remain permanently audited.
                 </DialogDescription>
               </DialogHeader>
 
               <div className="mt-4 space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="lost-reason" className="text-xs font-semibold">
+                  <Label
+                    htmlFor="lost-reason"
+                    className="text-xs font-semibold"
+                  >
                     Loss Reason <span className="text-destructive">*</span>
                   </Label>
                   <span
@@ -1376,14 +1724,17 @@ export function LeadsPage() {
                   Cancel
                 </Button>
                 <Button
-                  disabled={stageChange.isPending || lostReason.trim().length < 3}
+                  disabled={
+                    stageChange.isPending || lostReason.trim().length < 3
+                  }
                   type="submit"
                   variant="destructive"
                   size="sm"
                 >
                   {stageChange.isPending ? (
                     <>
-                      <Loader2 className="size-3.5 mr-1.5 animate-spin" /> Updating…
+                      <Loader2 className="size-3.5 mr-1.5 animate-spin" />{" "}
+                      Updating…
                     </>
                   ) : (
                     "Mark Lost"
@@ -1403,7 +1754,9 @@ function EmptyLeads() {
     <div className="grid min-h-48 place-items-center p-6 text-center">
       <div>
         <CircleDot className="mx-auto size-6 text-muted-foreground/40" />
-        <p className="mt-2 text-xs font-semibold text-foreground">No leads in this view</p>
+        <p className="mt-2 text-xs font-semibold text-foreground">
+          No leads in this view
+        </p>
         <p className="mt-0.5 text-[11px] text-muted-foreground">
           Create a new lead or adjust your filter parameters.
         </p>
@@ -1487,7 +1840,9 @@ function Modal({
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription className="text-xs">{description}</DialogDescription>
+          <DialogDescription className="text-xs">
+            {description}
+          </DialogDescription>
         </DialogHeader>
         <div className="mt-2">{children}</div>
       </DialogContent>

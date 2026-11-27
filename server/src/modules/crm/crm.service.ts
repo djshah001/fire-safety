@@ -9,6 +9,7 @@ import { removePrivateFile, resolvePrivateFile } from '../../infrastructure/stor
 import { createAuthRepository } from '../auth/auth.repository.js';
 import { hasExplicitCompanyGrant, hasPermission } from '../auth/auth.middleware.js';
 import type { AuthenticatedPrincipal } from '../auth/auth.types.js';
+import { createNotificationRepository } from '../notifications/notification.repository.js';
 import { createCrmRepository, type CrmAccess } from './crm.repository.js';
 import { readImportWorkbook, type CrmImportType } from './crm.imports.js';
 import { customerInputSchema, leadInputSchema } from './crm.schemas.js';
@@ -339,6 +340,17 @@ export class CrmService {
       return customer!.id;
     });
     return { customer: await this.getCustomer(principal, customerId), duplicateHints };
+  }
+
+  checkDuplicateHints(
+    principal: AuthenticatedPrincipal,
+    input: { name: string; phone?: string; email?: string },
+  ) {
+    return createCrmRepository(this.database).findDuplicateHints(crmAccess(principal), {
+      phoneNormalized: normalizePhone(input.phone),
+      emailNormalized: normalizeEmail(input.email),
+      name: input.name,
+    });
   }
 
   async addContact(principal: AuthenticatedPrincipal, customerId: string, input: ContactInput, requestId: string) {
@@ -769,6 +781,7 @@ export class CrmService {
         sectorId: sector.id,
         ownerUserId: owner.id,
         createdByUserId: principal.userId,
+        updatedByUserId: principal.userId,
       });
       await repository.addLeadMembers([...new Set([principal.userId, owner.id])].map((userId) => ({
         companyId: principal.companyId,
@@ -792,10 +805,29 @@ export class CrmService {
     });
   }
 
+  listLeadFilterOptions(principal: AuthenticatedPrincipal) {
+    return createCrmRepository(this.database).listLeadFilterOptions(crmAccess(principal));
+  }
+
   listLeads(principal: AuthenticatedPrincipal, input: {
     stage?: 'new' | 'contacted' | 'qualified' | 'design_authorized' | 'commercial_negotiation' | 'won' | 'lost' | 'on_hold';
-    search?: string; page: number; pageSize: number;
-    sort: 'leadNumber' | 'inquiryName' | 'stage' | 'updatedAt'; direction: 'asc' | 'desc';
+    serviceCategoryId?: string;
+    purposeId?: string;
+    sectorId?: string;
+    source?: string;
+    ownerUserId?: string;
+    updatedByUserId?: string;
+    converted?: 'yes' | 'no';
+    hasDesignJob?: 'yes' | 'no';
+    createdFrom?: string;
+    createdTo?: string;
+    updatedFrom?: string;
+    updatedTo?: string;
+    search?: string;
+    page: number;
+    pageSize: number;
+    sort: 'leadNumber' | 'inquiryName' | 'stage' | 'ownerName' | 'source' | 'createdAt' | 'updatedAt';
+    direction: 'asc' | 'desc';
   }) {
     return createCrmRepository(this.database).listLeads(crmAccess(principal), {
       ...input,
@@ -871,6 +903,7 @@ export class CrmService {
         primaryContactId: input.primaryContactId,
         siteId: input.siteId,
         createdByUserId: principal.userId,
+        updatedByUserId: principal.userId,
       });
       const memberIds = [...new Set([principal.userId, ownerUserId])];
       await transactionalRepository.addLeadMembers(memberIds.map((userId) => ({
@@ -927,6 +960,7 @@ export class CrmService {
           lead.rowVersion,
           input.assigneeUserId,
           new Date(),
+          principal.userId,
         );
         if (!changed) throw new ConflictError(`Lead ${lead.leadNumber} changed during assignment.`);
         await repository.replaceLeadOwnerMember(principal.companyId, lead.id, input.assigneeUserId);
@@ -948,29 +982,141 @@ export class CrmService {
   async changeLeadStage(
     principal: AuthenticatedPrincipal,
     leadId: string,
-    input: { expectedVersion: number; stage: 'contacted' | 'on_hold' | 'lost'; reason?: string },
+    input: { expectedVersion: number; stage: 'contacted' | 'on_hold' | 'lost' | 'resume'; reason?: string },
     requestId: string,
   ) {
     const current = await this.getLead(principal, leadId);
     const allowedFrom: Record<typeof input.stage, Array<typeof current.stage>> = {
       contacted: ['new', 'on_hold'],
-      on_hold: ['new', 'contacted'],
-      lost: ['new', 'contacted', 'on_hold'],
+      on_hold: ['new', 'contacted', 'qualified', 'design_authorized', 'commercial_negotiation'],
+      lost: ['new', 'contacted', 'qualified', 'design_authorized', 'commercial_negotiation', 'on_hold'],
+      resume: ['on_hold'],
     };
     if (!allowedFrom[input.stage].includes(current.stage)) {
       throw new ConflictError(`A ${current.stage} lead cannot move to ${input.stage}.`);
     }
+    if (
+      input.stage === 'contacted' &&
+      current.stage === 'on_hold' &&
+      current.previousStage &&
+      !['new', 'contacted'].includes(current.previousStage)
+    ) {
+      throw new ConflictError('Use Resume to restore this opportunity-stage lead from hold.');
+    }
+
+    const targetStage = input.stage === 'resume'
+      ? (current.previousStage ?? 'contacted')
+      : input.stage;
+    const nextPreviousStage = input.stage === 'on_hold' ? current.stage : null;
+
     return this.database.transaction(async (transaction) => {
-      const lead = await createCrmRepository(transaction).changeLeadStage(
+      const repo = createCrmRepository(transaction);
+      const now = new Date();
+      const lead = await repo.changeLeadStage(
         principal.companyId,
         leadId,
         input.expectedVersion,
         allowedFrom[input.stage],
-        input.stage,
-        input.stage === 'lost' ? input.reason! : null,
-        new Date(),
+        targetStage,
+        targetStage === 'lost' ? input.reason! : null,
+        now,
+        nextPreviousStage,
+        principal.userId,
       );
       if (!lead) throw new ConflictError('The lead changed before this action. Refresh and review it.');
+
+      const opportunity = await repo.findOpportunityByLead(principal.companyId, leadId);
+      const designJob = await repo.findDesignJobByLead(principal.companyId, leadId);
+      const notify = createNotificationRepository(transaction);
+      const designRecipients = designJob
+        ? [...new Set([designJob.designerUserId, designJob.designHeadUserId].filter(
+            (id): id is string => Boolean(id) && id !== principal.userId,
+          ))]
+        : [];
+
+      if (targetStage === 'lost') {
+        if (opportunity && opportunity.commercialState !== 'awarded' && opportunity.commercialState !== 'lost') {
+          await repo.updateOpportunityStateOnLeadChange(principal.companyId, opportunity.id, 'lost', null, now);
+        }
+        if (designJob && !['cancelled', 'abandoned'].includes(designJob.status)) {
+          await repo.cancelDesignJob(principal.companyId, designJob.id, input.reason!, now, principal.userId);
+          await repo.cancelPendingDesignDeadlines(principal.companyId, designJob.id, now);
+          if (designRecipients.length > 0) {
+            await notify.createMany(designRecipients.map((recipientUserId) => ({
+              companyId: principal.companyId,
+              recipientUserId,
+              type: 'engineering.design_cancelled',
+              severity: 'warning' as const,
+              title: 'Design job cancelled (lead lost)',
+              message: `${designJob.title} was cancelled because lead ${lead.leadNumber} was marked lost: ${input.reason}`,
+              link: `/engineering/design-jobs/${designJob.id}`,
+              targetType: 'design_job',
+              targetId: designJob.id,
+              dedupKey: `design-cancelled:${designJob.id}:${lead.rowVersion}`,
+            })));
+          }
+        }
+      } else if (targetStage === 'on_hold') {
+        if (opportunity && !['awarded', 'lost', 'on_hold'].includes(opportunity.commercialState)) {
+          await repo.updateOpportunityStateOnLeadChange(
+            principal.companyId,
+            opportunity.id,
+            'on_hold',
+            opportunity.commercialState,
+            now,
+          );
+        }
+        if (designJob && !['paused', 'cancelled', 'abandoned'].includes(designJob.status)) {
+          await repo.pauseDesignJob(principal.companyId, designJob.id, designJob.status, now, principal.userId);
+          await repo.cancelPendingDesignDeadlines(principal.companyId, designJob.id, now);
+          if (designRecipients.length > 0) {
+            await notify.createMany(designRecipients.map((recipientUserId) => ({
+              companyId: principal.companyId,
+              recipientUserId,
+              type: 'engineering.design_paused',
+              severity: 'warning' as const,
+              title: 'Design job paused (lead on hold)',
+              message: `${designJob.title} is paused while lead ${lead.leadNumber} is on hold.`,
+              link: `/engineering/design-jobs/${designJob.id}`,
+              targetType: 'design_job',
+              targetId: designJob.id,
+              dedupKey: `design-paused:${designJob.id}:${lead.rowVersion}`,
+            })));
+          }
+        }
+      } else if (input.stage === 'resume') {
+        if (opportunity && opportunity.commercialState === 'on_hold') {
+          await repo.updateOpportunityStateOnLeadChange(
+            principal.companyId,
+            opportunity.id,
+            opportunity.previousCommercialState ?? 'unawarded',
+            null,
+            now,
+          );
+        }
+        if (designJob && designJob.status === 'paused') {
+          const restoredStatus = designJob.previousStatus ?? 'authorized';
+          await repo.resumeDesignJob(principal.companyId, designJob.id, restoredStatus, now, principal.userId);
+          if (!designJob.designerCompletedAt && designJob.designDueAt) {
+            await repo.enqueueResumedDesignDeadline(principal.companyId, designJob.id, designJob.designDueAt, now);
+          }
+          if (designRecipients.length > 0) {
+            await notify.createMany(designRecipients.map((recipientUserId) => ({
+              companyId: principal.companyId,
+              recipientUserId,
+              type: 'engineering.design_resumed',
+              severity: 'info' as const,
+              title: 'Design job resumed',
+              message: `${designJob.title} resumed after lead ${lead.leadNumber} came off hold.`,
+              link: `/engineering/design-jobs/${designJob.id}`,
+              targetType: 'design_job',
+              targetId: designJob.id,
+              dedupKey: `design-resumed:${designJob.id}:${lead.rowVersion}`,
+            })));
+          }
+        }
+      }
+
       await createAuthRepository(transaction).appendAuditEvent({
         companyId: principal.companyId,
         actorUserId: principal.userId,
@@ -978,82 +1124,206 @@ export class CrmService {
         targetType: 'lead',
         targetId: leadId,
         requestId,
-        metadata: { from: current.stage, to: input.stage, reason: input.reason },
+        metadata: { from: current.stage, to: targetStage, reason: input.reason ?? null },
       });
       return lead;
     });
   }
 
-  async qualifyLead(principal: AuthenticatedPrincipal, leadId: string, input: QualifyLeadInput, requestId: string) {
-    const access = crmAccess(principal);
-    const repository = createCrmRepository(this.database);
-    const lead = await repository.findLead(access, leadId);
-    if (!lead) throw new NotFoundError('Lead not found.');
-    if (lead.stage === 'qualified') {
-      const existing = await repository.findOpportunityByLead(principal.companyId, leadId);
-      if (
-        existing && existing.customerId === input.customerId &&
-        existing.primaryContactId === input.primaryContactId &&
-        existing.siteId === (input.siteId ?? null) && existing.title === input.title
-      ) return { opportunity: existing, replayed: true };
-      throw new ConflictError('This lead has already been qualified with a different opportunity context.');
-    }
-    const customer = await repository.findCustomer(access, input.customerId);
-    if (!customer || customer.status !== 'active') throw new NotFoundError('Active customer not found.');
-    if (!await repository.findContact(principal.companyId, input.customerId, input.primaryContactId)) {
-      throw validationError('The selected contact does not belong to the customer.');
-    }
-    if (input.siteId && !await repository.findSite(principal.companyId, input.customerId, input.siteId)) {
-      throw validationError('The selected site does not belong to the customer.');
-    }
+  async qualifyLead(
+    principal: AuthenticatedPrincipal,
+    leadId: string,
+    input: QualifyLeadInput,
+    requestId: string,
+    files: Express.Multer.File[] = [],
+  ) {
+    try {
+      const access = crmAccess(principal);
+      const repository = createCrmRepository(this.database);
+      const lead = await repository.findLead(access, leadId);
+      if (!lead) throw new NotFoundError('Lead not found.');
+      if (lead.stage === 'qualified') {
+        const existing = await repository.findOpportunityByLead(principal.companyId, leadId);
+        if (
+          existing &&
+          input.customerId &&
+          existing.customerId === input.customerId &&
+          existing.primaryContactId === input.primaryContactId &&
+          existing.siteId === (input.siteId ?? null) &&
+          existing.title === input.title
+        ) {
+          await Promise.all(files.map((file) => removePrivateFile(file.filename)));
+          const existingAttachments = await repository.listOpportunityAttachments(principal.companyId, existing.id);
+          return { opportunity: existing, attachments: existingAttachments, replayed: true };
+        }
+        throw new ConflictError('This lead has already been qualified with a different opportunity context.');
+      }
 
-    return this.database.transaction(async (transaction) => {
-      const transactionalRepository = createCrmRepository(transaction);
-      const now = new Date();
-      const updatedLead = await transactionalRepository.qualifyLead({
-        companyId: principal.companyId,
-        leadId,
-        expectedVersion: input.expectedVersion,
-        customerId: input.customerId,
-        primaryContactId: input.primaryContactId,
-        siteId: input.siteId,
-        qualificationNotes: input.qualificationNotes,
-        now,
+      if (input.customerId) {
+        const customer = await repository.findCustomer(access, input.customerId);
+        if (!customer || customer.status !== 'active') throw new NotFoundError('Active customer not found.');
+        if (!await repository.findContact(principal.companyId, input.customerId, input.primaryContactId!)) {
+          throw validationError('The selected contact does not belong to the customer.');
+        }
+        if (input.siteId && !await repository.findSite(principal.companyId, input.customerId, input.siteId)) {
+          throw validationError('The selected site does not belong to the customer.');
+        }
+      }
+
+      const preparedFiles = await Promise.all(files.map(async (file) => {
+        const originalName = safeOriginalName(file.originalname);
+        if (!originalName) throw validationError('Every uploaded file must have a valid file name.');
+        const checksumSha256 = await sha256File(file.path);
+        return {
+          originalName,
+          storageName: file.filename,
+          mimeType: file.mimetype,
+          sizeBytes: file.size,
+          checksumSha256,
+        };
+      }));
+
+      return await this.database.transaction(async (transaction) => {
+        const transactionalRepository = createCrmRepository(transaction);
+        const now = new Date();
+        let resolvedCustomerId = input.customerId;
+        let resolvedContactId = input.primaryContactId;
+        let resolvedSiteId = input.siteId;
+
+        if (input.newCustomer) {
+          const contact = normalizedContact({ ...input.newCustomer.contact, isPrimary: true });
+          const createdCustomer = await transactionalRepository.createCustomer({
+            companyId: principal.companyId,
+            displayName: input.newCustomer.displayName,
+            displayNameNormalized: normalizeName(input.newCustomer.displayName),
+            legalName: input.newCustomer.legalName,
+            customerType: input.newCustomer.customerType,
+            gstin: input.newCustomer.gstin,
+            pan: input.newCustomer.pan,
+            createdByUserId: principal.userId,
+          });
+          await transactionalRepository.addCustomerMember(principal.companyId, createdCustomer!.id, principal.userId, 'owner');
+          const [createdContact] = await transactionalRepository.createContacts([{
+            companyId: principal.companyId,
+            customerId: createdCustomer!.id,
+            name: contact.name,
+            jobTitle: contact.jobTitle,
+            phone: contact.phone,
+            phoneNormalized: contact.phoneNormalized,
+            email: contact.email,
+            emailNormalized: contact.emailNormalized,
+            isPrimary: true,
+            createdByUserId: principal.userId,
+          }]);
+          if (input.newCustomer.site) {
+            const [createdSite] = await transactionalRepository.createSites([{
+              ...input.newCustomer.site,
+              companyId: principal.companyId,
+              customerId: createdCustomer!.id,
+              createdByUserId: principal.userId,
+            }]);
+            resolvedSiteId = createdSite!.id;
+          }
+          resolvedCustomerId = createdCustomer!.id;
+          resolvedContactId = createdContact!.id;
+
+          await createAuthRepository(transaction).appendAuditEvent({
+            companyId: principal.companyId,
+            actorUserId: principal.userId,
+            action: 'crm.customer_created',
+            targetType: 'customer',
+            targetId: resolvedCustomerId,
+            requestId,
+            metadata: { fromLeadId: leadId, siteId: resolvedSiteId ?? null },
+          });
+        }
+
+        const updatedLead = await transactionalRepository.qualifyLead({
+          companyId: principal.companyId,
+          leadId,
+          expectedVersion: input.expectedVersion,
+          customerId: resolvedCustomerId!,
+          primaryContactId: resolvedContactId!,
+          siteId: resolvedSiteId,
+          qualificationNotes: input.qualificationNotes,
+          updatedByUserId: principal.userId,
+          now,
+        });
+        if (!updatedLead) throw new ConflictError('The lead changed or is no longer eligible for qualification.');
+        const opportunity = await transactionalRepository.createOpportunity({
+          companyId: principal.companyId,
+          leadId,
+          customerId: resolvedCustomerId!,
+          primaryContactId: resolvedContactId!,
+          siteId: resolvedSiteId,
+          title: input.title,
+          createdByUserId: principal.userId,
+        });
+        const members = await transactionalRepository.listLeadMembers(principal.companyId, leadId);
+        await transactionalRepository.addOpportunityMembers(members.map((member) => ({
+          companyId: principal.companyId,
+          opportunityId: opportunity!.id,
+          userId: member.userId,
+          role: member.role === 'owner' ? 'owner' : 'sales',
+        })));
+        await Promise.all(members.map((member) => transactionalRepository.addCustomerMember(
+          principal.companyId,
+          resolvedCustomerId!,
+          member.userId,
+          member.role === 'owner' ? 'owner' : 'viewer',
+        )));
+
+        const insertedAttachments = preparedFiles.length > 0
+          ? await transactionalRepository.createOpportunityAttachments(preparedFiles.map((file) => ({
+            companyId: principal.companyId,
+            opportunityId: opportunity!.id,
+            originalName: file.originalName,
+            storageName: file.storageName,
+            mimeType: file.mimeType,
+            sizeBytes: file.sizeBytes,
+            checksumSha256: file.checksumSha256,
+            uploadedByUserId: principal.userId,
+          })))
+          : [];
+
+        if (insertedAttachments.length > 0) {
+          await Promise.all(insertedAttachments.map((att) => createAuthRepository(transaction).appendAuditEvent({
+            companyId: principal.companyId,
+            actorUserId: principal.userId,
+            action: 'crm.opportunity_attachment_uploaded',
+            targetType: 'opportunity_attachment',
+            targetId: att.id,
+            requestId,
+            metadata: {
+              opportunityId: opportunity!.id,
+              mimeType: att.mimeType,
+              sizeBytes: att.sizeBytes,
+              checksumSha256: att.checksumSha256,
+            },
+          })));
+        }
+
+        await createAuthRepository(transaction).appendAuditEvent({
+          companyId: principal.companyId,
+          actorUserId: principal.userId,
+          action: 'crm.lead_qualified',
+          targetType: 'opportunity',
+          targetId: opportunity!.id,
+          requestId,
+          metadata: {
+            leadId,
+            customerId: resolvedCustomerId!,
+            siteId: resolvedSiteId ?? null,
+            attachmentCount: insertedAttachments.length,
+          },
+        });
+        const attachments = await transactionalRepository.listOpportunityAttachments(principal.companyId, opportunity!.id);
+        return { opportunity: opportunity!, attachments, replayed: false };
       });
-      if (!updatedLead) throw new ConflictError('The lead changed or is no longer eligible for qualification.');
-      const opportunity = await transactionalRepository.createOpportunity({
-        companyId: principal.companyId,
-        leadId,
-        customerId: input.customerId,
-        primaryContactId: input.primaryContactId,
-        siteId: input.siteId,
-        title: input.title,
-        createdByUserId: principal.userId,
-      });
-      const members = await transactionalRepository.listLeadMembers(principal.companyId, leadId);
-      await transactionalRepository.addOpportunityMembers(members.map((member) => ({
-        companyId: principal.companyId,
-        opportunityId: opportunity!.id,
-        userId: member.userId,
-        role: member.role === 'owner' ? 'owner' : 'sales',
-      })));
-      await Promise.all(members.map((member) => transactionalRepository.addCustomerMember(
-        principal.companyId,
-        input.customerId,
-        member.userId,
-        member.role === 'owner' ? 'owner' : 'viewer',
-      )));
-      await createAuthRepository(transaction).appendAuditEvent({
-        companyId: principal.companyId,
-        actorUserId: principal.userId,
-        action: 'crm.lead_qualified',
-        targetType: 'opportunity',
-        targetId: opportunity!.id,
-        requestId,
-        metadata: { leadId, customerId: input.customerId, siteId: input.siteId ?? null },
-      });
-      return { opportunity: opportunity!, replayed: false };
-    });
+    } catch (error) {
+      await Promise.all(files.map((file) => removePrivateFile(file.filename)));
+      throw error;
+    }
   }
 
   listDesignAssignees(principal: AuthenticatedPrincipal, role: 'designer' | 'design_head') {
@@ -1094,7 +1364,7 @@ export class CrmService {
       const transactionalRepository = createCrmRepository(transaction);
       const now = new Date();
       const updatedLead = await transactionalRepository.authorizeLeadForDesign(
-        principal.companyId, leadId, input.expectedVersion, now,
+        principal.companyId, leadId, input.expectedVersion, now, principal.userId,
       );
       if (!updatedLead) throw new ConflictError('The lead changed or is no longer eligible for design authorization.');
       const designJob = await transactionalRepository.createDesignJob({
@@ -1108,6 +1378,7 @@ export class CrmService {
         surveyRequested: input.surveyRequested,
         authorizationNotes: input.authorizationNotes,
         authorizedByUserId: principal.userId,
+        updatedByUserId: principal.userId,
         authorizedAt: now,
         createdAt: now,
         updatedAt: now,
@@ -1147,6 +1418,9 @@ export class CrmService {
         occurredAt: input.occurredAt,
         createdByUserId: principal.userId,
       });
+      await createCrmRepository(transaction).touchLeadUpdatedBy?.(
+        principal.companyId, leadId, principal.userId, new Date(),
+      );
       await createAuthRepository(transaction).appendAuditEvent({
         companyId: principal.companyId,
         actorUserId: principal.userId,
@@ -1194,6 +1468,7 @@ export class CrmService {
         dueAt: input.dueAt,
       });
       await repository.enqueueReminderOccurrence(principal.companyId, occurrence!.id, input.dueAt);
+      await repository.touchLeadUpdatedBy?.(principal.companyId, leadId, principal.userId, new Date());
       await createAuthRepository(transaction).appendAuditEvent({
         companyId: principal.companyId,
         actorUserId: principal.userId,
@@ -1252,6 +1527,7 @@ export class CrmService {
           dueAt: input.dueAt,
         });
         await repository.enqueueReminderOccurrence(principal.companyId, occurrence!.id, input.dueAt);
+        await repository.touchLeadUpdatedBy?.(principal.companyId, lead.id, principal.userId, new Date());
         await createAuthRepository(transaction).appendAuditEvent({
           companyId: principal.companyId,
           actorUserId: principal.userId,
@@ -1306,51 +1582,130 @@ export class CrmService {
     return createCrmRepository(this.database).listAttachments(principal.companyId, leadId);
   }
 
-  async createAttachment(principal: AuthenticatedPrincipal, leadId: string, file: Express.Multer.File, requestId: string) {
+  async getAttachment(principal: AuthenticatedPrincipal, leadId: string, attachmentId: string) {
+    await this.getLead(principal, leadId);
+    const attachment = await createCrmRepository(this.database).findAttachment(
+      principal.companyId, leadId, attachmentId,
+    );
+    if (!attachment) throw new NotFoundError('Attachment not found.');
+    return attachment;
+  }
+
+  private async assertOpportunityAttachmentReadAccess(principal: AuthenticatedPrincipal, opportunityId: string) {
+    if (principal.mustChangePassword) throw new ForbiddenError('Change the temporary password before using this feature.');
+    const repository = createCrmRepository(this.database);
+    const opportunity = await repository.findOpportunity(principal.companyId, opportunityId);
+    if (!opportunity) throw new NotFoundError('Opportunity not found.');
+    if (isAdministrator(principal)) return opportunity;
+
+    if (hasPermission(principal, 'crm.opportunity.read')) {
+      const scoped = await repository.findOpportunityWithAccess(crmAccess(principal), opportunityId);
+      if (scoped) return scoped;
+    }
+
+    const canDesignRead =
+      hasPermission(principal, 'engineering.design.read') ||
+      hasPermission(principal, 'engineering.design.write') ||
+      hasPermission(principal, 'engineering.design.review');
+    if (canDesignRead) {
+      const designJob = await repository.findDesignJobByOpportunity(principal.companyId, opportunityId);
+      if (
+        designJob &&
+        (designJob.designHeadUserId === principal.userId || designJob.designerUserId === principal.userId)
+      ) {
+        return opportunity;
+      }
+    }
+
+    throw new ForbiddenError('You do not have access to this opportunity’s documents.');
+  }
+
+  private async assertOpportunityAttachmentWriteAccess(principal: AuthenticatedPrincipal, opportunityId: string) {
+    if (principal.mustChangePassword) throw new ForbiddenError('Change the temporary password before using this feature.');
+    const repository = createCrmRepository(this.database);
+    const opportunity = await repository.findOpportunity(principal.companyId, opportunityId);
+    if (!opportunity) throw new NotFoundError('Opportunity not found.');
+    if (isAdministrator(principal)) return opportunity;
+    if (!hasPermission(principal, 'crm.lead.write') && !hasPermission(principal, 'crm.lead.qualify')) {
+      throw new ForbiddenError('You cannot upload opportunity documents.');
+    }
+    const scoped = await repository.findOpportunityWithAccess(crmAccess(principal), opportunityId);
+    if (!scoped) throw new ForbiddenError('You do not have access to upload documents to this opportunity.');
+    return scoped;
+  }
+
+  async listOpportunityAttachments(principal: AuthenticatedPrincipal, opportunityId: string) {
+    await this.assertOpportunityAttachmentReadAccess(principal, opportunityId);
+    return createCrmRepository(this.database).listOpportunityAttachments(principal.companyId, opportunityId);
+  }
+
+  async createOpportunityAttachments(
+    principal: AuthenticatedPrincipal,
+    opportunityId: string,
+    files: Express.Multer.File[],
+    requestId: string,
+  ) {
     try {
-      await this.getLead(principal, leadId);
-      const checksumSha256 = await sha256File(file.path);
-      const originalName = Array.from(path.basename(file.originalname))
-        .map((character) => {
-          const codePoint = character.codePointAt(0) ?? 0;
-          return codePoint <= 31 || codePoint === 127 ? '_' : character;
-        })
-        .join('')
-        .slice(0, 255);
-      if (!originalName) throw validationError('The uploaded file must have a name.');
-      const attachment = await this.database.transaction(async (transaction) => {
-        const created = await createCrmRepository(transaction).createAttachment({
-          companyId: principal.companyId,
-          leadId,
+      await this.assertOpportunityAttachmentWriteAccess(principal, opportunityId);
+      if (files.length === 0) throw validationError('Choose at least one file to upload.');
+
+      const prepared = await Promise.all(files.map(async (file) => {
+        const originalName = safeOriginalName(file.originalname);
+        if (!originalName) throw validationError('Every uploaded file must have a valid file name.');
+        const checksumSha256 = await sha256File(file.path);
+        return {
           originalName,
           storageName: file.filename,
           mimeType: file.mimetype,
           sizeBytes: file.size,
           checksumSha256,
-          createdByUserId: principal.userId,
-        });
-        await createAuthRepository(transaction).appendAuditEvent({
+        };
+      }));
+
+      const insertedIds = await this.database.transaction(async (transaction) => {
+        const repository = createCrmRepository(transaction);
+        const opp = await repository.findOpportunity(principal.companyId, opportunityId);
+        const created = await repository.createOpportunityAttachments(prepared.map((file) => ({
+          companyId: principal.companyId,
+          opportunityId,
+          originalName: file.originalName,
+          storageName: file.storageName,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          checksumSha256: file.checksumSha256,
+          uploadedByUserId: principal.userId,
+        })));
+        if (opp) {
+          await repository.touchLeadUpdatedBy?.(principal.companyId, opp.leadId, principal.userId, new Date());
+        }
+        await Promise.all(created.map((att) => createAuthRepository(transaction).appendAuditEvent({
           companyId: principal.companyId,
           actorUserId: principal.userId,
-          action: 'crm.lead_attachment_uploaded',
-          targetType: 'lead_attachment',
-          targetId: created!.id,
+          action: 'crm.opportunity_attachment_uploaded',
+          targetType: 'opportunity_attachment',
+          targetId: att.id,
           requestId,
-          metadata: { leadId, mimeType: file.mimetype, sizeBytes: file.size, checksumSha256 },
-        });
-        return created!;
+          metadata: {
+            opportunityId,
+            mimeType: att.mimeType,
+            sizeBytes: att.sizeBytes,
+            checksumSha256: att.checksumSha256,
+          },
+        })));
+        return created.map((att) => att.id);
       });
-      return attachment;
+      const all = await createCrmRepository(this.database).listOpportunityAttachments(principal.companyId, opportunityId);
+      return all.filter((item) => insertedIds.includes(item.id));
     } catch (error) {
-      await removePrivateFile(file.filename);
+      await Promise.all(files.map((file) => removePrivateFile(file.filename)));
       throw error;
     }
   }
 
-  async getAttachment(principal: AuthenticatedPrincipal, leadId: string, attachmentId: string) {
-    await this.getLead(principal, leadId);
-    const attachment = await createCrmRepository(this.database).findAttachment(
-      principal.companyId, leadId, attachmentId,
+  async getOpportunityAttachment(principal: AuthenticatedPrincipal, opportunityId: string, attachmentId: string) {
+    await this.assertOpportunityAttachmentReadAccess(principal, opportunityId);
+    const attachment = await createCrmRepository(this.database).findOpportunityAttachment(
+      principal.companyId, opportunityId, attachmentId,
     );
     if (!attachment) throw new NotFoundError('Attachment not found.');
     return attachment;
@@ -1366,6 +1721,13 @@ export class CrmService {
       limit: input.pageSize,
       offset: (input.page - 1) * input.pageSize,
     }).then((result) => ({ ...result, page: input.page, pageSize: input.pageSize }));
+  }
+
+  async getOpportunityDetail(principal: AuthenticatedPrincipal, opportunityId: string) {
+    if (principal.mustChangePassword) throw new ForbiddenError('Change the temporary password before using this feature.');
+    const item = await createCrmRepository(this.database).findOpportunityDetail(crmAccess(principal), opportunityId);
+    if (!item) throw new NotFoundError('Opportunity not found.');
+    return item;
   }
 }
 

@@ -12,7 +12,25 @@ import { createCrmRepository } from '../crm/crm.repository.js';
 import { createNotificationRepository } from '../notifications/notification.repository.js';
 import { createEngineeringRepository } from './engineering.repository.js';
 
-type ListInput = { search?: string; status?: string; page: number; pageSize: number; sort: 'title' | 'status' | 'updatedAt'; direction: 'asc' | 'desc' };
+type ListInput = {
+  search?: string;
+  status?: string;
+  designerUserId?: string;
+  designHeadUserId?: string;
+  surveyRequested?: 'yes' | 'no';
+  deadlineState?: 'overdue' | 'due_soon' | 'on_track' | 'completed' | 'unassigned';
+  sectorId?: string;
+  serviceCategoryId?: string;
+  updatedByUserId?: string;
+  authorizedFrom?: string;
+  authorizedTo?: string;
+  updatedFrom?: string;
+  updatedTo?: string;
+  page: number;
+  pageSize: number;
+  sort: 'title' | 'status' | 'updatedAt' | 'authorizedAt' | 'designDueAt' | 'customerName';
+  direction: 'asc' | 'desc';
+};
 
 async function sha256File(filePath: string) {
   const hash = createHash('sha256');
@@ -58,6 +76,15 @@ function surveyFileDto(file: {
   };
 }
 
+const FROZEN_JOB_STATUSES = new Set(['paused', 'cancelled', 'abandoned']);
+
+function assertJobNotFrozen(job: { status: string; closedReason?: string | null }) {
+  if (FROZEN_JOB_STATUSES.has(job.status)) {
+    const suffix = job.closedReason ? ` (${job.closedReason})` : '';
+    throw new ConflictError(`Design job is ${job.status}${suffix} and cannot be modified.`);
+  }
+}
+
 export class EngineeringService {
   constructor(private readonly database: Database = db) {}
 
@@ -71,6 +98,14 @@ export class EngineeringService {
     const job = await createEngineeringRepository(this.database).findJob({ companyId: principal.companyId, userId: principal.userId }, jobId);
     if (!job) throw new NotFoundError('Design job not found.');
     return job;
+  }
+
+  listFilterOptions(principal: AuthenticatedPrincipal) {
+    this.assertFeature(principal);
+    return createEngineeringRepository(this.database).listFilterOptions({
+      companyId: principal.companyId,
+      userId: principal.userId,
+    });
   }
 
   async listJobs(principal: AuthenticatedPrincipal, input: ListInput) {
@@ -118,10 +153,11 @@ export class EngineeringService {
     requestId: string,
   ) {
     const job = await this.job(principal, jobId);
+    assertJobNotFrozen(job);
     if (!hasPermission(principal, 'engineering.design.assign_engineer') || (!isAdministrator(principal) && job.designHeadUserId !== principal.userId)) {
       throw new ForbiddenError('Only the assigned design head can choose the design engineer.');
     }
-    if (input.designerUserId === principal.userId) {
+    if (!isAdministrator(principal) && input.designerUserId === principal.userId) {
       throw new AppError('VALIDATION_ERROR', 'The design engineer must be different from the design head.', 422);
     }
     const designer = await createCrmRepository(this.database).findEligibleUser(
@@ -132,7 +168,7 @@ export class EngineeringService {
       const now = new Date();
       const dueAt = addCalendarDays(now, 2);
       const updated = await createEngineeringRepository(transaction).assignDesigner(
-        principal.companyId, jobId, input.expectedVersion, input.designerUserId, now, dueAt,
+        principal.companyId, jobId, input.expectedVersion, input.designerUserId, now, dueAt, principal.userId,
       );
       if (!updated) throw new ConflictError('The design job changed or already has a design engineer.');
       await createEngineeringRepository(transaction).enqueueDeadline(principal.companyId, jobId, dueAt);
@@ -161,6 +197,96 @@ export class EngineeringService {
     });
   }
 
+  async listEligibleAssignees(principal: AuthenticatedPrincipal, jobId: string) {
+    await this.job(principal, jobId);
+    if (!isAdministrator(principal)) {
+      throw new ForbiddenError('Only system administrators can reassign design heads or engineers.');
+    }
+    const crm = createCrmRepository(this.database);
+    const [designHeads, designers] = await Promise.all([
+      crm.listEligibleUsers(principal.companyId, 'engineering.design.review'),
+      crm.listEligibleUsers(principal.companyId, 'engineering.design.write'),
+    ]);
+    return { designHeads, designers };
+  }
+
+  async reassignJob(
+    principal: AuthenticatedPrincipal,
+    jobId: string,
+    input: { designHeadUserId?: string; designerUserId?: string; expectedVersion: number },
+    requestId: string,
+  ) {
+    if (!isAdministrator(principal)) {
+      throw new ForbiddenError('Only system administrators can reassign design job owners.');
+    }
+    const job = await this.job(principal, jobId);
+    assertJobNotFrozen(job);
+    const crm = createCrmRepository(this.database);
+    if (input.designHeadUserId) {
+      const head = await crm.findEligibleUser(principal.companyId, input.designHeadUserId, 'engineering.design.review');
+      if (!head) throw new AppError('VALIDATION_ERROR', 'Choose an active employee eligible for design head review.', 422);
+    }
+    if (input.designerUserId) {
+      const designer = await crm.findEligibleUser(principal.companyId, input.designerUserId, 'engineering.design.write');
+      if (!designer) throw new AppError('VALIDATION_ERROR', 'Choose an active employee eligible for design engineering.', 422);
+    }
+    return this.database.transaction(async (transaction) => {
+      const now = new Date();
+      const repo = createEngineeringRepository(transaction);
+      const patch: Record<string, unknown> = { updatedByUserId: principal.userId };
+      if (input.designHeadUserId) patch.designHeadUserId = input.designHeadUserId;
+      let startedClockDueAt: Date | null = null;
+      if (input.designerUserId) {
+        patch.designerUserId = input.designerUserId;
+        if (!job.designerUserId && job.status === 'awaiting_designer') {
+          startedClockDueAt = addCalendarDays(now, 2);
+          patch.designerAssignedAt = now;
+          patch.designDueAt = startedClockDueAt;
+          patch.bufferExtensionsUsed = 0;
+          patch.designerCompletedAt = null;
+          patch.status = 'authorized';
+        }
+      }
+      const updated = await repo.reassignAssignees(principal.companyId, jobId, input.expectedVersion, patch, now);
+      if (!updated) throw new ConflictError('The design job changed or is no longer active. Refresh and try again.');
+      if (startedClockDueAt) await repo.enqueueDeadline(principal.companyId, jobId, startedClockDueAt);
+      const notifyIds = [...new Set([
+        input.designHeadUserId && input.designHeadUserId !== job.designHeadUserId ? input.designHeadUserId : null,
+        input.designerUserId && input.designerUserId !== job.designerUserId ? input.designerUserId : null,
+      ].filter((id): id is string => Boolean(id) && id !== principal.userId))];
+      if (notifyIds.length > 0) {
+        await createNotificationRepository(transaction).createMany(notifyIds.map((recipientUserId) => ({
+          companyId: principal.companyId,
+          recipientUserId,
+          type: 'engineering.design_assigned',
+          severity: 'info' as const,
+          title: 'Design job assigned to you',
+          message: `${job.title} was assigned to you by an administrator.`,
+          link: `/engineering/design-jobs/${jobId}`,
+          targetType: 'design_job',
+          targetId: jobId,
+          dedupKey: `design-reassign:${jobId}:${recipientUserId}:${updated.rowVersion}`,
+        })));
+      }
+      await createAuthRepository(transaction).appendAuditEvent({
+        companyId: principal.companyId,
+        actorUserId: principal.userId,
+        action: 'engineering.design_job_reassigned',
+        targetType: 'design_job',
+        targetId: jobId,
+        requestId,
+        metadata: {
+          administratorOverride: true,
+          previousDesignHeadUserId: job.designHeadUserId,
+          designHeadUserId: input.designHeadUserId ?? job.designHeadUserId,
+          previousDesignerUserId: job.designerUserId,
+          designerUserId: input.designerUserId ?? job.designerUserId,
+        },
+      });
+      return updated;
+    });
+  }
+
   async useDeadlineBuffer(
     principal: AuthenticatedPrincipal,
     jobId: string,
@@ -169,6 +295,7 @@ export class EngineeringService {
   ) {
     if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
+    assertJobNotFrozen(job);
     if (!isAdministrator(principal) && job.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can use this buffer.');
     if (job.designerCompletedAt) throw new ConflictError('The design completion clock stopped when the first revision was submitted.');
     if (!job.designDueAt || job.bufferExtensionsUsed >= 3) throw new ConflictError('No design buffer extensions remain.');
@@ -233,7 +360,7 @@ export class EngineeringService {
         changeSummary: input.changeSummary,
         createdByUserId: principal.userId,
       });
-      const updatedJob = await repository.updateJobStatus(principal.companyId, jobId, input.expectedJobVersion, 'draft', new Date());
+      const updatedJob = await repository.updateJobStatus(principal.companyId, jobId, input.expectedJobVersion, 'draft', new Date(), principal.userId);
       if (!updatedJob) throw new ConflictError('The design job changed. Refresh and try again.');
       await createAuthRepository(transaction).appendAuditEvent({
         companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.revision_created',
@@ -252,8 +379,9 @@ export class EngineeringService {
   ) {
     if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
-    if (!isAdministrator(principal) && job.designerUserId !== principal.userId) {
-      throw new ForbiddenError('Only the assigned designer can create a survey revision.');
+    assertJobNotFrozen(job);
+    if (!isAdministrator(principal) && job.designerUserId !== principal.userId && job.designHeadUserId !== principal.userId) {
+      throw new ForbiddenError('Only the assigned designer or design head can create a survey revision.');
     }
 
     return this.database.transaction(async (transaction) => {
@@ -273,6 +401,7 @@ export class EngineeringService {
         createdByUserId: principal.userId,
       });
       if (!revision) throw new ConflictError('A survey draft already exists. Refresh and try again.');
+      await repository.touchJobUpdatedBy?.(principal.companyId, jobId, principal.userId, new Date());
       await createAuthRepository(transaction).appendAuditEvent({
         companyId: principal.companyId,
         actorUserId: principal.userId,
@@ -296,8 +425,9 @@ export class EngineeringService {
     try {
       if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
       const job = await this.job(principal, jobId);
-      if (!isAdministrator(principal) && job.designerUserId !== principal.userId) {
-        throw new ForbiddenError('Only the assigned designer can upload survey files.');
+      assertJobNotFrozen(job);
+      if (!isAdministrator(principal) && job.designerUserId !== principal.userId && job.designHeadUserId !== principal.userId) {
+        throw new ForbiddenError('Only the assigned designer or design head can upload survey files.');
       }
       const extension = path.extname(file.originalname).toLowerCase();
       if (!['.pdf', '.jpg', '.jpeg', '.png', '.webp'].includes(extension)) {
@@ -326,6 +456,7 @@ export class EngineeringService {
           checksumSha256,
           createdByUserId: principal.userId,
         });
+        await repository.touchJobUpdatedBy?.(principal.companyId, jobId, principal.userId, new Date());
         await createAuthRepository(transaction).appendAuditEvent({
           companyId: principal.companyId,
           actorUserId: principal.userId,
@@ -352,8 +483,9 @@ export class EngineeringService {
   ) {
     if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
-    if (!isAdministrator(principal) && job.designerUserId !== principal.userId) {
-      throw new ForbiddenError('Only the assigned designer can finalize this survey revision.');
+    assertJobNotFrozen(job);
+    if (!isAdministrator(principal) && job.designerUserId !== principal.userId && job.designHeadUserId !== principal.userId) {
+      throw new ForbiddenError('Only the assigned designer or design head can finalize this survey revision.');
     }
 
     return this.database.transaction(async (transaction) => {
@@ -371,6 +503,7 @@ export class EngineeringService {
         principal.companyId, surveyRevisionId, expectedVersion, principal.userId, new Date(),
       );
       if (!finalized) throw new ConflictError('The survey revision changed or is already finalized.');
+      await repository.touchJobUpdatedBy?.(principal.companyId, jobId, principal.userId, new Date());
       await createNotificationRepository(transaction).create({
         companyId: principal.companyId,
         recipientUserId: job.designHeadUserId,
@@ -400,6 +533,7 @@ export class EngineeringService {
     try {
       if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
       const job = await this.job(principal, jobId);
+      assertJobNotFrozen(job);
       if (!isAdministrator(principal) && job.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can upload design files.');
       const extension = path.extname(file.originalname).toLowerCase();
       if (kind === 'cad' && !['.dwg', '.dxf'].includes(extension)) throw new AppError('VALIDATION_ERROR', 'CAD files must use the .dwg or .dxf extension.', 422);
@@ -415,6 +549,7 @@ export class EngineeringService {
           companyId: principal.companyId, revisionId, kind, originalName, storageName: file.filename,
           mimeType: file.mimetype, sizeBytes: file.size, checksumSha256: await sha256File(file.path), createdByUserId: principal.userId,
         });
+        await createEngineeringRepository(transaction).touchJobUpdatedBy?.(principal.companyId, jobId, principal.userId, new Date());
         await createAuthRepository(transaction).appendAuditEvent({
           companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.revision_file_uploaded',
           targetType: 'design_revision_file', targetId: created!.id, requestId,
@@ -431,6 +566,7 @@ export class EngineeringService {
   async submitRevision(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, expectedVersion: number, requestId: string) {
     if (!hasPermission(principal, 'engineering.design.write')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
+    assertJobNotFrozen(job);
     if (!isAdministrator(principal) && job.designerUserId !== principal.userId) throw new ForbiddenError('Only the assigned designer can submit this revision.');
     const repository = createEngineeringRepository(this.database);
     const revision = await repository.findRevision(principal.companyId, jobId, revisionId);
@@ -444,7 +580,7 @@ export class EngineeringService {
       const now = new Date();
       const updated = await tx.transitionRevision(principal.companyId, revisionId, expectedVersion, 'draft', { status: 'submitted', submittedByUserId: principal.userId, submittedAt: now });
       if (!updated) throw new ConflictError('The revision changed or is no longer a draft.');
-      if (!await tx.submitJobForReview(principal.companyId, jobId, job.rowVersion, now)) throw new ConflictError('The design job changed. Refresh and try again.');
+      if (!await tx.submitJobForReview(principal.companyId, jobId, job.rowVersion, now, principal.userId)) throw new ConflictError('The design job changed. Refresh and try again.');
       await createNotificationRepository(transaction).create({
         companyId: principal.companyId, recipientUserId: job.designHeadUserId,
         type: 'engineering.design_submitted', severity: 'info', title: 'Design ready for review',
@@ -459,6 +595,7 @@ export class EngineeringService {
   async reviewRevision(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, input: { decision: 'approved' | 'returned'; reason?: string; expectedVersion: number }, requestId: string) {
     if (!hasPermission(principal, 'engineering.design.review')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
+    assertJobNotFrozen(job);
     if (!isAdministrator(principal) && job.designHeadUserId !== principal.userId) throw new ForbiddenError('Only the assigned design head can review this revision.');
     const repository = createEngineeringRepository(this.database);
     const revision = await repository.findRevision(principal.companyId, jobId, revisionId);
@@ -469,7 +606,7 @@ export class EngineeringService {
       const tx = createEngineeringRepository(transaction);
       const updated = await tx.transitionRevision(principal.companyId, revisionId, input.expectedVersion, 'submitted', { status: target });
       if (!updated) throw new ConflictError('The revision changed or is no longer awaiting review.');
-      if (!await tx.updateJobStatus(principal.companyId, jobId, job.rowVersion, target, new Date())) throw new ConflictError('The design job changed. Refresh and try again.');
+      if (!await tx.updateJobStatus(principal.companyId, jobId, job.rowVersion, target, new Date(), principal.userId)) throw new ConflictError('The design job changed. Refresh and try again.');
       await tx.createReviewAction({ companyId: principal.companyId, revisionId, decision: input.decision, reason: input.reason, actorUserId: principal.userId });
       if (job.designerUserId) await createNotificationRepository(transaction).create({
         companyId: principal.companyId, recipientUserId: job.designerUserId,
@@ -487,29 +624,102 @@ export class EngineeringService {
   async sendToCustomer(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, expectedVersion: number, requestId: string) {
     if (!hasPermission(principal, 'engineering.design.customer_decision')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
+    assertJobNotFrozen(job);
     const revision = await createEngineeringRepository(this.database).findRevision(principal.companyId, jobId, revisionId);
     if (!revision) throw new NotFoundError('Design revision not found.');
     return this.database.transaction(async (transaction) => {
       const tx = createEngineeringRepository(transaction);
       const updated = await tx.transitionRevision(principal.companyId, revisionId, expectedVersion, 'internally_approved', { status: 'sent_to_customer' });
       if (!updated) throw new ConflictError('Only an internally approved revision can be sent to the customer.');
-      if (!await tx.updateJobStatus(principal.companyId, jobId, job.rowVersion, 'sent_to_customer', new Date())) throw new ConflictError('The design job changed. Refresh and try again.');
+      if (!await tx.updateJobStatus(principal.companyId, jobId, job.rowVersion, 'sent_to_customer', new Date(), principal.userId)) throw new ConflictError('The design job changed. Refresh and try again.');
       await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'engineering.revision_sent_to_customer', targetType: 'design_revision', targetId: revisionId, requestId, metadata: { designJobId: jobId } });
       return updated;
     });
   }
 
-  async recordCustomerDecision(principal: AuthenticatedPrincipal, jobId: string, revisionId: string, input: { decision: 'approved' | 'changes_requested'; evidenceReference: string; notes?: string; expectedVersion: number }, requestId: string) {
+  async recordCustomerDecision(
+    principal: AuthenticatedPrincipal,
+    jobId: string,
+    revisionId: string,
+    input: {
+      decision: 'approved' | 'changes_requested' | 'abandoned';
+      evidenceReference: string;
+      lossReason?: string;
+      notes?: string;
+      expectedVersion: number;
+    },
+    requestId: string,
+  ) {
     if (!hasPermission(principal, 'engineering.design.customer_decision')) throw new ForbiddenError();
     const job = await this.job(principal, jobId);
+    assertJobNotFrozen(job);
     const revision = await createEngineeringRepository(this.database).findRevision(principal.companyId, jobId, revisionId);
     if (!revision) throw new NotFoundError('Design revision not found.');
-    const target = input.decision === 'approved' ? 'customer_approved' : 'changes_requested';
+    const now = new Date();
     return this.database.transaction(async (transaction) => {
       const tx = createEngineeringRepository(transaction);
+      if (input.decision === 'abandoned') {
+        const updated = await tx.transitionRevision(
+          principal.companyId,
+          revisionId,
+          input.expectedVersion,
+          'sent_to_customer',
+          { status: 'sent_to_customer' },
+        );
+        if (!updated) throw new ConflictError('The customer decision was already recorded or the revision changed.');
+        if (!await tx.abandonJob(principal.companyId, jobId, job.rowVersion, input.lossReason!, now, principal.userId)) {
+          throw new ConflictError('The design job changed. Refresh and try again.');
+        }
+        await tx.cancelPendingDeadlineJobs(principal.companyId, jobId, now);
+        await tx.createCustomerDecision({
+          companyId: principal.companyId,
+          revisionId,
+          decision: 'abandoned',
+          evidenceReference: input.evidenceReference,
+          notes: input.notes ?? input.lossReason,
+          recordedByUserId: principal.userId,
+        });
+        await tx.markLeadAndOpportunityLost(principal.companyId, job.leadId, job.opportunityId, input.lossReason!, now, principal.userId);
+        const salesMembers = await tx.listDesignAndSalesRecipients(principal.companyId, job.leadId, job.opportunityId);
+        const recipients = [...new Set([
+          job.designerUserId,
+          job.designHeadUserId,
+          ...salesMembers,
+        ].filter((id): id is string => Boolean(id) && id !== principal.userId))];
+        await createNotificationRepository(transaction).createMany(recipients.map((recipientUserId) => ({
+          companyId: principal.companyId,
+          recipientUserId,
+          type: 'engineering.customer_abandoned',
+          severity: 'warning' as const,
+          title: 'Customer abandoned design & lead marked lost',
+          message: `${job.title} was abandoned (${input.lossReason}).`,
+          link: `/engineering/design-jobs/${jobId}`,
+          targetType: 'design_job',
+          targetId: jobId,
+          dedupKey: `design-customer:${revisionId}:abandoned`,
+        })));
+        await createAuthRepository(transaction).appendAuditEvent({
+          companyId: principal.companyId,
+          actorUserId: principal.userId,
+          action: 'engineering.customer_abandoned',
+          targetType: 'design_revision',
+          targetId: revisionId,
+          requestId,
+          metadata: {
+            designJobId: jobId,
+            leadId: job.leadId,
+            opportunityId: job.opportunityId,
+            evidenceReference: input.evidenceReference,
+            lossReason: input.lossReason,
+          },
+        });
+        return updated;
+      }
+
+      const target = input.decision === 'approved' ? 'customer_approved' : 'changes_requested';
       const updated = await tx.transitionRevision(principal.companyId, revisionId, input.expectedVersion, 'sent_to_customer', { status: target });
       if (!updated) throw new ConflictError('The customer decision was already recorded or the revision changed.');
-      if (!await tx.updateJobStatus(principal.companyId, jobId, job.rowVersion, target, new Date())) throw new ConflictError('The design job changed. Refresh and try again.');
+      if (!await tx.updateJobStatus(principal.companyId, jobId, job.rowVersion, target, now, principal.userId)) throw new ConflictError('The design job changed. Refresh and try again.');
       await tx.createCustomerDecision({ companyId: principal.companyId, revisionId, decision: input.decision, evidenceReference: input.evidenceReference, notes: input.notes, recordedByUserId: principal.userId });
       const recipients = [...new Set([job.designerUserId, job.designHeadUserId].filter((id): id is string => Boolean(id) && id !== principal.userId))];
       await createNotificationRepository(transaction).createMany(recipients.map((recipientUserId) => ({

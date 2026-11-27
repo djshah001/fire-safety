@@ -54,4 +54,28 @@ describe('engineering input validation', () => {
     expect(() => useDesignBufferSchema.parse({ reason: ' ', expectedVersion: 2 })).toThrow();
     expect(() => useDesignBufferSchema.parse({ reason: 'Valid reason', expectedVersion: 0 })).toThrow();
   });
+
+  it('validates extended design job filters including SLA state, unassigned engineer, and date ranges', () => {
+    const id = '00000000-0000-4000-8000-000000000020';
+    expect(
+      designJobListQuerySchema.parse({
+        status: 'paused',
+        designerUserId: 'unassigned',
+        designHeadUserId: id,
+        surveyRequested: 'yes',
+        deadlineState: 'overdue',
+        sectorId: id,
+        serviceCategoryId: id,
+        updatedByUserId: id,
+        authorizedFrom: '2026-11-01',
+        authorizedTo: '2026-11-26',
+        updatedFrom: '2026-11-10',
+        updatedTo: '2026-11-26',
+        sort: 'customerName',
+        direction: 'asc',
+      }),
+    ).toMatchObject({ status: 'paused', designerUserId: 'unassigned', deadlineState: 'overdue', sort: 'customerName' });
+    expect(() => designJobListQuerySchema.parse({ designerUserId: 'bad-id' })).toThrow();
+    expect(() => designJobListQuerySchema.parse({ deadlineState: 'unknown' })).toThrow();
+  });
 });

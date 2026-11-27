@@ -9,11 +9,15 @@ import {
 import type { CurrentUser } from "@/api/auth";
 import { getApiErrorMessage } from "@/api/client";
 import {
+  designJobFilterOptionsQuery,
   designJobsQuery,
   type DesignJob,
   type DesignStatus,
 } from "@/api/engineering";
-import { ListToolbar } from "@/components/data-table/ListToolbar";
+import {
+  ListToolbar,
+  type ActiveFilterChip,
+} from "@/components/data-table/ListToolbar";
 import {
   ServerDataTable,
   type ServerColumn,
@@ -30,8 +34,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 
 const statuses: DesignStatus[] = [
+  "awaiting_designer",
   "authorized",
   "draft",
   "under_review",
@@ -40,6 +46,9 @@ const statuses: DesignStatus[] = [
   "sent_to_customer",
   "customer_approved",
   "changes_requested",
+  "paused",
+  "cancelled",
+  "abandoned",
 ];
 
 type Sort = "title" | "status" | "updatedAt";
@@ -58,6 +67,8 @@ export function BoqQueuePage() {
   const status = statuses.includes(params.get("status") as DesignStatus)
     ? (params.get("status") as DesignStatus)
     : undefined;
+  const sectorId = params.get("sectorId") || undefined;
+  const designerUserId = params.get("designerUserId") || undefined;
   const page = Math.max(1, Number(params.get("page")) || 1);
   const pageSize = [10, 20, 50, 100].includes(Number(params.get("pageSize")))
     ? Number(params.get("pageSize"))
@@ -68,10 +79,14 @@ export function BoqQueuePage() {
       : "updatedAt"
   ) as Sort;
   const direction = params.get("direction") === "asc" ? "asc" : "desc";
+
+  const filterOptions = useQuery(designJobFilterOptionsQuery);
   const query = useQuery(
     designJobsQuery({
       search: search || undefined,
       status,
+      sectorId,
+      designerUserId,
       page,
       pageSize,
       sort,
@@ -90,8 +105,40 @@ export function BoqQueuePage() {
     setParams(next, { replace: true });
   };
 
+  const activeChips: ActiveFilterChip[] = [];
+  if (status) {
+    activeChips.push({
+      key: "status",
+      label: `Design: ${status.replaceAll("_", " ")}`,
+      onRemove: () => update({ status: undefined }),
+    });
+  }
+  if (sectorId) {
+    const sectorName =
+      filterOptions.data?.sectors.find((s) => s.id === sectorId)?.name ??
+      "Sector";
+    activeChips.push({
+      key: "sectorId",
+      label: `Sector: ${sectorName}`,
+      onRemove: () => update({ sectorId: undefined }),
+    });
+  }
+  if (designerUserId) {
+    const designerName =
+      designerUserId === "unassigned"
+        ? "Unassigned"
+        : (filterOptions.data?.users.find((u) => u.id === designerUserId)
+            ?.name ?? "Assignee");
+    activeChips.push({
+      key: "designerUserId",
+      label: `Designer: ${designerName}`,
+      onRemove: () => update({ designerUserId: undefined }),
+    });
+  }
+
   const openWorkspace = (job: DesignJob) =>
     navigate(`/engineering/design-jobs/${job.id}/boq`);
+
   const columns: Array<ServerColumn<DesignJob, Sort>> = [
     {
       key: "title",
@@ -100,8 +147,12 @@ export function BoqQueuePage() {
       className: "min-w-64",
       cell: (job) => (
         <div>
-          <p className="font-medium">{job.title}</p>
-          <p className="text-xs text-muted-foreground">{job.leadNumber}</p>
+          <p className="font-medium text-sm">{job.title}</p>
+          <p className="text-xs text-muted-foreground">
+            {job.leadNumber}
+            {job.customerName ? ` · ${job.customerName}` : ""}
+            {job.sectorName ? ` · ${job.sectorName}` : ""}
+          </p>
         </div>
       ),
     },
@@ -122,18 +173,26 @@ export function BoqQueuePage() {
     {
       key: "assignment",
       label: "Your assignment",
-      cell: (job) =>
-        job.designerUserId === user.id
-          ? "Designer"
-          : job.designHeadUserId === user.id
-            ? "Design head"
-            : "Assigned sales member",
+      cell: (job) => (
+        <div className="text-xs">
+          <p className="font-medium">
+            {job.designerUserId === user.id
+              ? "Designer"
+              : job.designHeadUserId === user.id
+                ? "Design head"
+                : "Assigned member"}
+          </p>
+          {job.designerName && (
+            <p className="text-muted-foreground">Eng: {job.designerName}</p>
+          )}
+        </div>
+      ),
     },
     {
       key: "updated",
       label: "Updated",
       sort: "updatedAt",
-      className: "tabular-nums",
+      className: "tabular-nums text-xs",
       cell: (job) => new Date(job.updatedAt).toLocaleDateString(),
     },
     {
@@ -149,7 +208,7 @@ export function BoqQueuePage() {
             openWorkspace(job);
           }}
         >
-          Open BOQ <ExternalLink />
+          Open BOQ <ExternalLink className="ml-1.5 size-3.5" />
         </Button>
       ),
     },
@@ -158,51 +217,124 @@ export function BoqQueuePage() {
   return (
     <main className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
       <div>
-        <p className="text-sm font-semibold text-primary">Engineering</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+        <p className="text-xs font-semibold uppercase tracking-wider text-primary">
+          Engineering
+        </p>
+        <h1 className="mt-1.5 text-2xl sm:text-3xl font-semibold tracking-tight">
           BOQ & estimates
         </h1>
-        <p className="mt-2 max-w-3xl text-muted-foreground">
+        <p className="mt-1.5 max-w-3xl text-sm text-muted-foreground">
           Open the technical BOQ and, where permitted, its separate internal
           cost estimate for your assigned design work.
         </p>
       </div>
 
-      <Alert className="mt-6">
-        <ClipboardList />
-        <AlertTitle>BOQ starts after customer design approval</AlertTitle>
-        <AlertDescription>
+      <Alert className="mt-5">
+        <ClipboardList className="size-4" />
+        <AlertTitle className="text-xs font-semibold">
+          BOQ starts after customer design approval
+        </AlertTitle>
+        <AlertDescription className="text-xs">
           Jobs that are still in design or customer review remain visible here,
           but a new BOQ revision can only be created for an exact
           customer-approved design revision.
         </AlertDescription>
       </Alert>
 
-      <div className="mt-6">
+      <div className="mt-5">
         <ListToolbar
           search={search}
           onSearch={(value) => update({ search: value })}
-          activeFilters={status ? 1 : 0}
-          onClear={() => update({ status: undefined })}
+          searchPlaceholder="Search job title, lead #, or customer…"
+          activeChips={activeChips}
+          activeFilters={activeChips.length}
+          onClear={() =>
+            update({
+              status: undefined,
+              sectorId: undefined,
+              designerUserId: undefined,
+            })
+          }
+          quickFilters={
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Button
+                size="sm"
+                variant={status === "customer_approved" ? "default" : "outline"}
+                className="h-7 text-xs"
+                onClick={() =>
+                  update({
+                    status:
+                      status === "customer_approved"
+                        ? undefined
+                        : "customer_approved",
+                  })
+                }
+              >
+                Ready for BOQ
+              </Button>
+            </div>
+          }
         >
-          <div className="space-y-2">
-            <Label>Design status</Label>
-            <Select
-              value={status ?? "all"}
-              onValueChange={(value) => update({ status: value })}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All design states</SelectItem>
-                {statuses.map((value) => (
-                  <SelectItem key={value} value={value}>
-                    {value.replaceAll("_", " ")}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Design status</Label>
+              <Select
+                value={status ?? "all"}
+                onValueChange={(value) => update({ status: value })}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All design states</SelectItem>
+                  {statuses.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {value.replaceAll("_", " ")}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Separator />
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Market sector</Label>
+              <Select
+                value={sectorId ?? "all"}
+                onValueChange={(value) => update({ sectorId: value })}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All sectors</SelectItem>
+                  {(filterOptions.data?.sectors ?? []).map((sector) => (
+                    <SelectItem key={sector.id} value={sector.id}>
+                      {sector.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold">Assigned engineer</Label>
+              <Select
+                value={designerUserId ?? "all"}
+                onValueChange={(value) => update({ designerUserId: value })}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All engineers</SelectItem>
+                  <SelectItem value="unassigned">Unassigned</SelectItem>
+                  {(filterOptions.data?.users ?? []).map((member) => (
+                    <SelectItem key={member.id} value={member.id}>
+                      {member.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </ListToolbar>
       </div>

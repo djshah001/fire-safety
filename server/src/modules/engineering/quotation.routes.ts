@@ -14,6 +14,7 @@ import {
   quotationHeaderSchema,
   quotationLineParamsSchema,
   quotationLineSchema,
+  quotationLinesBatchPricingSchema,
   quotationListQuerySchema,
   quotationParamsSchema,
   quotationReviewSchema,
@@ -56,6 +57,12 @@ export function createQuotationRouter() {
     const { jobId, revisionId } = quotationParamsSchema.parse(request.params);
     const revision = await quotationService.updateHeader(getPrincipal(request), jobId, revisionId, quotationHeaderSchema.parse(request.body), getRequestId(request));
     sendData(request, response, { revision });
+  });
+
+  router.patch('/design-jobs/:jobId/quotations/:revisionId/lines/pricing', requireCsrf, requirePermission('engineering.quotation.write'), async (request, response) => {
+    const { jobId, revisionId } = quotationParamsSchema.parse(request.params);
+    const result = await quotationService.updateLinesPricingBatch(getPrincipal(request), jobId, revisionId, quotationLinesBatchPricingSchema.parse(request.body), getRequestId(request));
+    sendData(request, response, result);
   });
 
   router.patch('/design-jobs/:jobId/quotations/:revisionId/lines/:lineId', requireCsrf, requirePermission('engineering.quotation.write'), async (request, response) => {

@@ -35,6 +35,7 @@ function toneFor(status?: string | null): keyof typeof tones {
     [
       "lost",
       "cancelled",
+      "abandoned",
       "inactive",
       "failed",
       "declined",
@@ -45,6 +46,7 @@ function toneFor(status?: string | null): keyof typeof tones {
   if (
     [
       "on_hold",
+      "paused",
       "pending",
       "unawarded",
       "returned",

@@ -810,6 +810,13 @@ export class MastersService {
     });
   }
 
+  async getVendorDocument(principal: AuthenticatedPrincipal, vendorId: string, documentId: string) {
+    const repository = createMastersRepository(this.database);
+    const doc = await repository.findVendorDocument(principal.companyId, vendorId, documentId);
+    if (!doc) throw new NotFoundError('Vendor document not found.');
+    return doc;
+  }
+
   async deleteVendorDocument(principal: AuthenticatedPrincipal, vendorId: string, documentId: string, requestId: string) {
     return this.database.transaction(async (transaction) => {
       const repository = createMastersRepository(transaction);

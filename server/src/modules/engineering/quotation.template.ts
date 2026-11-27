@@ -3,7 +3,6 @@ import type { CommercialDocumentDetails } from "../../core/documents/commercialD
 import {
   describeQuotationLine,
   groupQuotationLines,
-  markupHeading,
   quotationTerms,
 } from "./quotation.layout.js";
 
@@ -112,7 +111,6 @@ function itemRows(
     sharedScope?: boolean;
     commonFields?: string[];
     omitMake?: boolean;
-    mixedMarkup?: boolean;
   } = {},
 ) {
   const parsed = describeQuotationLine(line);
@@ -140,9 +138,7 @@ function itemRows(
       <td class="number">${!index ? escapeHtml(new Decimal(line.quantity).toString()) : ""}</td>
       ${
         priced
-          ? `<td class="number component">${!index ? component(line.supplyRate) : ""}</td><td class="number component">${!index ? component(line.labourRate) : ""}</td>
-        <td class="number component">${!index ? `${options.mixedMarkup ? `<small>${escapeHtml(component(line.markupPercent))}%</small><br>` : ""}${component(line.markupAmount)}` : ""}</td>
-        <td class="number component">${!index ? component(line.miscellaneousRate) : ""}</td><td class="number component">${!index ? component(line.quotedUnitRate) : ""}</td><td class="number amount">${!index ? money(line.lineTotal) : ""}</td>`
+          ? `<td class="number component">${!index ? component(line.quotedUnitRate) : ""}</td><td class="number amount">${!index ? money(line.lineTotal) : ""}</td>`
           : ""
       }</tr>`;
     })
@@ -154,10 +150,9 @@ function sectionRows(lines: PdfQuotation["lines"], priced: boolean) {
     section = "",
     sectionIndex = 0,
     total = new Decimal(0);
-  const mixedMarkup = priced && markupHeading(lines) === "Markup";
   const subtotal = () =>
     priced && section
-      ? `<tbody><tr class="section-total"><td colspan="10">TOTAL OF ${escapeHtml(section)}</td><td class="number">${money(total.toString())}</td></tr></tbody>`
+      ? `<tbody><tr class="section-total"><td colspan="6">TOTAL OF ${escapeHtml(section)}</td><td class="number">${money(total.toString())}</td></tr></tbody>`
       : "";
   for (const group of groupQuotationLines(lines)) {
     const name = group.section;
@@ -165,7 +160,7 @@ function sectionRows(lines: PdfQuotation["lines"], priced: boolean) {
       html += subtotal();
       section = name;
       total = new Decimal(0);
-      html += `<tbody class="section-start"><tr class="section-heading"><td>${String.fromCharCode(65 + (sectionIndex++ % 26))}</td><td colspan="${priced ? 10 : 4}">${escapeHtml(section.toUpperCase())}</td></tr></tbody>`;
+      html += `<tbody class="section-start"><tr class="section-heading"><td>${String.fromCharCode(65 + (sectionIndex++ % 26))}</td><td colspan="${priced ? 6 : 4}">${escapeHtml(section.toUpperCase())}</td></tr></tbody>`;
     }
     const compactGroup =
       group.lines.length > 1 &&
@@ -181,14 +176,13 @@ function sectionRows(lines: PdfQuotation["lines"], priced: boolean) {
     if (group.lines.length > 1) {
       for (const part of chunks(group.scope))
         html += `<tr class="family-scope"><td></td><td class="description"><strong>${escapeHtml(group.family)}</strong><p>${escapeHtml(part)}</p>${group.commonFields.map((field) => `<div class="specification">${escapeHtml(field)}</div>`).join("")}</td>
-        <td class="make"${mergedMake ? ` rowspan="${group.lines.length + 1}"` : ""}>${mergedMake ? escapeHtml(group.lines[0]!.brandName ?? "Unbranded").replaceAll(" · ", "<br>") : ""}</td>${"<td></td>".repeat(priced ? 8 : 2)}</tr>`;
+        <td class="make"${mergedMake ? ` rowspan="${group.lines.length + 1}"` : ""}>${mergedMake ? escapeHtml(group.lines[0]!.brandName ?? "Unbranded").replaceAll(" · ", "<br>") : ""}</td>${"<td></td>".repeat(priced ? 4 : 2)}</tr>`;
     }
     for (const entry of group.lines) {
       html += itemRows(entry, priced, {
         sharedScope: group.lines.length > 1,
         commonFields: group.commonFields,
         omitMake: mergedMake,
-        mixedMarkup,
       });
       if (priced) total = total.plus(entry.lineTotal);
     }
@@ -292,12 +286,12 @@ export function buildQuotationHtml(
       ${details.recipientContact || details.recipientPhone ? `<td class="contact">${details.recipientContact ? `<strong>${escapeHtml(details.recipientContact)}</strong>` : ""}${details.recipientPhone ? `<p>Phone: ${escapeHtml(details.recipientPhone)}</p>` : ""}</td>` : ""}</tr></table>
     <p class="subject">Sub: ${escapeHtml(quotation.title)}</p>
     <p class="status">${quotation.preview ? "PREVIEW - NOT ISSUED" : "DEMO / NOT FOR PRODUCTION"}</p>
-    <table class="scope"><colgroup>${(priced ? [3, 40, 8, 4, 4, 6, 6.5, 5.5, 8, 7, 8] : [5, 60, 18, 8, 9]).map((width) => `<col style="width:${width}%">`).join("")}</colgroup>
-      <thead><tr><th>Sr.<br>No.</th><th>DESCRIPTION</th><th>MAKE / MODEL</th><th>UNIT</th><th>Qty.</th>${priced ? `<th>Supply</th><th>Installation</th><th>${escapeHtml(markupHeading(quotation.lines))}</th><th>Miscellaneous</th><th>Rate</th><th>Amount</th>` : ""}</tr></thead>
+    <table class="scope"><colgroup>${(priced ? [5, 47, 14, 6, 7, 10, 11] : [5, 60, 18, 8, 9]).map((width) => `<col style="width:${width}%">`).join("")}</colgroup>
+      <thead><tr><th>Sr.<br>No.</th><th>DESCRIPTION</th><th>MAKE / MODEL</th><th>UNIT</th><th>Qty.</th>${priced ? `<th>Unit Rate</th><th>Amount</th>` : ""}</tr></thead>
       ${sectionRows(quotation.lines, priced)}</table>
     ${
       priced
-        ? `<p class="rates-note">Currency: ${escapeHtml(quotation.currency)}. Supply, installation, markup amount, miscellaneous and rate are per unit. Markup percentages appear in the header or beside mixed-line amounts. Validity: ${quotation.validityDays} days.</p>
+        ? `<p class="rates-note">Currency: ${escapeHtml(quotation.currency)}. Quoted unit rates are all-inclusive per unit for complete execution as per specification. Validity: ${quotation.validityDays} days.</p>
       <table class="totals">${rows("Subtotal", quotation.subtotal)}${rows("Line discounts", quotation.lineDiscountTotal)}${rows("Additional discount", quotation.additionalDiscount)}${rows(quotation.taxLabel ?? "Tax", quotation.taxAmount)}${rows("Rounding adjustment", quotation.roundingAdjustment)}${rows(`GRAND TOTAL (${quotation.currency})`, quotation.grandTotal, true)}</table>
       ${termBlocks("Terms and conditions / exclusions", terms)}${termBlocks("Delivery terms", quotation.deliveryTerms)}${!inlinePayment ? termBlocks("Payment terms", quotation.paymentTerms) : ""}${termBlocks("Bank details", details.bankDetails ?? "")}
       ${details.signatory ? `<div class="signatory">For ${escapeHtml(details.senderName ?? "")}<strong>${escapeHtml(details.signatory)}</strong>Authorized signatory</div>` : ""}`

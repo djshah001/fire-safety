@@ -182,12 +182,21 @@ export class ProjectService {
     const repository = createProjectRepository(this.database);
     const context = await repository.startContext(principal.companyId, jobId);
     if (!context) throw new NotFoundError('Design job not found.');
-    const [designRevisions, boqRevisions, eligibleMembers, existing] = await Promise.all([
-      repository.listApprovedDesigns(principal.companyId, jobId), repository.listApprovedBoqs(principal.companyId, jobId),
+    const [designRevisions, boqRevisions, acceptedQuotation, eligibleMembers, existing] = await Promise.all([
+      repository.listApprovedDesigns(principal.companyId, jobId),
+      repository.listApprovedBoqs(principal.companyId, jobId),
+      repository.acceptedQuotation(principal.companyId, context.opportunityId),
       createCrmRepository(this.database).listEligibleUsers(principal.companyId, 'project.read'),
       repository.findByOpportunity(principal.companyId, context.opportunityId),
     ]);
-    return { context, designRevisions, boqRevisions, eligibleMembers, existingProjectId: existing?.id ?? null };
+    return {
+      context,
+      designRevisions,
+      boqRevisions,
+      acceptedQuotation: acceptedQuotation ?? null,
+      eligibleMembers,
+      existingProjectId: existing?.id ?? null,
+    };
   }
 
   async start(principal: AuthenticatedPrincipal, jobId: string, input: StartInput, requestId: string) {
@@ -195,6 +204,12 @@ export class ProjectService {
     const repository = createProjectRepository(this.database);
     const context = await repository.startContext(principal.companyId, jobId);
     if (!context) throw new NotFoundError('Design job not found.');
+    const preflightAccepted = await repository.acceptedQuotation(principal.companyId, context.opportunityId);
+    if (!preflightAccepted) {
+      throw new ConflictError('An accepted quotation revision is required before starting a project.', {
+        missingRequirements: ['accepted_quotation'],
+      });
+    }
     if (!context.siteId || !context.siteName || context.siteStatus !== 'active' || context.siteCustomerId !== context.customerId) throw new AppError('VALIDATION_ERROR', 'An active site belonging to the opportunity customer is required before project start.', 422);
     if (input.startDate > currentDateIn(context.timezone)) throw new AppError('VALIDATION_ERROR', 'Actual project start date cannot be in the future.', 422);
     const designs = await repository.listApprovedDesigns(principal.companyId, jobId);
@@ -221,14 +236,19 @@ export class ProjectService {
           return existingId;
         }
         if (await tx.findByOpportunity(principal.companyId, context.opportunityId)) throw new ConflictError('This opportunity already has a project.');
+        const accepted = await tx.acceptedQuotation(principal.companyId, context.opportunityId);
+        if (!accepted) {
+          throw new ConflictError('An accepted quotation revision is required before starting a project.', {
+            missingRequirements: ['accepted_quotation'],
+          });
+        }
         const now = new Date();
         const project = await tx.create({ companyId: principal.companyId, projectNumber: await tx.allocateNumber(principal.companyId, now), opportunityId: context.opportunityId, customerId: context.customerId, siteId: context.siteId!, title: input.title, startDate: input.startDate, targetCompletionDate: input.targetCompletionDate, startReason: input.startReason, startedByUserId: principal.userId });
         await tx.createMembers(requestedMembers.map((userId) => ({ companyId: principal.companyId, projectId: project.id, userId, assignedByUserId: principal.userId, role: userId === input.projectManagerUserId ? 'project_manager' : userId === principal.userId ? 'sales' : 'member' })));
         await tx.createDesignBaseline({ companyId: principal.companyId, projectId: project.id, designJobId: jobId, designRevisionId: design.id, designCustomerDecisionId: design.decisionId, boqRevisionId: boq?.id, customerEvidenceSnapshot: design.evidenceReference, createdByUserId: principal.userId });
-        const accepted = await tx.acceptedQuotation(principal.companyId, context.opportunityId);
-        if (accepted) await tx.attachCommercialBaseline({ companyId: principal.companyId, projectId: project.id, quotationRevisionId: accepted.revisionId, quotationCustomerDecisionId: accepted.decisionId, customerEvidenceSnapshot: accepted.evidenceReference, customerOrderReference: accepted.customerOrderReference, acceptedAt: accepted.recordedAt, createdByUserId: principal.userId });
+        await tx.attachCommercialBaseline({ companyId: principal.companyId, projectId: project.id, quotationRevisionId: accepted.revisionId, quotationCustomerDecisionId: accepted.decisionId, customerEvidenceSnapshot: accepted.evidenceReference, customerOrderReference: accepted.customerOrderReference, acceptedAt: accepted.recordedAt, createdByUserId: principal.userId });
         await createNotificationRepository(transaction).createMany(requestedMembers.filter((userId) => userId !== principal.userId).map((recipientUserId) => ({ companyId: principal.companyId, recipientUserId, type: 'project.started', severity: 'success' as const, title: 'Project started', message: `${project.projectNumber} · ${project.title} was assigned to you.`, link: `/projects/${project.id}`, targetType: 'project', targetId: project.id, dedupKey: `project-started:${project.id}` })));
-        await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: context.commercialState === 'awarded' ? 'project.started' : 'project.started_before_award', targetType: 'project', targetId: project.id, requestId, metadata: { opportunityId: context.opportunityId, designRevisionId: design.id, boqRevisionId: boq?.id, commercialStateAtStart: context.commercialState, startDate: input.startDate, targetCompletionDate: input.targetCompletionDate } });
+        await createAuthRepository(transaction).appendAuditEvent({ companyId: principal.companyId, actorUserId: principal.userId, action: 'project.started', targetType: 'project', targetId: project.id, requestId, metadata: { opportunityId: context.opportunityId, designRevisionId: design.id, boqRevisionId: boq?.id, quotationRevisionId: accepted.revisionId, commercialStateAtStart: context.commercialState, startDate: input.startDate, targetCompletionDate: input.targetCompletionDate } });
         await tx.completeIdempotency(reservation.id, project.id);
         return project.id;
       });

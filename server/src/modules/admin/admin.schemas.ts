@@ -21,6 +21,7 @@ export const createUserSchema = z.object({
 });
 
 export const userIdParamsSchema = z.object({ userId: uuid });
+export const employeeLeaveParamsSchema = z.object({ id: uuid });
 export const roleIdParamsSchema = z.object({ roleId: uuid });
 
 const permissionCodesSchema = z.array(z.string().trim().min(1).max(100)).max(100)
@@ -73,4 +74,35 @@ export const adminPasswordResetSchema = z.object({
   rowVersion: z.number().int().positive(),
   temporaryPassword: passwordSchema,
   reason: z.string().trim().min(3).max(500),
+});
+
+export const leaveHandoverSchema = z.object({
+  rowVersion: z.number().int().positive(),
+  leaveStartDate: z.iso.date(),
+  leaveEndDate: z.iso.date().optional().transform((value) => value || undefined),
+  coveringEmployeeId: uuid,
+  leaveReason: z.string().trim().min(3).max(500),
+  reassignLeads: z.boolean().default(true),
+  reassignReminders: z.boolean().default(true),
+  reassignDesignHeadJobs: z.boolean().default(true),
+  reassignDesignEngineerJobs: z.boolean().default(true),
+  reassignBoqReviews: z.boolean().default(true),
+  leadIds: z.array(uuid).optional(),
+  reminderIds: z.array(uuid).optional(),
+  designHeadJobIds: z.array(uuid).optional(),
+  designEngineerJobIds: z.array(uuid).optional(),
+  boqReviewIds: z.array(uuid).optional(),
+}).superRefine((value, context) => {
+  if (value.leaveEndDate && value.leaveEndDate < value.leaveStartDate) {
+    context.addIssue({
+      code: 'custom',
+      path: ['leaveEndDate'],
+      message: 'Leave end date cannot be before leave start date.',
+    });
+  }
+});
+
+export const returnFromLeaveSchema = z.object({
+  rowVersion: z.number().int().positive(),
+  notes: z.string().trim().max(500).optional(),
 });

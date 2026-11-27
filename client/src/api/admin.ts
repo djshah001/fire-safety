@@ -10,7 +10,34 @@ export type Employee = {
   mustChangePassword: boolean;
   rowVersion: number;
   lastLoginAt: string | null;
+  isOnLeave?: boolean;
+  leaveStartDate?: string | null;
+  leaveEndDate?: string | null;
+  coveringEmployeeId?: string | null;
+  leaveReason?: string | null;
   roles: Array<{ id: string; code: string; name: string }>;
+};
+
+export type EmployeeWorkload = {
+  employee: {
+    id: string;
+    name: string;
+    email: string;
+    status: 'active' | 'disabled';
+    rowVersion: number;
+    isOnLeave: boolean;
+    leaveStartDate: string | null;
+    leaveEndDate: string | null;
+    coveringEmployeeId: string | null;
+    leaveReason: string | null;
+  };
+  workload: {
+    leads: Array<{ id: string; leadNumber: string; inquiryName: string; stage: string; rowVersion: number }>;
+    reminders: Array<{ id: string; ruleId: string; leadId: string; leadNumber: string; title: string; dueAt: string }>;
+    designHeadJobs: Array<{ id: string; title: string; status: string }>;
+    designEngineerJobs: Array<{ id: string; title: string; status: string }>;
+    boqReviews: Array<{ id: string; designJobId: string; jobTitle: string; revisionNumber: number; title: string; status: string }>;
+  };
 };
 
 export type Role = {
@@ -140,4 +167,55 @@ export async function deactivateRole(input: { role: Role; reason: string }) {
     { expectedVersion: input.role.rowVersion, reason: input.reason },
   );
   return response.data.data.role;
+}
+
+export const employeeWorkloadQuery = (employeeId?: string) => queryOptions({
+  queryKey: ['admin', 'employee', employeeId, 'workload'] as const,
+  enabled: Boolean(employeeId),
+  queryFn: async ({ signal }) => {
+    const response = await apiClient.get<ApiEnvelope<EmployeeWorkload>>(
+      `/admin/employees/${employeeId}/active-workload`,
+      { signal },
+    );
+    return response.data.data;
+  },
+});
+
+export async function submitEmployeeLeaveHandover(
+  employeeId: string,
+  input: {
+    rowVersion: number;
+    leaveStartDate: string;
+    leaveEndDate?: string;
+    coveringEmployeeId: string;
+    leaveReason: string;
+    reassignLeads: boolean;
+    reassignReminders: boolean;
+    reassignDesignHeadJobs: boolean;
+    reassignDesignEngineerJobs: boolean;
+    reassignBoqReviews: boolean;
+  },
+) {
+  const response = await apiClient.post<ApiEnvelope<{
+    user: Employee;
+    reassigned: {
+      leads: number;
+      reminders: number;
+      designHeadJobs: number;
+      designEngineerJobs: number;
+      boqReviews: number;
+    };
+  }>>(`/admin/employees/${employeeId}/leave-handover`, input);
+  return response.data.data;
+}
+
+export async function returnEmployeeFromLeave(
+  employeeId: string,
+  input: { rowVersion: number; notes?: string },
+) {
+  const response = await apiClient.post<ApiEnvelope<{ user: Employee }>>(
+    `/admin/employees/${employeeId}/return-from-leave`,
+    input,
+  );
+  return response.data.data.user;
 }

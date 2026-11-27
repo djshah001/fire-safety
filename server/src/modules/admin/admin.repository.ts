@@ -1,9 +1,19 @@
-import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
 import {
+  boqRevisionContributors,
+  boqRevisions,
+  designJobs,
+  leadMembers,
+  leads,
+  opportunities,
+  opportunityMembers,
   permissions,
+  reminderOccurrences,
+  reminderRules,
   rolePermissions,
   roles,
+  taskReassignmentLogs,
   userRoleAssignments,
   users,
 } from '../../infrastructure/database/schema/index.js';
@@ -41,6 +51,11 @@ export function createAdminRepository(executor: DatabaseExecutor) {
           lastLoginAt: users.lastLoginAt,
           disabledAt: users.disabledAt,
           disabledReason: users.disabledReason,
+          isOnLeave: users.isOnLeave,
+          leaveStartDate: users.leaveStartDate,
+          leaveEndDate: users.leaveEndDate,
+          coveringEmployeeId: users.coveringEmployeeId,
+          leaveReason: users.leaveReason,
           createdAt: users.createdAt,
         }).from(users).where(where).orderBy(order(sortColumn), order(users.id)).limit(input.limit).offset(input.offset),
         executor.select({ count: count() }).from(users).where(where),
@@ -300,6 +315,296 @@ export function createAdminRepository(executor: DatabaseExecutor) {
       }).where(and(eq(users.companyId, companyId), eq(users.id, userId), eq(users.rowVersion, rowVersion)))
         .returning();
       return user;
+    },
+
+    async findUser(companyId: string, userId: string) {
+      const [user] = await executor.select().from(users).where(and(
+        eq(users.companyId, companyId),
+        eq(users.id, userId),
+      )).limit(1);
+      return user;
+    },
+
+    async userHasPermission(companyId: string, userId: string, permissionCode: string, now = new Date()) {
+      const [row] = await executor.select({ permissionCode: rolePermissions.permissionCode })
+        .from(userRoleAssignments)
+        .innerJoin(roles, eq(roles.id, userRoleAssignments.roleId))
+        .innerJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+        .where(and(
+          eq(userRoleAssignments.companyId, companyId),
+          eq(userRoleAssignments.userId, userId),
+          eq(roles.companyId, companyId),
+          eq(roles.isActive, true),
+          inArray(rolePermissions.permissionCode, [permissionCode, 'system.access.all']),
+          lte(userRoleAssignments.validFrom, now),
+          or(isNull(userRoleAssignments.validUntil), gt(userRoleAssignments.validUntil, now)),
+        )).limit(1);
+      return Boolean(row);
+    },
+
+    async getEmployeeWorkload(companyId: string, userId: string) {
+      const [activeLeads, pendingReminders, designHeadJobs, designEngineerJobs, pendingBoqs] = await Promise.all([
+        executor.select({
+          id: leads.id,
+          leadNumber: leads.leadNumber,
+          inquiryName: leads.inquiryName,
+          stage: leads.stage,
+          rowVersion: leads.rowVersion,
+        }).from(leads).where(and(
+          eq(leads.companyId, companyId),
+          eq(leads.ownerUserId, userId),
+          notInArray(leads.stage, ['won', 'lost']),
+        )).orderBy(asc(leads.createdAt)),
+
+        executor.select({
+          id: reminderOccurrences.id,
+          ruleId: reminderOccurrences.ruleId,
+          leadId: reminderOccurrences.leadId,
+          leadNumber: leads.leadNumber,
+          title: reminderRules.title,
+          dueAt: reminderOccurrences.dueAt,
+        }).from(reminderOccurrences)
+          .innerJoin(reminderRules, eq(reminderRules.id, reminderOccurrences.ruleId))
+          .innerJoin(leads, eq(leads.id, reminderOccurrences.leadId))
+          .where(and(
+            eq(reminderOccurrences.companyId, companyId),
+            eq(reminderOccurrences.assigneeUserId, userId),
+            eq(reminderOccurrences.status, 'pending'),
+          )).orderBy(asc(reminderOccurrences.dueAt)),
+
+        executor.select({
+          id: designJobs.id,
+          leadId: designJobs.leadId,
+          opportunityId: designJobs.opportunityId,
+          title: designJobs.title,
+          status: designJobs.status,
+          designerUserId: designJobs.designerUserId,
+          designHeadUserId: designJobs.designHeadUserId,
+          rowVersion: designJobs.rowVersion,
+        }).from(designJobs).where(and(
+          eq(designJobs.companyId, companyId),
+          eq(designJobs.designHeadUserId, userId),
+          notInArray(designJobs.status, ['cancelled', 'abandoned', 'customer_approved']),
+        )).orderBy(asc(designJobs.createdAt)),
+
+        executor.select({
+          id: designJobs.id,
+          leadId: designJobs.leadId,
+          opportunityId: designJobs.opportunityId,
+          title: designJobs.title,
+          status: designJobs.status,
+          designerUserId: designJobs.designerUserId,
+          designHeadUserId: designJobs.designHeadUserId,
+          rowVersion: designJobs.rowVersion,
+        }).from(designJobs).where(and(
+          eq(designJobs.companyId, companyId),
+          eq(designJobs.designerUserId, userId),
+          notInArray(designJobs.status, ['cancelled', 'abandoned', 'customer_approved']),
+        )).orderBy(asc(designJobs.createdAt)),
+
+        executor.select({
+          id: boqRevisions.id,
+          designJobId: boqRevisions.designJobId,
+          jobTitle: designJobs.title,
+          revisionNumber: boqRevisions.revisionNumber,
+          title: boqRevisions.title,
+          status: boqRevisions.status,
+          createdByUserId: boqRevisions.createdByUserId,
+          submittedByUserId: boqRevisions.submittedByUserId,
+          costingUserId: boqRevisions.costingUserId,
+          purchaseHeadUserId: boqRevisions.purchaseHeadUserId,
+          adminApproverUserId: boqRevisions.adminApproverUserId,
+          rowVersion: boqRevisions.rowVersion,
+        }).from(boqRevisions)
+          .innerJoin(designJobs, eq(designJobs.id, boqRevisions.designJobId))
+          .where(and(
+            eq(boqRevisions.companyId, companyId),
+            inArray(boqRevisions.status, ['submitted', 'costing', 'purchase_review', 'admin_review']),
+            or(
+              eq(boqRevisions.costingUserId, userId),
+              eq(boqRevisions.purchaseHeadUserId, userId),
+              eq(boqRevisions.adminApproverUserId, userId),
+            ),
+          )).orderBy(asc(boqRevisions.updatedAt)),
+      ]);
+
+      return {
+        leads: activeLeads,
+        reminders: pendingReminders,
+        designHeadJobs,
+        designEngineerJobs,
+        boqReviews: pendingBoqs,
+      };
+    },
+
+    async markUserOnLeave(input: {
+      companyId: string;
+      userId: string;
+      rowVersion: number;
+      leaveStartDate: string;
+      leaveEndDate?: string;
+      coveringEmployeeId: string;
+      leaveReason: string;
+      now: Date;
+    }) {
+      const [user] = await executor.update(users).set({
+        isOnLeave: true,
+        leaveStartDate: input.leaveStartDate,
+        leaveEndDate: input.leaveEndDate ?? null,
+        coveringEmployeeId: input.coveringEmployeeId,
+        leaveReason: input.leaveReason,
+        rowVersion: sql`${users.rowVersion} + 1`,
+        updatedAt: input.now,
+      }).where(and(
+        eq(users.companyId, input.companyId),
+        eq(users.id, input.userId),
+        eq(users.status, 'active'),
+        eq(users.rowVersion, input.rowVersion),
+      )).returning();
+      return user;
+    },
+
+    async returnUserFromLeave(companyId: string, userId: string, rowVersion: number, now: Date) {
+      const [user] = await executor.update(users).set({
+        isOnLeave: false,
+        leaveStartDate: null,
+        leaveEndDate: null,
+        coveringEmployeeId: null,
+        leaveReason: null,
+        rowVersion: sql`${users.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(users.companyId, companyId),
+        eq(users.id, userId),
+        eq(users.rowVersion, rowVersion),
+      )).returning();
+      return user;
+    },
+
+    async reassignLeadOwner(companyId: string, leadId: string, toUserId: string, now: Date, updatedByUserId?: string) {
+      await executor.update(leads).set({
+        ownerUserId: toUserId,
+        ...(updatedByUserId ? { updatedByUserId } : {}),
+        rowVersion: sql`${leads.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(eq(leads.companyId, companyId), eq(leads.id, leadId)));
+
+      await executor.delete(leadMembers).where(and(
+        eq(leadMembers.companyId, companyId),
+        eq(leadMembers.leadId, leadId),
+        eq(leadMembers.role, 'owner'),
+      ));
+      await executor.insert(leadMembers).values({
+        companyId,
+        leadId,
+        userId: toUserId,
+        role: 'owner',
+      }).onConflictDoUpdate({
+        target: [leadMembers.leadId, leadMembers.userId],
+        set: { role: 'owner' },
+      });
+
+      const [opp] = await executor.select({ id: opportunities.id }).from(opportunities).where(and(
+        eq(opportunities.companyId, companyId),
+        eq(opportunities.leadId, leadId),
+      )).limit(1);
+      if (opp) {
+        await executor.insert(opportunityMembers).values({
+          companyId,
+          opportunityId: opp.id,
+          userId: toUserId,
+          role: 'owner',
+        }).onConflictDoUpdate({
+          target: [opportunityMembers.opportunityId, opportunityMembers.userId],
+          set: { role: 'owner' },
+        });
+      }
+    },
+
+    async reassignReminder(companyId: string, occurrenceId: string, ruleId: string, leadId: string, toUserId: string, now: Date) {
+      await executor.update(reminderOccurrences).set({
+        assigneeUserId: toUserId,
+        rowVersion: sql`${reminderOccurrences.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(reminderOccurrences.companyId, companyId),
+        eq(reminderOccurrences.id, occurrenceId),
+        eq(reminderOccurrences.status, 'pending'),
+      ));
+      await executor.update(reminderRules).set({
+        assigneeUserId: toUserId,
+        updatedAt: now,
+      }).where(and(
+        eq(reminderRules.companyId, companyId),
+        eq(reminderRules.id, ruleId),
+        eq(reminderRules.status, 'active'),
+      ));
+      await executor.insert(leadMembers).values({
+        companyId,
+        leadId,
+        userId: toUserId,
+        role: 'collaborator',
+      }).onConflictDoNothing();
+    },
+
+    async reassignDesignHead(companyId: string, jobId: string, toUserId: string, now: Date, updatedByUserId?: string) {
+      await executor.update(designJobs).set({
+        designHeadUserId: toUserId,
+        ...(updatedByUserId ? { updatedByUserId } : {}),
+        rowVersion: sql`${designJobs.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(eq(designJobs.companyId, companyId), eq(designJobs.id, jobId)));
+    },
+
+    async reassignDesignEngineer(companyId: string, jobId: string, toUserId: string, now: Date, updatedByUserId?: string) {
+      // Deliberately preserve designerAssignedAt, designDueAt, and bufferExtensionsUsed.
+      await executor.update(designJobs).set({
+        designerUserId: toUserId,
+        ...(updatedByUserId ? { updatedByUserId } : {}),
+        rowVersion: sql`${designJobs.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(eq(designJobs.companyId, companyId), eq(designJobs.id, jobId)));
+    },
+
+    async hasBoqContributor(companyId: string, boqRevisionId: string, userId: string) {
+      const [row] = await executor.select({ userId: boqRevisionContributors.userId })
+        .from(boqRevisionContributors)
+        .where(and(
+          eq(boqRevisionContributors.companyId, companyId),
+          eq(boqRevisionContributors.boqRevisionId, boqRevisionId),
+          eq(boqRevisionContributors.userId, userId),
+        )).limit(1);
+      return Boolean(row);
+    },
+
+    async reassignBoqRole(
+      companyId: string,
+      boqRevisionId: string,
+      fromUserId: string,
+      toUserId: string,
+      rolesToTransfer: { costing: boolean; purchaseHead: boolean; adminApprover: boolean },
+      now: Date,
+    ) {
+      await executor.update(boqRevisions).set({
+        ...(rolesToTransfer.costing ? { costingUserId: toUserId } : {}),
+        ...(rolesToTransfer.purchaseHead ? { purchaseHeadUserId: toUserId } : {}),
+        ...(rolesToTransfer.adminApprover ? { adminApproverUserId: toUserId } : {}),
+        rowVersion: sql`${boqRevisions.rowVersion} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(boqRevisions.companyId, companyId),
+        eq(boqRevisions.id, boqRevisionId),
+        or(
+          eq(boqRevisions.costingUserId, fromUserId),
+          eq(boqRevisions.purchaseHeadUserId, fromUserId),
+          eq(boqRevisions.adminApproverUserId, fromUserId),
+        ),
+      ));
+    },
+
+    async insertReassignmentLogs(values: Array<typeof taskReassignmentLogs.$inferInsert>) {
+      if (values.length === 0) return;
+      await executor.insert(taskReassignmentLogs).values(values);
     },
   };
 }

@@ -13,6 +13,7 @@ import {
   designFileParamsSchema,
   designJobListQuerySchema,
   designJobParamsSchema,
+  reassignDesignJobSchema,
   revisionParamsSchema,
   reviewRevisionSchema,
   sendToCustomerSchema,
@@ -42,6 +43,10 @@ export function createEngineeringRouter() {
     sendData(request, response, await engineeringService.listJobs(getPrincipal(request), designJobListQuerySchema.parse(request.query)));
   });
 
+  router.get('/design-jobs/filter-options', async (request, response) => {
+    sendData(request, response, await engineeringService.listFilterOptions(getPrincipal(request)));
+  });
+
   router.get('/design-jobs/:jobId', async (request, response) => {
     const { jobId } = designJobParamsSchema.parse(request.params);
     sendData(request, response, await engineeringService.getJob(getPrincipal(request), jobId));
@@ -56,6 +61,19 @@ export function createEngineeringRouter() {
     const { jobId } = designJobParamsSchema.parse(request.params);
     const job = await engineeringService.assignDesigner(
       getPrincipal(request), jobId, assignDesignerSchema.parse(request.body), getRequestId(request),
+    );
+    sendData(request, response, { job });
+  });
+
+  router.get('/design-jobs/:jobId/eligible-assignees', requirePermission('system.access.all'), async (request, response) => {
+    const { jobId } = designJobParamsSchema.parse(request.params);
+    sendData(request, response, await engineeringService.listEligibleAssignees(getPrincipal(request), jobId));
+  });
+
+  router.post('/design-jobs/:jobId/reassign', requireCsrf, requirePermission('system.access.all'), async (request, response) => {
+    const { jobId } = designJobParamsSchema.parse(request.params);
+    const job = await engineeringService.reassignJob(
+      getPrincipal(request), jobId, reassignDesignJobSchema.parse(request.body), getRequestId(request),
     );
     sendData(request, response, { job });
   });
@@ -166,9 +184,9 @@ export function createEngineeringRouter() {
     const filePath = resolvePrivateFile(file.storageName);
     response.setHeader('Content-Type', file.mimeType);
     response.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(file.originalName)}"`);
-    response.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'self'; sandbox");
+    response.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; object-src 'self'; frame-ancestors 'self'; sandbox");
     response.setHeader('X-Content-Type-Options', 'nosniff');
-    response.sendFile(filePath, (error) => { if (error && !response.headersSent) next(error); });
+    response.sendFile(filePath, { dotfiles: 'allow' }, (error) => { if (error && !response.headersSent) next(error); });
   });
 
   return router;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { paymentPlanSchema, quotationDocumentDetailsSchema, quotationHeaderSchema, quotationLineSchema, quotationReviewSchema } from './quotation.schemas.js';
+import { paymentPlanSchema, quotationDocumentDetailsSchema, quotationHeaderSchema, quotationLineSchema, quotationLinesBatchPricingSchema, quotationReviewSchema } from './quotation.schemas.js';
 
 describe('quotation schemas', () => {
   it('bounds letterhead/contact fields and refuses client-provided asset paths', () => {
@@ -27,6 +27,23 @@ describe('quotation schemas', () => {
     const input = { expectedRevisionVersion: 1, expectedLineVersion: 1 };
     expect(() => quotationLineSchema.parse(input)).toThrow();
     expect(quotationLineSchema.parse({ ...input, offeringId: '00000000-0000-4000-8000-000000000001' }).offeringId).toBeTruthy();
+    expect(quotationLineSchema.parse({ ...input, offeringId: '00000000-0000-4000-8000-000000000001', supplyRate: '100', labourRate: '25', miscellaneousRate: '10', markupPercent: '15' }).markupPercent).toBe('15');
     expect(() => quotationLineSchema.parse({ ...input, offeringId: '00000000-0000-4000-8000-000000000001', unitRate: '100.00' })).toThrow();
+  });
+
+  it('validates batch inline pricing edits while rejecting client-computed totals', () => {
+    const lineId = '00000000-0000-4000-8000-000000000010';
+    expect(quotationLinesBatchPricingSchema.parse({
+      expectedVersion: 2,
+      updates: [{ lineId, supplyRate: '1250.50', labourRate: '300', miscellaneousRate: '25', markupPercent: '18.5' }],
+    }).updates).toHaveLength(1);
+    expect(() => quotationLinesBatchPricingSchema.parse({
+      expectedVersion: 2,
+      updates: [{ lineId, supplyRate: '-5' }],
+    })).toThrow();
+    expect(() => quotationLinesBatchPricingSchema.parse({
+      expectedVersion: 2,
+      updates: [{ lineId, lineTotal: '5000.00' }],
+    })).toThrow();
   });
 });

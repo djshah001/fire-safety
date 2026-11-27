@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Archive,
   CheckCircle2,
+  Download,
   Edit,
+  Eye,
   FileCheck,
   Mail,
   MapPin,
@@ -22,8 +24,12 @@ import {
   masterLookupsQuery,
   uploadVendorDocument,
   vendorDetailQuery,
+  vendorDocumentUrl,
   type Vendor,
+  type VendorDocument,
 } from '@/api/masters';
+import { FileDropzone } from '@/components/FileDropzone';
+import { isImageFile, UploadedFilePreviewDialog } from '@/components/ImagePreview';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -65,6 +71,7 @@ export function VendorDetailSheet({
   const [activeTab, setActiveTab] = useState<'overview' | 'bank' | 'pricelist' | 'documents'>('overview');
   const [addPriceDialogOpen, setAddPriceDialogOpen] = useState(false);
   const [uploadDocDialogOpen, setUploadDocDialogOpen] = useState(false);
+  const [previewVendorDoc, setPreviewVendorDoc] = useState<VendorDocument>();
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const [archiveReason, setArchiveReason] = useState('');
 
@@ -615,39 +622,91 @@ export function VendorDetailSheet({
                     </div>
 
                     {vendor.documents && vendor.documents.length > 0 ? (
-                      <div className="space-y-2">
-                        {vendor.documents.map((doc) => (
-                          <div key={doc.id} className="rounded-lg border p-3 flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                              <FileCheck className="size-5 text-emerald-600" />
-                              <div className="text-xs">
-                                <p className="font-medium">{doc.originalFileName}</p>
-                                <div className="flex items-center gap-2 text-muted-foreground">
-                                  <span className="capitalize">{doc.documentType.replace(/_/g, ' ')}</span>
-                                  <span>•</span>
-                                  <span>{(doc.fileSize / 1024).toFixed(0)} KB</span>
-                                  <span>•</span>
-                                  <span>{new Date(doc.uploadedAt).toLocaleDateString('en-IN')}</span>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {vendor.documents.map((doc) => {
+                          const isImage = isImageFile(doc.mimeType, doc.originalFileName);
+                          const inlineUrl = vendorDocumentUrl(vendor.id, doc.id, true);
+                          const downloadUrl = vendorDocumentUrl(vendor.id, doc.id, false);
+                          return (
+                            <div key={doc.id} className="rounded-lg border p-3 flex flex-col justify-between gap-2.5">
+                              {isImage && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewVendorDoc(doc)}
+                                  className="overflow-hidden rounded border bg-muted/20"
+                                >
+                                  <img
+                                    src={inlineUrl}
+                                    alt={doc.originalFileName}
+                                    className="h-32 w-full object-cover"
+                                  />
+                                </button>
+                              )}
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  {!isImage && <FileCheck className="size-5 text-emerald-600 shrink-0" />}
+                                  <div className="text-xs min-w-0">
+                                    <p className="font-medium truncate">{doc.originalFileName}</p>
+                                    <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
+                                      <span className="capitalize">{doc.documentType.replace(/_/g, ' ')}</span>
+                                      <span>•</span>
+                                      <span>{(doc.fileSize / 1024).toFixed(0)} KB</span>
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="size-7"
+                                    onClick={() => setPreviewVendorDoc(doc)}
+                                    title="Preview document"
+                                  >
+                                    <Eye className="size-3.5" />
+                                  </Button>
+                                  <Button
+                                    asChild
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="size-7"
+                                    title="Download document"
+                                  >
+                                    <a href={downloadUrl} download={doc.originalFileName}>
+                                      <Download className="size-3.5" />
+                                    </a>
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="size-7 text-destructive hover:bg-destructive/10"
+                                    onClick={() => deleteDocMutation.mutate(doc.id)}
+                                    title="Delete document"
+                                  >
+                                    <Trash2 className="size-3.5" />
+                                  </Button>
                                 </div>
                               </div>
                             </div>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-7 text-destructive hover:bg-destructive/10"
-                              onClick={() => deleteDocMutation.mutate(doc.id)}
-                              title="Delete document"
-                            >
-                              <Trash2 className="size-3.5" />
-                            </Button>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     ) : (
                       <div className="rounded-lg border p-6 text-center text-xs text-muted-foreground">
                         No documents uploaded yet. Upload compliance certificates and cheques for procurement approval.
                       </div>
                     )}
+
+                    <UploadedFilePreviewDialog
+                      open={Boolean(previewVendorDoc)}
+                      onOpenChange={(open) => !open && setPreviewVendorDoc(undefined)}
+                      title={previewVendorDoc?.originalFileName}
+                      description="Vendor compliance document preview"
+                      src={previewVendorDoc ? vendorDocumentUrl(vendor.id, previewVendorDoc.id, true) : undefined}
+                      mimeType={previewVendorDoc?.mimeType}
+                      downloadHref={previewVendorDoc ? vendorDocumentUrl(vendor.id, previewVendorDoc.id, false) : undefined}
+                    />
                   </div>
                 )}
               </div>
@@ -786,16 +845,20 @@ export function VendorDetailSheet({
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="fileInput">Choose File *</Label>
-              <Input
-                id="fileInput"
-                type="file"
-                accept=".pdf,.png,.jpg,.jpeg,.webp"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) setSelectedFile(file);
-                }}
+            <div className="space-y-1.5">
+              <Label>Document File *</Label>
+              <FileDropzone
+                id="vendor-doc-dropzone"
+                label="Drag & drop compliance file or click to browse"
+                hint="PDF, PNG, JPEG, or WebP up to 20 MiB"
+                accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/png,image/jpeg,image/webp"
+                allowedMimeTypes={new Set(['application/pdf', 'image/png', 'image/jpeg', 'image/webp'])}
+                allowedExtensions={new Set(['.pdf', '.png', '.jpg', '.jpeg', '.webp'])}
+                multiple={false}
+                maxFiles={1}
+                files={selectedFile ? [selectedFile] : []}
+                onFilesChange={(next) => setSelectedFile(next[0] ?? null)}
+                compact
               />
             </div>
           </div>

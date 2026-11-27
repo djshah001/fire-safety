@@ -1,3 +1,7 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
+import { deflateSync } from 'node:zlib';
+import { ensureUploadRoot, resolvePrivateFile } from '../infrastructure/storage/localFileStorage.js';
 import { quotationDefaults } from '../modules/engineering/quotation.defaults.js';
 import { Decimal } from 'decimal.js';
 import { calculateQuotedLine } from '../modules/engineering/boq.calculation.js';
@@ -729,9 +733,73 @@ async function seedDesignJob(
   return job;
 }
 
+function crc32Buffer(buffer: Buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer) {
+  const typeBuffer = Buffer.from(type, 'ascii');
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32Buffer(Buffer.concat([typeBuffer, data])), 0);
+  return Buffer.concat([len, typeBuffer, data, crc]);
+}
+
+function buildSamplePngBuffer(accentRgb: readonly [number, number, number]) {
+  const width = 160;
+  const height = 100;
+  const raw = Buffer.alloc((width * 4 + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    const rowStart = y * (width * 4 + 1);
+    raw[rowStart] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const px = rowStart + 1 + x * 4;
+      const border = x < 4 || y < 4 || x >= width - 4 || y >= height - 4;
+      const grid = x % 20 === 0 || y % 20 === 0;
+      const pipe = (y >= 44 && y <= 56 && x >= 16 && x <= width - 16) || (x >= 74 && x <= 86 && y >= 16 && y <= height - 16);
+      if (border || pipe) {
+        raw[px] = accentRgb[0];
+        raw[px + 1] = accentRgb[1];
+        raw[px + 2] = accentRgb[2];
+        raw[px + 3] = 255;
+      } else if (grid) {
+        raw[px] = 226;
+        raw[px + 1] = 232;
+        raw[px + 2] = 240;
+        raw[px + 3] = 255;
+      } else {
+        raw[px] = 248;
+        raw[px + 1] = 250;
+        raw[px + 2] = 252;
+        raw[px + 3] = 255;
+      }
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  return Buffer.concat([
+    signature,
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
 async function ensureSurveyDraft(
   client: PoolClient,
-  input: { companyId: string; jobId: string; designerId: string },
+  input: { companyId: string; jobId: string; designerId: string; sampleFileName?: string; accent?: readonly [number, number, number] },
 ) {
   await client.query(`
     insert into survey_revisions (
@@ -739,13 +807,53 @@ async function ensureSurveyDraft(
       surveyed_on, status, created_by_user_id
     )
     select $1, $2, 1, 'Demo initial site survey',
-      'Upload PDF or image evidence, then finalize this optional survey revision.',
+      'Site visit photos and sprinkler riser route observations.',
       current_date - 1, 'draft', $3
     where not exists (
       select 1 from survey_revisions where company_id = $1 and design_job_id = $2
     )
     on conflict do nothing
   `, [input.companyId, input.jobId, input.designerId]);
+
+  if (!input.sampleFileName) return;
+  const surveyRev = await one<IdRow>(client, `
+    select id from survey_revisions where company_id = $1 and design_job_id = $2 order by revision_number asc limit 1
+  `, [input.companyId, input.jobId]);
+  const existingFiles = await client.query(`
+    select id from survey_revision_files where company_id = $1 and survey_revision_id = $2 limit 1
+  `, [input.companyId, surveyRev.id]);
+  if (existingFiles.rowCount === 0) {
+    await ensureUploadRoot();
+    const buffer = buildSamplePngBuffer(input.accent ?? [220, 38, 38]);
+    const storageName = `${randomUUID()}.png`;
+    await writeFile(resolvePrivateFile(storageName), buffer);
+    const checksum = createHash('sha256').update(buffer).digest('hex');
+    await client.query(`
+      insert into survey_revision_files (
+        company_id, survey_revision_id, original_name, storage_name, mime_type, size_bytes, checksum_sha256, created_by_user_id
+      ) values ($1, $2, $3, $4, 'image/png', $5, $6, $7)
+    `, [input.companyId, surveyRev.id, input.sampleFileName, storageName, buffer.byteLength, checksum, input.designerId]);
+  }
+}
+
+async function ensureOpportunitySampleImage(
+  client: PoolClient,
+  input: { companyId: string; opportunityId: string; uploadedByUserId: string; fileName: string; accent: readonly [number, number, number] },
+) {
+  const existing = await client.query(`
+    select id from opportunity_attachments where company_id = $1 and opportunity_id = $2 limit 1
+  `, [input.companyId, input.opportunityId]);
+  if (existing.rowCount !== 0) return;
+  await ensureUploadRoot();
+  const buffer = buildSamplePngBuffer(input.accent);
+  const storageName = `${randomUUID()}.png`;
+  await writeFile(resolvePrivateFile(storageName), buffer);
+  const checksum = createHash('sha256').update(buffer).digest('hex');
+  await client.query(`
+    insert into opportunity_attachments (
+      company_id, opportunity_id, original_name, storage_name, mime_type, size_bytes, checksum_sha256, uploaded_by_user_id
+    ) values ($1, $2, $3, $4, 'image/png', $5, $6, $7)
+  `, [input.companyId, input.opportunityId, input.fileName, storageName, buffer.byteLength, checksum, input.uploadedByUserId]);
 }
 
 async function ensureCustomerApprovedDesign(
@@ -2657,9 +2765,21 @@ async function seed() {
         roles: ["design_engineer"],
       },
       {
+        employeeCode: "DEMO-DE2",
+        name: "Demo Backup Design Engineer",
+        email: "demo.designer2@example.test",
+        roles: ["design_engineer"],
+      },
+      {
         employeeCode: "DEMO-DH",
         name: "Demo Design Head",
         email: "demo.design.head@example.test",
+        roles: ["design_head"],
+      },
+      {
+        employeeCode: "DEMO-DH2",
+        name: "Demo Backup Design Head",
+        email: "demo.design.head2@example.test",
         roles: ["design_head"],
       },
       {
@@ -3107,11 +3227,34 @@ async function seed() {
       );
     }
 
-    stage = "optional survey draft";
+    stage = "optional survey draft and sample opportunity images";
+    await ensureOpportunitySampleImage(client, {
+      companyId: company.id,
+      opportunityId: opportunities[2]!.id,
+      uploadedByUserId: executiveId,
+      fileName: "client-hydrant-site-plan.png",
+      accent: [37, 99, 235],
+    });
+    await ensureOpportunitySampleImage(client, {
+      companyId: company.id,
+      opportunityId: opportunities[3]!.id,
+      uploadedByUserId: executiveId,
+      fileName: "client-pump-room-photo.png",
+      accent: [22, 163, 74],
+    });
+    await ensureSurveyDraft(client, {
+      companyId: company.id,
+      jobId: designJobs[1]!.id,
+      designerId,
+      sampleFileName: "site-riser-inspection.png",
+      accent: [234, 88, 12],
+    });
     await ensureSurveyDraft(client, {
       companyId: company.id,
       jobId: designJobs[2]!.id,
       designerId,
+      sampleFileName: "basement-sprinkler-site-photo.png",
+      accent: [220, 38, 38],
     });
 
     stage = "employee notifications";
