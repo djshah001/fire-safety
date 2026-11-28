@@ -1,7 +1,9 @@
-import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
-import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { and, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { NotFoundError } from "../../core/errors/appError.js";
 import {
   warehouses,
+  stockLocations,
   stockBalances,
   stockLedgerEntries,
   stockTransfers,
@@ -9,17 +11,38 @@ import {
   stockReservations,
   stockDocuments,
   stockDocumentLines,
+  warehouseItemThresholds,
   items,
+  itemBrandOfferings,
+  brands,
   units,
   users,
   projects,
   goodsReceipts,
   goodsReceiptLines,
   purchaseOrderLines,
+  purchaseOrders,
   documentCounters,
-} from '../../infrastructure/database/schema/index.js';
+} from "../../infrastructure/database/schema/index.js";
 
 export type TxOrDb = NodePgDatabase<Record<string, unknown>>;
+
+export type StockLedgerSourceType =
+  | "goods_receipt_line"
+  | "opening_balance"
+  | "transfer_dispatch"
+  | "transfer_receipt"
+  | "site_issue"
+  | "site_return"
+  | "adjustment"
+  | "dc_dispatch_out"
+  | "dc_dispatch_in"
+  | "dc_pod_in"
+  | "dc_discrepancy_return"
+  | "dc_discrepancy_writeoff"
+  | "dc_discrepancy_restock"
+  | "site_return_out"
+  | "site_return_in";
 
 export class InventoryRepository {
   constructor(private readonly db: NodePgDatabase<Record<string, unknown>>) {}
@@ -32,7 +55,7 @@ export class InventoryRepository {
     companyId: string,
     documentType: string,
     prefix: string,
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ): Promise<string> {
     const year = new Date().getFullYear();
     const periodKey = `${year}`;
@@ -40,10 +63,23 @@ export class InventoryRepository {
 
     const [counter] = await executor
       .insert(documentCounters)
-      .values({ companyId, documentType, periodKey, nextValue: 2, updatedAt: now })
+      .values({
+        companyId,
+        documentType,
+        periodKey,
+        nextValue: 2,
+        updatedAt: now,
+      })
       .onConflictDoUpdate({
-        target: [documentCounters.companyId, documentCounters.documentType, documentCounters.periodKey],
-        set: { nextValue: sql`${documentCounters.nextValue} + 1`, updatedAt: now },
+        target: [
+          documentCounters.companyId,
+          documentCounters.documentType,
+          documentCounters.periodKey,
+        ],
+        set: {
+          nextValue: sql`${documentCounters.nextValue} + 1`,
+          updatedAt: now,
+        },
       })
       .returning({ allocated: sql<number>`${documentCounters.nextValue} - 1` });
 
@@ -51,11 +87,14 @@ export class InventoryRepository {
       throw new Error(`Failed to allocate document number for ${documentType}`);
     }
 
-    const seq = String(counter.allocated).padStart(5, '0');
+    const seq = String(counter.allocated).padStart(5, "0");
     return `${prefix}-${year}-${seq}`;
   }
 
-  async listWarehouses(companyId: string, params?: { includeInactive?: boolean }) {
+  async listWarehouses(
+    companyId: string,
+    params?: { includeInactive?: boolean },
+  ) {
     const conditions = [eq(warehouses.companyId, companyId)];
     if (!params?.includeInactive) {
       conditions.push(eq(warehouses.isActive, 1));
@@ -86,7 +125,11 @@ export class InventoryRepository {
       .orderBy(warehouses.code);
   }
 
-  async getWarehouseById(companyId: string, id: string, executor: TxOrDb = this.db) {
+  async getWarehouseById(
+    companyId: string,
+    id: string,
+    executor: TxOrDb = this.db,
+  ) {
     const rows = await executor
       .select()
       .from(warehouses)
@@ -95,11 +138,17 @@ export class InventoryRepository {
     return rows[0] || null;
   }
 
-  async getWarehouseByCode(companyId: string, code: string, executor: TxOrDb = this.db) {
+  async getWarehouseByCode(
+    companyId: string,
+    code: string,
+    executor: TxOrDb = this.db,
+  ) {
     const rows = await executor
       .select()
       .from(warehouses)
-      .where(and(eq(warehouses.companyId, companyId), eq(warehouses.code, code)))
+      .where(
+        and(eq(warehouses.companyId, companyId), eq(warehouses.code, code)),
+      )
       .limit(1);
     return rows[0] || null;
   }
@@ -109,7 +158,10 @@ export class InventoryRepository {
       companyId: string;
       code: string;
       name: string;
-      warehouseType: 'central_warehouse' | 'regional_depot' | 'project_site_store';
+      warehouseType:
+        | "central_warehouse"
+        | "regional_depot"
+        | "project_site_store";
       projectId?: string | null;
       addressLine1: string;
       city: string;
@@ -117,10 +169,119 @@ export class InventoryRepository {
       postalCode?: string | null;
       inChargeUserId?: string | null;
     },
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ) {
     const [row] = await executor.insert(warehouses).values(data).returning();
+    if (row) {
+      await this.ensureWarehouseSystemLocations(
+        data.companyId,
+        row.id,
+        executor,
+      );
+    }
     return row;
+  }
+
+  async ensureWarehouseSystemLocations(
+    companyId: string,
+    warehouseId: string,
+    executor: TxOrDb = this.db,
+  ) {
+    await executor
+      .insert(stockLocations)
+      .values([
+        {
+          companyId,
+          warehouseId,
+          code: "MAIN",
+          name: "Main Store",
+          locationType: "main",
+          projectId: null,
+        },
+        {
+          companyId,
+          warehouseId,
+          code: "IN_TRANSIT",
+          name: "In Transit",
+          locationType: "in_transit",
+          projectId: null,
+        },
+      ])
+      .onConflictDoNothing({
+        target: [stockLocations.warehouseId, stockLocations.code],
+      });
+
+    const rows = await executor
+      .select()
+      .from(stockLocations)
+      .where(
+        and(
+          eq(stockLocations.warehouseId, warehouseId),
+          inArray(stockLocations.code, ["MAIN", "IN_TRANSIT"]),
+        ),
+      );
+
+    const mainLocation = rows.find((loc) => loc.code === "MAIN");
+    const inTransitLocation = rows.find((loc) => loc.code === "IN_TRANSIT");
+    if (!mainLocation || !inTransitLocation) {
+      throw new Error(
+        `Failed to ensure system locations for warehouse ${warehouseId}`,
+      );
+    }
+    return { mainLocation, inTransitLocation };
+  }
+
+  async ensureProjectSiteLocation(
+    companyId: string,
+    warehouseId: string,
+    projectId: string,
+    executor: TxOrDb = this.db,
+  ) {
+    const existing = await executor
+      .select()
+      .from(stockLocations)
+      .where(
+        and(
+          eq(stockLocations.warehouseId, warehouseId),
+          eq(stockLocations.locationType, "site"),
+          eq(stockLocations.projectId, projectId),
+        ),
+      )
+      .limit(1);
+    if (existing[0]) {
+      return existing[0];
+    }
+
+    await executor
+      .insert(stockLocations)
+      .values({
+        companyId,
+        warehouseId,
+        code: `SITE-${projectId}`,
+        name: `Site (${projectId.slice(0, 8)})`,
+        locationType: "site",
+        projectId,
+      })
+      .onConflictDoNothing();
+
+    const rows = await executor
+      .select()
+      .from(stockLocations)
+      .where(
+        and(
+          eq(stockLocations.warehouseId, warehouseId),
+          eq(stockLocations.locationType, "site"),
+          eq(stockLocations.projectId, projectId),
+        ),
+      )
+      .limit(1);
+
+    if (!rows[0]) {
+      throw new Error(
+        `Failed to ensure site location for project ${projectId}`,
+      );
+    }
+    return rows[0];
   }
 
   async updateWarehouse(
@@ -135,11 +296,15 @@ export class InventoryRepository {
       inChargeUserId: string | null;
       isActive: number;
     }>,
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ) {
     const [row] = await executor
       .update(warehouses)
-      .set({ ...data, updatedAt: new Date(), rowVersion: sql`${warehouses.rowVersion} + 1` })
+      .set({
+        ...data,
+        updatedAt: new Date(),
+        rowVersion: sql`${warehouses.rowVersion} + 1`,
+      })
       .where(and(eq(warehouses.companyId, companyId), eq(warehouses.id, id)))
       .returning();
     return row || null;
@@ -149,15 +314,31 @@ export class InventoryRepository {
     companyId: string,
     params?: {
       warehouseId?: string;
+      locationId?: string;
+      locationType?: "main" | "in_transit" | "site" | "staging";
+      brandOfferingId?: string | null;
       search?: string;
       categoryId?: string;
       limit?: number;
       offset?: number;
-    }
+    },
   ) {
     const conditions = [eq(stockBalances.companyId, companyId)];
     if (params?.warehouseId) {
       conditions.push(eq(stockBalances.warehouseId, params.warehouseId));
+    }
+    if (params?.locationId) {
+      conditions.push(eq(stockBalances.locationId, params.locationId));
+    }
+    if (params?.locationType) {
+      conditions.push(eq(stockLocations.locationType, params.locationType));
+    }
+    if (params && "brandOfferingId" in params) {
+      conditions.push(
+        params.brandOfferingId
+          ? eq(stockBalances.brandOfferingId, params.brandOfferingId)
+          : isNull(stockBalances.brandOfferingId),
+      );
     }
     if (params?.categoryId) {
       conditions.push(eq(items.categoryId, params.categoryId));
@@ -167,8 +348,9 @@ export class InventoryRepository {
         or(
           ilike(items.code, `%${params.search}%`),
           ilike(items.name, `%${params.search}%`),
-          ilike(warehouses.name, `%${params.search}%`)
-        )!
+          ilike(warehouses.name, `%${params.search}%`),
+          ilike(brands.name, `%${params.search}%`),
+        )!,
       );
     }
 
@@ -179,23 +361,62 @@ export class InventoryRepository {
         warehouseCode: warehouses.code,
         warehouseName: warehouses.name,
         warehouseType: warehouses.warehouseType,
+        locationId: stockBalances.locationId,
+        locationCode: stockLocations.code,
+        locationName: stockLocations.name,
+        locationType: stockLocations.locationType,
+        projectId: stockLocations.projectId,
         itemId: stockBalances.itemId,
         itemCode: items.code,
         itemName: items.name,
+        brandOfferingId: stockBalances.brandOfferingId,
+        brandName: brands.name,
+        manufacturerModel: itemBrandOfferings.manufacturerModel,
         unitId: items.unitId,
         unitSymbol: units.symbol,
         quantityOnHand: stockBalances.quantityOnHand,
         quantityReserved: stockBalances.quantityReserved,
         quantityAvailable: sql<string>`(${stockBalances.quantityOnHand} - ${stockBalances.quantityReserved})::numeric(18,4)`,
+        minStock: sql<string | null>`${warehouseItemThresholds.minStock}`,
+        maxStock: sql<string | null>`${warehouseItemThresholds.maxStock}`,
+        lowStockAlertActive: sql<boolean>`coalesce(${warehouseItemThresholds.lowStockAlertActive}, false)`,
+        inTransitQty: sql<string>`coalesce((
+          select sum(sb_transit.quantity_on_hand)::numeric(18,4)
+          from stock_balances sb_transit
+          inner join stock_locations sl_transit on sl_transit.id = sb_transit.location_id
+          where sb_transit.company_id = ${stockBalances.companyId}
+            and sb_transit.warehouse_id = ${stockBalances.warehouseId}
+            and sb_transit.item_id = ${stockBalances.itemId}
+            and coalesce(sb_transit.brand_offering_id, '00000000-0000-0000-0000-000000000000') = coalesce(${stockBalances.brandOfferingId}, '00000000-0000-0000-0000-000000000000')
+            and sl_transit.location_type = 'in_transit'
+        ), 0)::numeric(18,4)`,
         lastMovementAt: stockBalances.lastMovementAt,
         updatedAt: stockBalances.updatedAt,
       })
       .from(stockBalances)
       .innerJoin(warehouses, eq(stockBalances.warehouseId, warehouses.id))
+      .innerJoin(
+        stockLocations,
+        eq(stockBalances.locationId, stockLocations.id),
+      )
       .innerJoin(items, eq(stockBalances.itemId, items.id))
       .innerJoin(units, eq(items.unitId, units.id))
+      .leftJoin(
+        itemBrandOfferings,
+        eq(stockBalances.brandOfferingId, itemBrandOfferings.id),
+      )
+      .leftJoin(brands, eq(itemBrandOfferings.brandId, brands.id))
+      .leftJoin(
+        warehouseItemThresholds,
+        and(
+          eq(warehouseItemThresholds.companyId, stockBalances.companyId),
+          eq(warehouseItemThresholds.warehouseId, stockBalances.warehouseId),
+          eq(warehouseItemThresholds.itemId, stockBalances.itemId),
+          sql`coalesce(${warehouseItemThresholds.brandOfferingId}, '00000000-0000-0000-0000-000000000000') = coalesce(${stockBalances.brandOfferingId}, '00000000-0000-0000-0000-000000000000')`,
+        ),
+      )
       .where(and(...conditions))
-      .orderBy(warehouses.code, items.code);
+      .orderBy(warehouses.code, stockLocations.code, items.code);
 
     if (params?.limit) {
       query.limit(params.limit);
@@ -210,13 +431,44 @@ export class InventoryRepository {
   async getStockBalanceForUpdate(
     warehouseId: string,
     itemId: string,
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
+    options?: { locationId?: string; brandOfferingId?: string | null },
   ) {
+    let resolvedLocationId = options?.locationId;
+    if (!resolvedLocationId) {
+      const [mainLoc] = await executor
+        .select({ id: stockLocations.id })
+        .from(stockLocations)
+        .where(
+          and(
+            eq(stockLocations.warehouseId, warehouseId),
+            eq(stockLocations.locationType, "main"),
+          ),
+        )
+        .limit(1);
+      resolvedLocationId = mainLoc?.id;
+    }
+
+    if (!resolvedLocationId) {
+      throw new NotFoundError(
+        `MAIN stock location is missing for warehouse ${warehouseId}.`,
+      );
+    }
+
+    const conditions = [
+      eq(stockBalances.warehouseId, warehouseId),
+      eq(stockBalances.locationId, resolvedLocationId),
+      eq(stockBalances.itemId, itemId),
+      options?.brandOfferingId
+        ? eq(stockBalances.brandOfferingId, options.brandOfferingId)
+        : isNull(stockBalances.brandOfferingId),
+    ];
+
     const rows = await executor
       .select()
       .from(stockBalances)
-      .where(and(eq(stockBalances.warehouseId, warehouseId), eq(stockBalances.itemId, itemId)))
-      .for('update');
+      .where(and(...conditions))
+      .for("update");
     return rows[0] || null;
   }
 
@@ -224,29 +476,46 @@ export class InventoryRepository {
     companyId: string,
     warehouseId: string,
     itemId: string,
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
+    options?: { locationId?: string; brandOfferingId?: string | null },
   ) {
+    const locationId =
+      options?.locationId ??
+      (
+        await this.ensureWarehouseSystemLocations(
+          companyId,
+          warehouseId,
+          executor,
+        )
+      ).mainLocation.id;
+    const brandOfferingId = options?.brandOfferingId ?? null;
+
     const [row] = await executor
       .insert(stockBalances)
       .values({
         companyId,
         warehouseId,
+        locationId,
         itemId,
-        quantityOnHand: '0.0000',
-        quantityReserved: '0.0000',
+        brandOfferingId,
+        quantityOnHand: "0.0000",
+        quantityReserved: "0.0000",
       })
       .onConflictDoNothing()
       .returning();
 
     if (row) return row;
-    return this.getStockBalanceForUpdate(warehouseId, itemId, executor);
+    return this.getStockBalanceForUpdate(warehouseId, itemId, executor, {
+      locationId,
+      brandOfferingId,
+    });
   }
 
   async updateStockBalanceQuantities(
     id: string,
     newQuantityOnHand: string,
     newQuantityReserved: string,
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ) {
     const [row] = await executor
       .update(stockBalances)
@@ -267,19 +536,14 @@ export class InventoryRepository {
       companyId: string;
       entryNumber: string;
       postingDate: Date;
-      sourceType:
-        | 'goods_receipt_line'
-        | 'opening_balance'
-        | 'transfer_dispatch'
-        | 'transfer_receipt'
-        | 'site_issue'
-        | 'site_return'
-        | 'adjustment';
+      sourceType: StockLedgerSourceType;
       sourceId: string;
       sourceReference: string;
       warehouseId: string;
+      locationId: string;
       itemId: string;
-      direction: 'in' | 'out';
+      brandOfferingId?: string | null;
+      direction: "in" | "out";
       quantity: string;
       balanceBefore: string;
       balanceAfter: string;
@@ -287,39 +551,56 @@ export class InventoryRepository {
       notes?: string | null;
       postedByUserId: string;
     },
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ) {
-    const [row] = await executor.insert(stockLedgerEntries).values(data).returning();
+    const [row] = await executor
+      .insert(stockLedgerEntries)
+      .values({
+        ...data,
+        brandOfferingId: data.brandOfferingId ?? null,
+      })
+      .returning();
     return row;
   }
 
   async findLedgerEntryBySource(
     companyId: string,
-    sourceType:
-      | 'goods_receipt_line'
-      | 'opening_balance'
-      | 'transfer_dispatch'
-      | 'transfer_receipt'
-      | 'site_issue'
-      | 'site_return'
-      | 'adjustment',
+    sourceType: StockLedgerSourceType,
     sourceId: string,
     warehouseId: string,
-    direction: 'in' | 'out',
-    executor: TxOrDb = this.db
+    direction: "in" | "out",
+    executor: TxOrDb = this.db,
+    options?: {
+      locationId?: string;
+      itemId?: string;
+      brandOfferingId?: string | null;
+    },
   ) {
+    const conditions = [
+      eq(stockLedgerEntries.companyId, companyId),
+      eq(stockLedgerEntries.sourceType, sourceType),
+      eq(stockLedgerEntries.sourceId, sourceId),
+      eq(stockLedgerEntries.warehouseId, warehouseId),
+      eq(stockLedgerEntries.direction, direction),
+    ];
+    if (options?.locationId) {
+      conditions.push(eq(stockLedgerEntries.locationId, options.locationId));
+    }
+    if (options?.itemId) {
+      conditions.push(eq(stockLedgerEntries.itemId, options.itemId));
+    }
+    if (options && "brandOfferingId" in options) {
+      conditions.push(
+        options.brandOfferingId
+          ? eq(stockLedgerEntries.brandOfferingId, options.brandOfferingId)
+          : isNull(stockLedgerEntries.brandOfferingId),
+      );
+    }
+
     const rows = await executor
       .select()
       .from(stockLedgerEntries)
-      .where(
-        and(
-          eq(stockLedgerEntries.companyId, companyId),
-          eq(stockLedgerEntries.sourceType, sourceType),
-          eq(stockLedgerEntries.sourceId, sourceId),
-          eq(stockLedgerEntries.warehouseId, warehouseId),
-          eq(stockLedgerEntries.direction, direction)
-        )
-      )
+      .where(and(...conditions))
       .limit(1);
     return rows[0] || null;
   }
@@ -328,21 +609,30 @@ export class InventoryRepository {
     companyId: string,
     params?: {
       warehouseId?: string;
+      locationId?: string;
       itemId?: string;
       sourceType?: string;
       limit?: number;
       offset?: number;
-    }
+    },
   ) {
     const conditions = [eq(stockLedgerEntries.companyId, companyId)];
     if (params?.warehouseId) {
       conditions.push(eq(stockLedgerEntries.warehouseId, params.warehouseId));
     }
+    if (params?.locationId) {
+      conditions.push(eq(stockLedgerEntries.locationId, params.locationId));
+    }
     if (params?.itemId) {
       conditions.push(eq(stockLedgerEntries.itemId, params.itemId));
     }
     if (params?.sourceType) {
-      conditions.push(eq(stockLedgerEntries.sourceType, params.sourceType as any));
+      conditions.push(
+        eq(
+          stockLedgerEntries.sourceType,
+          params.sourceType as StockLedgerSourceType,
+        ),
+      );
     }
 
     const query = this.db
@@ -356,9 +646,15 @@ export class InventoryRepository {
         warehouseId: stockLedgerEntries.warehouseId,
         warehouseCode: warehouses.code,
         warehouseName: warehouses.name,
+        locationId: stockLedgerEntries.locationId,
+        locationCode: stockLocations.code,
+        locationType: stockLocations.locationType,
         itemId: stockLedgerEntries.itemId,
         itemCode: items.code,
         itemName: items.name,
+        brandOfferingId: stockLedgerEntries.brandOfferingId,
+        brandName: brands.name,
+        manufacturerModel: itemBrandOfferings.manufacturerModel,
         unitSymbol: units.symbol,
         direction: stockLedgerEntries.direction,
         quantity: stockLedgerEntries.quantity,
@@ -372,11 +668,23 @@ export class InventoryRepository {
       })
       .from(stockLedgerEntries)
       .innerJoin(warehouses, eq(stockLedgerEntries.warehouseId, warehouses.id))
+      .innerJoin(
+        stockLocations,
+        eq(stockLedgerEntries.locationId, stockLocations.id),
+      )
       .innerJoin(items, eq(stockLedgerEntries.itemId, items.id))
       .innerJoin(units, eq(items.unitId, units.id))
       .innerJoin(users, eq(stockLedgerEntries.postedByUserId, users.id))
+      .leftJoin(
+        itemBrandOfferings,
+        eq(stockLedgerEntries.brandOfferingId, itemBrandOfferings.id),
+      )
+      .leftJoin(brands, eq(itemBrandOfferings.brandId, brands.id))
       .where(and(...conditions))
-      .orderBy(desc(stockLedgerEntries.postingDate), desc(stockLedgerEntries.createdAt));
+      .orderBy(
+        desc(stockLedgerEntries.postingDate),
+        desc(stockLedgerEntries.createdAt),
+      );
 
     if (params?.limit) {
       query.limit(params.limit);
@@ -391,7 +699,7 @@ export class InventoryRepository {
   async getGoodsReceiptLineForPosting(
     companyId: string,
     goodsReceiptLineId: string,
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ) {
     const rows = await executor
       .select({
@@ -405,19 +713,39 @@ export class InventoryRepository {
         deliveredQuantity: goodsReceiptLines.deliveredQuantity,
         acceptedQuantity: goodsReceiptLines.acceptedQuantity,
         rejectedQuantity: goodsReceiptLines.rejectedQuantity,
+        purchaseOrderId: purchaseOrders.id,
+        poNumber: purchaseOrders.poNumber,
+        poProjectId: purchaseOrders.projectId,
+        poLineId: purchaseOrderLines.id,
         itemId: purchaseOrderLines.itemId,
+        brandOfferingId: purchaseOrderLines.brandOfferingId,
+        projectAllocationQty: purchaseOrderLines.projectAllocationQty,
+        storeReplenishmentQty: purchaseOrderLines.storeReplenishmentQty,
+        allocatedReceivedQty: purchaseOrderLines.allocatedReceivedQty,
+        storeReceivedQty: purchaseOrderLines.storeReceivedQty,
+        destinationType: purchaseOrderLines.destinationType,
         itemCode: purchaseOrderLines.itemCodeSnapshot,
         itemName: purchaseOrderLines.itemNameSnapshot,
         unitRate: purchaseOrderLines.unitRate,
       })
       .from(goodsReceiptLines)
-      .innerJoin(goodsReceipts, eq(goodsReceiptLines.goodsReceiptId, goodsReceipts.id))
-      .innerJoin(purchaseOrderLines, eq(goodsReceiptLines.purchaseOrderLineId, purchaseOrderLines.id))
+      .innerJoin(
+        goodsReceipts,
+        eq(goodsReceiptLines.goodsReceiptId, goodsReceipts.id),
+      )
+      .innerJoin(
+        purchaseOrderLines,
+        eq(goodsReceiptLines.purchaseOrderLineId, purchaseOrderLines.id),
+      )
+      .innerJoin(
+        purchaseOrders,
+        eq(purchaseOrderLines.purchaseOrderId, purchaseOrders.id),
+      )
       .where(
         and(
           eq(goodsReceiptLines.companyId, companyId),
-          eq(goodsReceiptLines.id, goodsReceiptLineId)
-        )
+          eq(goodsReceiptLines.id, goodsReceiptLineId),
+        ),
       )
       .limit(1);
 
@@ -436,9 +764,12 @@ export class InventoryRepository {
       transporterName?: string | null;
       notes?: string | null;
     },
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ) {
-    const [row] = await executor.insert(stockTransfers).values(data).returning();
+    const [row] = await executor
+      .insert(stockTransfers)
+      .values(data)
+      .returning();
     return row;
   }
 
@@ -448,15 +779,28 @@ export class InventoryRepository {
       transferId: string;
       lineNumber: number;
       itemId: string;
+      brandOfferingId?: string | null;
       dispatchedQuantity: string;
       notes?: string | null;
     }>,
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ) {
-    return executor.insert(stockTransferLines).values(lines).returning();
+    return executor
+      .insert(stockTransferLines)
+      .values(
+        lines.map((l) => ({
+          ...l,
+          brandOfferingId: l.brandOfferingId ?? null,
+        })),
+      )
+      .returning();
   }
 
-  async getStockTransferById(companyId: string, id: string, executor: TxOrDb = this.db) {
+  async getStockTransferById(
+    companyId: string,
+    id: string,
+    executor: TxOrDb = this.db,
+  ) {
     const rows = await executor
       .select({
         id: stockTransfers.id,
@@ -479,8 +823,13 @@ export class InventoryRepository {
         updatedAt: stockTransfers.updatedAt,
       })
       .from(stockTransfers)
-      .innerJoin(warehouses, eq(stockTransfers.sourceWarehouseId, warehouses.id))
-      .where(and(eq(stockTransfers.companyId, companyId), eq(stockTransfers.id, id)))
+      .innerJoin(
+        warehouses,
+        eq(stockTransfers.sourceWarehouseId, warehouses.id),
+      )
+      .where(
+        and(eq(stockTransfers.companyId, companyId), eq(stockTransfers.id, id)),
+      )
       .limit(1);
 
     if (!rows[0]) return null;
@@ -498,6 +847,9 @@ export class InventoryRepository {
         itemId: stockTransferLines.itemId,
         itemCode: items.code,
         itemName: items.name,
+        brandOfferingId: stockTransferLines.brandOfferingId,
+        brandName: brands.name,
+        manufacturerModel: itemBrandOfferings.manufacturerModel,
         unitSymbol: units.symbol,
         dispatchedQuantity: stockTransferLines.dispatchedQuantity,
         receivedQuantity: stockTransferLines.receivedQuantity,
@@ -506,12 +858,17 @@ export class InventoryRepository {
       .from(stockTransferLines)
       .innerJoin(items, eq(stockTransferLines.itemId, items.id))
       .innerJoin(units, eq(items.unitId, units.id))
+      .leftJoin(
+        itemBrandOfferings,
+        eq(stockTransferLines.brandOfferingId, itemBrandOfferings.id),
+      )
+      .leftJoin(brands, eq(itemBrandOfferings.brandId, brands.id))
       .where(eq(stockTransferLines.transferId, id))
       .orderBy(stockTransferLines.lineNumber);
 
     return {
       ...rows[0],
-      destinationWarehouseName: dest[0]?.name || 'Unknown',
+      destinationWarehouseName: dest[0]?.name || "Unknown",
       lines,
     };
   }
@@ -540,7 +897,10 @@ export class InventoryRepository {
         createdAt: stockTransfers.createdAt,
       })
       .from(stockTransfers)
-      .innerJoin(warehouses, eq(stockTransfers.sourceWarehouseId, warehouses.id))
+      .innerJoin(
+        warehouses,
+        eq(stockTransfers.sourceWarehouseId, warehouses.id),
+      )
       .leftJoin(projects, eq(stockTransfers.projectId, projects.id))
       .where(and(...conditions))
       .orderBy(desc(stockTransfers.createdAt));
@@ -554,27 +914,31 @@ export class InventoryRepository {
           .limit(1);
         return {
           ...row,
-          destinationWarehouseCode: dest?.code || '',
-          destinationWarehouseName: dest?.name || 'Unknown',
+          destinationWarehouseCode: dest?.code || "",
+          destinationWarehouseName: dest?.name || "Unknown",
         };
-      })
+      }),
     );
   }
 
   async updateStockTransferStatus(
     id: string,
     data: Partial<{
-      status: 'draft' | 'dispatched' | 'received' | 'cancelled';
+      status: "draft" | "dispatched" | "received" | "cancelled";
       dispatchedAt: Date;
       dispatchedByUserId: string;
       receivedAt: Date;
       receivedByUserId: string;
     }>,
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ) {
     const [row] = await executor
       .update(stockTransfers)
-      .set({ ...data, updatedAt: new Date(), rowVersion: sql`${stockTransfers.rowVersion} + 1` })
+      .set({
+        ...data,
+        updatedAt: new Date(),
+        rowVersion: sql`${stockTransfers.rowVersion} + 1`,
+      })
       .where(eq(stockTransfers.id, id))
       .returning();
     return row;
@@ -583,7 +947,7 @@ export class InventoryRepository {
   async updateStockTransferLineReceived(
     transferLineId: string,
     receivedQuantity: string,
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ) {
     const [row] = await executor
       .update(stockTransferLines)
@@ -601,39 +965,59 @@ export class InventoryRepository {
       boqLineId?: string | null;
       warehouseId: string;
       itemId: string;
+      brandOfferingId?: string | null;
       quantityReserved: string;
       reservedByUserId: string;
       notes?: string | null;
     },
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ) {
-    const [row] = await executor.insert(stockReservations).values(data).returning();
+    const [row] = await executor
+      .insert(stockReservations)
+      .values({ ...data, brandOfferingId: data.brandOfferingId ?? null })
+      .returning();
     return row;
   }
 
-  async getStockReservationById(companyId: string, id: string, executor: TxOrDb = this.db) {
+  async getStockReservationById(
+    companyId: string,
+    id: string,
+    executor: TxOrDb = this.db,
+  ) {
     const rows = await executor
       .select()
       .from(stockReservations)
-      .where(and(eq(stockReservations.companyId, companyId), eq(stockReservations.id, id)))
+      .where(
+        and(
+          eq(stockReservations.companyId, companyId),
+          eq(stockReservations.id, id),
+        ),
+      )
       .limit(1);
     return rows[0] || null;
   }
 
   async updateStockReservationStatus(
     id: string,
-    status: 'active' | 'fulfilled' | 'released',
-    executor: TxOrDb = this.db
+    status: "active" | "fulfilled" | "released",
+    executor: TxOrDb = this.db,
   ) {
     const [row] = await executor
       .update(stockReservations)
-      .set({ status, updatedAt: new Date(), rowVersion: sql`${stockReservations.rowVersion} + 1` })
+      .set({
+        status,
+        updatedAt: new Date(),
+        rowVersion: sql`${stockReservations.rowVersion} + 1`,
+      })
       .where(eq(stockReservations.id, id))
       .returning();
     return row;
   }
 
-  async listStockReservations(companyId: string, params?: { projectId?: string; status?: string }) {
+  async listStockReservations(
+    companyId: string,
+    params?: { projectId?: string; status?: string },
+  ) {
     const conditions = [eq(stockReservations.companyId, companyId)];
     if (params?.projectId) {
       conditions.push(eq(stockReservations.projectId, params.projectId));
@@ -654,6 +1038,9 @@ export class InventoryRepository {
         itemId: stockReservations.itemId,
         itemCode: items.code,
         itemName: items.name,
+        brandOfferingId: stockReservations.brandOfferingId,
+        brandName: brands.name,
+        manufacturerModel: itemBrandOfferings.manufacturerModel,
         unitSymbol: units.symbol,
         quantityReserved: stockReservations.quantityReserved,
         quantityIssued: stockReservations.quantityIssued,
@@ -669,6 +1056,11 @@ export class InventoryRepository {
       .innerJoin(items, eq(stockReservations.itemId, items.id))
       .innerJoin(units, eq(items.unitId, units.id))
       .innerJoin(users, eq(stockReservations.reservedByUserId, users.id))
+      .leftJoin(
+        itemBrandOfferings,
+        eq(stockReservations.brandOfferingId, itemBrandOfferings.id),
+      )
+      .leftJoin(brands, eq(itemBrandOfferings.brandId, brands.id))
       .where(and(...conditions))
       .orderBy(desc(stockReservations.createdAt));
   }
@@ -677,7 +1069,11 @@ export class InventoryRepository {
     doc: {
       companyId: string;
       documentNumber: string;
-      documentType: 'opening_balance' | 'site_issue' | 'site_return' | 'adjustment';
+      documentType:
+        | "opening_balance"
+        | "site_issue"
+        | "site_return"
+        | "adjustment";
       sourceWarehouseId?: string | null;
       destinationWarehouseId?: string | null;
       projectId?: string | null;
@@ -686,7 +1082,7 @@ export class InventoryRepository {
       notes: string;
       postedAt: Date;
       postedByUserId: string;
-      status: 'posted';
+      status: "posted";
     },
     lines: Array<{
       companyId: string;
@@ -696,11 +1092,14 @@ export class InventoryRepository {
       unitRate?: string | null;
       notes?: string | null;
     }>,
-    executor: TxOrDb = this.db
+    executor: TxOrDb = this.db,
   ) {
-    const [header] = await executor.insert(stockDocuments).values(doc).returning();
+    const [header] = await executor
+      .insert(stockDocuments)
+      .values(doc)
+      .returning();
     if (!header) {
-      throw new Error('Failed to create stock document');
+      throw new Error("Failed to create stock document");
     }
     const insertedLines = await executor
       .insert(stockDocumentLines)
@@ -710,10 +1109,15 @@ export class InventoryRepository {
     return { header, lines: insertedLines };
   }
 
-  async listStockDocuments(companyId: string, params?: { documentType?: string }) {
+  async listStockDocuments(
+    companyId: string,
+    params?: { documentType?: string },
+  ) {
     const conditions = [eq(stockDocuments.companyId, companyId)];
     if (params?.documentType) {
-      conditions.push(eq(stockDocuments.documentType, params.documentType as any));
+      conditions.push(
+        eq(stockDocuments.documentType, params.documentType as any),
+      );
     }
 
     return this.db

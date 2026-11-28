@@ -26,6 +26,7 @@ describe('project input validation', () => {
   it('validates addProjectMemberSchema and projectMemberParamsSchema', () => {
     const validMember = { userId: id('10'), role: 'member' as const };
     expect(addProjectMemberSchema.parse(validMember)).toMatchObject({ userId: id('10'), role: 'member' });
+    expect(addProjectMemberSchema.parse({ userId: id('12'), role: 'site_engineer' })).toMatchObject({ userId: id('12'), role: 'site_engineer' });
     expect(addProjectMemberSchema.parse({ userId: id('11') })).toMatchObject({ userId: id('11'), role: 'member' });
     expect(() => addProjectMemberSchema.parse({ userId: 'not-a-uuid' })).toThrow();
     expect(() => addProjectMemberSchema.parse({ userId: id('10'), role: 'superman' })).toThrow();

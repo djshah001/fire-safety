@@ -1,8 +1,9 @@
 import { sql } from 'drizzle-orm';
 import { check, date, index, integer, numeric, pgEnum, pgTable, primaryKey, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
-import { boqLines, boqRevisions } from './engineering.js';
-import { items, units, vendors } from './masters.js';
+import { boqLines, boqRevisions, quotationLines, quotationRevisions } from './engineering.js';
+import { itemBrandOfferings, items, units, vendorPriceInquiryResponses, vendors } from './masters.js';
 import { users } from './identity.js';
+import { storeReplenishmentRequests } from './inventory.js';
 import { companies } from './organizations.js';
 import { projects } from './projects.js';
 
@@ -19,8 +20,32 @@ export const purchaseOrderStatusEnum = pgEnum('purchase_order_status', [
   'issued',
   'partially_delivered',
   'delivered',
+  'short_closed',
   'closed',
   'cancelled',
+]);
+export const purchaseOrderDispatchChannelEnum = pgEnum('purchase_order_dispatch_channel', [
+  'email',
+  'whatsapp_msg91',
+  'whatsapp_manual',
+]);
+export const purchaseOrderDispatchStatusEnum = pgEnum('purchase_order_dispatch_status', [
+  'queued',
+  'sent',
+  'failed',
+  'manual_opened',
+]);
+export const supplierReturnStatusEnum = pgEnum('supplier_return_status', [
+  'draft',
+  'dispatched',
+  'replacement_received',
+  'credit_settled',
+  'closed',
+]);
+export const supplierReturnResolutionTypeEnum = pgEnum('supplier_return_resolution_type', [
+  'replacement',
+  'credit_note',
+  'deduction',
 ]);
 export const purchaseOrderRevisionStatusEnum = pgEnum('purchase_order_revision_status', [
   'draft',
@@ -37,12 +62,17 @@ export const goodsReceiptStatusEnum = pgEnum('goods_receipt_status', [
   'partially_rejected',
   'rejected',
 ]);
+export const poLineDestinationTypeEnum = pgEnum('po_line_destination_type', [
+  'warehouse',
+  'direct_to_site',
+]);
 
 export const procurementRequisitions = pgTable('procurement_requisitions', {
   id: uuid('id').primaryKey().defaultRandom(),
   companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
-  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'restrict' }),
-  boqRevisionId: uuid('boq_revision_id').notNull().references(() => boqRevisions.id, { onDelete: 'restrict' }),
+  projectId: uuid('project_id').references(() => projects.id, { onDelete: 'restrict' }),
+  boqRevisionId: uuid('boq_revision_id').references(() => boqRevisions.id, { onDelete: 'restrict' }),
+  quotationRevisionId: uuid('quotation_revision_id').references(() => quotationRevisions.id, { onDelete: 'set null' }),
   requisitionNumber: varchar('requisition_number', { length: 40 }).notNull(),
   title: varchar('title', { length: 200 }).notNull(),
   status: procurementRequisitionStatusEnum('status').notNull().default('open'),
@@ -69,22 +99,34 @@ export const procurementRequisitionLines = pgTable('procurement_requisition_line
   id: uuid('id').primaryKey().defaultRandom(),
   companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
   requisitionId: uuid('requisition_id').notNull().references(() => procurementRequisitions.id, { onDelete: 'restrict' }),
-  boqLineId: uuid('boq_line_id').notNull().references(() => boqLines.id, { onDelete: 'restrict' }),
+  boqLineId: uuid('boq_line_id').references(() => boqLines.id, { onDelete: 'restrict' }),
   lineNumber: integer('line_number').notNull(),
   itemId: uuid('item_id').notNull().references(() => items.id, { onDelete: 'restrict' }),
+  brandOfferingId: uuid('brand_offering_id').references(() => itemBrandOfferings.id, { onDelete: 'restrict' }),
+  quotationLineId: uuid('quotation_line_id').references(() => quotationLines.id, { onDelete: 'set null' }),
+  srrId: uuid('srr_id').references(() => storeReplenishmentRequests.id, { onDelete: 'set null' }),
   itemCodeSnapshot: varchar('item_code_snapshot', { length: 50 }).notNull(),
   itemNameSnapshot: varchar('item_name_snapshot', { length: 160 }).notNull(),
   specificationSnapshot: varchar('specification_snapshot', { length: 2_000 }).notNull(),
   unitId: uuid('unit_id').notNull().references(() => units.id, { onDelete: 'restrict' }),
   unitSymbolSnapshot: varchar('unit_symbol_snapshot', { length: 20 }).notNull(),
   quantity: numeric('quantity', { precision: 18, scale: 4 }).notNull(),
+  projectAllocationQty: numeric('project_allocation_qty', { precision: 18, scale: 4 }).notNull().default('0.0000'),
+  storeReplenishmentQty: numeric('store_replenishment_qty', { precision: 18, scale: 4 }).notNull().default('0.0000'),
+  destinationType: poLineDestinationTypeEnum('destination_type').notNull().default('warehouse'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('procurement_requisition_lines_number_uidx').on(table.requisitionId, table.lineNumber),
-  uniqueIndex('procurement_requisition_lines_boq_uidx').on(table.requisitionId, table.boqLineId),
+  uniqueIndex('procurement_requisition_lines_boq_uidx')
+    .on(table.requisitionId, table.boqLineId)
+    .where(sql`${table.boqLineId} is not null`),
   index('procurement_requisition_lines_company_idx').on(table.companyId, table.requisitionId),
   check('procurement_requisition_lines_number_positive', sql`${table.lineNumber} > 0`),
   check('procurement_requisition_lines_quantity_positive', sql`${table.quantity} > 0`),
+  check(
+    'procurement_requisition_lines_split_valid',
+    sql`${table.projectAllocationQty} >= 0 and ${table.storeReplenishmentQty} >= 0 and ${table.projectAllocationQty} + ${table.storeReplenishmentQty} = ${table.quantity}`,
+  ),
 ]);
 
 export const procurementRfqs = pgTable('procurement_rfqs', {
@@ -156,10 +198,14 @@ export const vendorOffers = pgTable('vendor_offers', {
   total: numeric('total', { precision: 18, scale: 2 }).notNull(),
   status: vendorOfferStatusEnum('status').notNull().default('submitted'),
   recordedByUserId: uuid('recorded_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  sourcePriceInquiryResponseId: uuid('source_price_inquiry_response_id').references(() => vendorPriceInquiryResponses.id, { onDelete: 'set null' }),
   submittedAt: timestamp('submitted_at', { withTimezone: true }).notNull().defaultNow(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('vendor_offers_rfq_vendor_uidx').on(table.rfqId, table.vendorId),
+  uniqueIndex('vendor_offers_source_inquiry_response_uidx')
+    .on(table.sourcePriceInquiryResponseId)
+    .where(sql`${table.sourcePriceInquiryResponseId} is not null`),
   index('vendor_offers_company_rfq_idx').on(table.companyId, table.rfqId, table.total),
   check('vendor_offers_reference_required', sql`length(trim(${table.vendorReference})) > 0`),
   check('vendor_offers_currency_format', sql`${table.currency} ~ '^[A-Z]{3}$'`),
@@ -239,7 +285,7 @@ export const procurementSelectionDecisions = pgTable('procurement_selection_deci
 export const purchaseOrders = pgTable('purchase_orders', {
   id: uuid('id').primaryKey().defaultRandom(),
   companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
-  projectId: uuid('project_id').notNull().references(() => projects.id, { onDelete: 'restrict' }),
+  projectId: uuid('project_id').references(() => projects.id, { onDelete: 'restrict' }),
   vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'restrict' }),
   requisitionId: uuid('requisition_id').references(() => procurementRequisitions.id, { onDelete: 'set null' }),
   poNumber: varchar('po_number', { length: 40 }).notNull(),
@@ -258,6 +304,9 @@ export const purchaseOrders = pgTable('purchase_orders', {
   taxAmount: numeric('tax_amount', { precision: 18, scale: 2 }).notNull().default('0.00'),
   grandTotal: numeric('grand_total', { precision: 18, scale: 2 }).notNull().default('0.00'),
   createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  shortClosedAt: timestamp('short_closed_at', { withTimezone: true }),
+  shortClosedByUserId: uuid('short_closed_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  shortCloseReason: varchar('short_close_reason', { length: 2_000 }),
   rowVersion: integer('row_version').notNull().default(1),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -310,6 +359,9 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
   revisionId: uuid('revision_id').notNull().references(() => purchaseOrderRevisions.id, { onDelete: 'restrict' }),
   lineNumber: integer('line_number').notNull(),
   itemId: uuid('item_id').notNull().references(() => items.id, { onDelete: 'restrict' }),
+  brandOfferingId: uuid('brand_offering_id').references(() => itemBrandOfferings.id, { onDelete: 'restrict' }),
+  quotationLineId: uuid('quotation_line_id').references(() => quotationLines.id, { onDelete: 'set null' }),
+  srrId: uuid('srr_id').references(() => storeReplenishmentRequests.id, { onDelete: 'set null' }),
   itemCodeSnapshot: varchar('item_code_snapshot', { length: 50 }).notNull(),
   itemNameSnapshot: varchar('item_name_snapshot', { length: 160 }).notNull(),
   specificationSnapshot: varchar('specification_snapshot', { length: 2_000 }).notNull(),
@@ -318,6 +370,11 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
   unitId: uuid('unit_id').notNull().references(() => units.id, { onDelete: 'restrict' }),
   unitSymbolSnapshot: varchar('unit_symbol_snapshot', { length: 20 }).notNull(),
   quantity: numeric('quantity', { precision: 18, scale: 4 }).notNull(),
+  projectAllocationQty: numeric('project_allocation_qty', { precision: 18, scale: 4 }).notNull().default('0.0000'),
+  storeReplenishmentQty: numeric('store_replenishment_qty', { precision: 18, scale: 4 }).notNull().default('0.0000'),
+  allocatedReceivedQty: numeric('allocated_received_qty', { precision: 18, scale: 4 }).notNull().default('0.0000'),
+  storeReceivedQty: numeric('store_received_qty', { precision: 18, scale: 4 }).notNull().default('0.0000'),
+  destinationType: poLineDestinationTypeEnum('destination_type').notNull().default('warehouse'),
   unitRate: numeric('unit_rate', { precision: 18, scale: 2 }).notNull(),
   taxPercent: numeric('tax_percent', { precision: 5, scale: 2 }).notNull().default('0.00'),
   taxAmount: numeric('tax_amount', { precision: 18, scale: 2 }).notNull().default('0.00'),
@@ -325,6 +382,7 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
   receivedQuantity: numeric('received_quantity', { precision: 18, scale: 4 }).notNull().default('0.0000'),
   acceptedQuantity: numeric('accepted_quantity', { precision: 18, scale: 4 }).notNull().default('0.0000'),
   rejectedQuantity: numeric('rejected_quantity', { precision: 18, scale: 4 }).notNull().default('0.0000'),
+  shortClosedQuantity: numeric('short_closed_quantity', { precision: 18, scale: 4 }).notNull().default('0.0000'),
   requisitionLineId: uuid('requisition_line_id').references(() => procurementRequisitionLines.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
@@ -335,6 +393,14 @@ export const purchaseOrderLines = pgTable('purchase_order_lines', {
   check('purchase_order_lines_rate_nonnegative', sql`${table.unitRate} >= 0`),
   check('purchase_order_lines_tax_percent_range', sql`${table.taxPercent} >= 0 and ${table.taxPercent} <= 100`),
   check('purchase_order_lines_received_quantities_valid', sql`${table.receivedQuantity} >= 0 and ${table.acceptedQuantity} >= 0 and ${table.rejectedQuantity} >= 0 and ${table.receivedQuantity} >= ${table.acceptedQuantity} + ${table.rejectedQuantity}`),
+  check(
+    'purchase_order_lines_split_valid',
+    sql`${table.projectAllocationQty} >= 0 and ${table.storeReplenishmentQty} >= 0 and ${table.projectAllocationQty} + ${table.storeReplenishmentQty} = ${table.quantity}`,
+  ),
+  check(
+    'purchase_order_lines_split_received_valid',
+    sql`${table.allocatedReceivedQty} >= 0 and ${table.storeReceivedQty} >= 0 and ${table.allocatedReceivedQty} <= ${table.projectAllocationQty} and ${table.storeReceivedQty} <= ${table.storeReplenishmentQty}`,
+  ),
 ]);
 
 export const goodsReceipts = pgTable('goods_receipts', {
@@ -375,6 +441,9 @@ export const goodsReceiptLines = pgTable('goods_receipt_lines', {
   inspectionNotes: varchar('inspection_notes', { length: 2_000 }),
   inspectedByUserId: uuid('inspected_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
   inspectedAt: timestamp('inspected_at', { withTimezone: true }),
+  excessQuantity: numeric('excess_quantity', { precision: 18, scale: 4 }).notNull().default('0.0000'),
+  excessApprovalReason: varchar('excess_approval_reason', { length: 2_000 }),
+  excessApprovedByUserId: uuid('excess_approved_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => [
   uniqueIndex('goods_receipt_lines_grn_line_uidx').on(table.goodsReceiptId, table.lineNumber),
@@ -382,5 +451,96 @@ export const goodsReceiptLines = pgTable('goods_receipt_lines', {
   check('goods_receipt_lines_number_positive', sql`${table.lineNumber} > 0`),
   check('goods_receipt_lines_delivered_positive', sql`${table.deliveredQuantity} > 0`),
   check('goods_receipt_lines_quantities_valid', sql`${table.acceptedQuantity} >= 0 and ${table.rejectedQuantity} >= 0 and ${table.deliveredQuantity} >= ${table.acceptedQuantity} + ${table.rejectedQuantity}`),
+  check('goods_receipt_lines_excess_valid', sql`${table.excessQuantity} >= 0`),
+  check('goods_receipt_lines_excess_reason', sql`${table.excessQuantity} = 0 or (${table.excessApprovalReason} is not null and length(trim(${table.excessApprovalReason})) > 0 and ${table.excessApprovedByUserId} is not null)`),
   check('goods_receipt_lines_rejection_reason', sql`${table.rejectedQuantity} = 0 or (${table.rejectionReason} is not null and length(trim(${table.rejectionReason})) > 0)`),
+]);
+
+export const procurementSelectionLineAwards = pgTable('procurement_selection_line_awards', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  selectionDecisionId: uuid('selection_decision_id').notNull().references(() => procurementSelectionDecisions.id, { onDelete: 'restrict' }),
+  rfqLineId: uuid('rfq_line_id').notNull().references(() => procurementRfqLines.id, { onDelete: 'restrict' }),
+  winningVendorId: uuid('winning_vendor_id').notNull().references(() => vendors.id, { onDelete: 'restrict' }),
+  winningOfferId: uuid('winning_offer_id').notNull().references(() => vendorOffers.id, { onDelete: 'restrict' }),
+  winningOfferLineId: uuid('winning_offer_line_id').notNull().references(() => vendorOfferLines.id, { onDelete: 'restrict' }),
+  awardedQuantity: numeric('awarded_quantity', { precision: 18, scale: 4 }).notNull(),
+  selectionReason: varchar('selection_reason', { length: 2_000 }).notNull(),
+  generatedPoId: uuid('generated_po_id').references(() => purchaseOrders.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('procurement_selection_line_awards_line_uidx').on(table.selectionDecisionId, table.rfqLineId),
+  uniqueIndex('procurement_selection_line_awards_offer_line_uidx').on(table.winningOfferLineId),
+  index('procurement_selection_line_awards_company_idx').on(table.companyId, table.selectionDecisionId),
+  index('procurement_selection_line_awards_vendor_idx').on(table.companyId, table.winningVendorId),
+  check('procurement_selection_line_awards_quantity_positive', sql`${table.awardedQuantity} > 0`),
+  check('procurement_selection_line_awards_reason_required', sql`length(trim(${table.selectionReason})) > 0`),
+]);
+
+export const purchaseOrderDispatches = pgTable('purchase_order_dispatches', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  purchaseOrderId: uuid('purchase_order_id').notNull().references(() => purchaseOrders.id, { onDelete: 'restrict' }),
+  revisionId: uuid('revision_id').notNull().references(() => purchaseOrderRevisions.id, { onDelete: 'restrict' }),
+  channel: purchaseOrderDispatchChannelEnum('channel').notNull(),
+  recipientName: varchar('recipient_name', { length: 160 }).notNull(),
+  recipientContact: varchar('recipient_contact', { length: 320 }).notNull(),
+  status: purchaseOrderDispatchStatusEnum('status').notNull().default('queued'),
+  providerMessageId: varchar('provider_message_id', { length: 200 }),
+  sentByUserId: uuid('sent_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  sentAt: timestamp('sent_at', { withTimezone: true }),
+  errorMessage: varchar('error_message', { length: 1_000 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  index('purchase_order_dispatches_po_idx').on(table.companyId, table.purchaseOrderId, table.createdAt),
+  check('purchase_order_dispatches_recipient_required', sql`length(trim(${table.recipientName})) > 0 and length(trim(${table.recipientContact})) > 0`),
+]);
+
+export const supplierReturns = pgTable('supplier_returns', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  rtvNumber: varchar('rtv_number', { length: 40 }).notNull(),
+  purchaseOrderId: uuid('purchase_order_id').notNull().references(() => purchaseOrders.id, { onDelete: 'restrict' }),
+  goodsReceiptId: uuid('goods_receipt_id').notNull().references(() => goodsReceipts.id, { onDelete: 'restrict' }),
+  vendorId: uuid('vendor_id').notNull().references(() => vendors.id, { onDelete: 'restrict' }),
+  projectId: uuid('project_id').references(() => projects.id, { onDelete: 'restrict' }),
+  status: supplierReturnStatusEnum('status').notNull().default('draft'),
+  resolutionType: supplierReturnResolutionTypeEnum('resolution_type').notNull(),
+  transporterName: varchar('transporter_name', { length: 160 }),
+  vehicleNumber: varchar('vehicle_number', { length: 50 }),
+  dispatchDate: date('dispatch_date'),
+  reason: varchar('reason', { length: 2_000 }).notNull(),
+  creditNoteReference: varchar('credit_note_reference', { length: 160 }),
+  settledAt: timestamp('settled_at', { withTimezone: true }),
+  pdfStorageName: varchar('pdf_storage_name', { length: 255 }),
+  pdfChecksumSha256: varchar('pdf_checksum_sha256', { length: 64 }),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  rowVersion: integer('row_version').notNull().default(1),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('supplier_returns_company_number_uidx').on(table.companyId, table.rtvNumber),
+  index('supplier_returns_company_po_idx').on(table.companyId, table.purchaseOrderId, table.status),
+  index('supplier_returns_company_grn_idx').on(table.companyId, table.goodsReceiptId),
+  check('supplier_returns_reason_required', sql`length(trim(${table.reason})) > 0`),
+  check('supplier_returns_row_version_positive', sql`${table.rowVersion} > 0`),
+]);
+
+export const supplierReturnLines = pgTable('supplier_return_lines', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyId: uuid('company_id').notNull().references(() => companies.id, { onDelete: 'restrict' }),
+  supplierReturnId: uuid('supplier_return_id').notNull().references(() => supplierReturns.id, { onDelete: 'restrict' }),
+  goodsReceiptLineId: uuid('goods_receipt_line_id').notNull().references(() => goodsReceiptLines.id, { onDelete: 'restrict' }),
+  purchaseOrderLineId: uuid('purchase_order_line_id').notNull().references(() => purchaseOrderLines.id, { onDelete: 'restrict' }),
+  itemId: uuid('item_id').notNull().references(() => items.id, { onDelete: 'restrict' }),
+  brandOfferingId: uuid('brand_offering_id').references(() => itemBrandOfferings.id, { onDelete: 'restrict' }),
+  returnQuantity: numeric('return_quantity', { precision: 18, scale: 4 }).notNull(),
+  replacementReceivedQuantity: numeric('replacement_received_quantity', { precision: 18, scale: 4 }).notNull().default('0.0000'),
+  remarks: varchar('remarks', { length: 2_000 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex('supplier_return_lines_grn_line_uidx').on(table.supplierReturnId, table.goodsReceiptLineId),
+  index('supplier_return_lines_company_return_idx').on(table.companyId, table.supplierReturnId),
+  check('supplier_return_lines_quantity_positive', sql`${table.returnQuantity} > 0`),
+  check('supplier_return_lines_replacement_valid', sql`${table.replacementReceivedQuantity} >= 0 and ${table.replacementReceivedQuantity} <= ${table.returnQuantity}`),
 ]);

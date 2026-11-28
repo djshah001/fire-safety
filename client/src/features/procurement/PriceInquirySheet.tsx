@@ -115,6 +115,7 @@ export interface PriceInquirySheetProps {
   onOpenChange: (open: boolean) => void;
   initialItems?: InquiryItem[];
   defaultTitle?: string;
+  requisitionId?: string;
   onInquiryCreated?: (inquiry: PriceInquiry) => void;
 }
 
@@ -123,6 +124,7 @@ export function PriceInquirySheet({
   onOpenChange,
   initialItems,
   defaultTitle,
+  requisitionId,
   onInquiryCreated,
 }: PriceInquirySheetProps) {
   const [step, setStep] = useState<"create" | "invite">("create");
@@ -250,6 +252,7 @@ export function PriceInquirySheet({
           eligibleBrands: i.eligibleBrands,
         })),
         responseDueDate: data.responseDueDate || undefined,
+        requisitionId: requisitionId || undefined,
       });
 
       setCreatedInquiry(result);

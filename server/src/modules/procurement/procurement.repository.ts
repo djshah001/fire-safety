@@ -15,11 +15,13 @@ import {
   procurementRfqLines,
   procurementRfqVendors,
   procurementSelectionDecisions,
+  procurementSelectionLineAwards,
   procurementSubstitutionReviews,
   projectDesignBaselines,
   projectMembers,
   projects,
   purchaseComparisons,
+  purchaseOrders,
   users,
   vendorOfferLines,
   vendorOffers,
@@ -69,12 +71,12 @@ export function createProcurementRepository(executor: DatabaseExecutor) {
       const order = input.direction === 'asc' ? asc(sortColumn) : desc(sortColumn);
       const where = and(...filters);
       const base = () => executor.select(listFields).from(procurementRequisitions)
-        .innerJoin(projects, eq(projects.id, procurementRequisitions.projectId))
+        .leftJoin(projects, eq(projects.id, procurementRequisitions.projectId))
         .leftJoin(procurementRfqs, eq(procurementRfqs.requisitionId, procurementRequisitions.id));
       const [items, totals] = await Promise.all([
         base().where(where).orderBy(order, asc(procurementRequisitions.id)).limit(input.limit).offset(input.offset),
         executor.select({ value: count() }).from(procurementRequisitions)
-          .innerJoin(projects, eq(projects.id, procurementRequisitions.projectId))
+          .leftJoin(projects, eq(projects.id, procurementRequisitions.projectId))
           .leftJoin(procurementRfqs, eq(procurementRfqs.requisitionId, procurementRequisitions.id))
           .where(where),
       ]);
@@ -85,12 +87,13 @@ export function createProcurementRepository(executor: DatabaseExecutor) {
       const [row] = await executor.select({
         ...listFields,
         boqRevisionId: procurementRequisitions.boqRevisionId,
+        quotationRevisionId: procurementRequisitions.quotationRevisionId,
         notes: procurementRequisitions.notes,
         createdAt: procurementRequisitions.createdAt,
         buyerName: sql<string>`buyer.name`,
         purchaseManagerName: sql<string>`purchase_manager.name`,
       }).from(procurementRequisitions)
-        .innerJoin(projects, eq(projects.id, procurementRequisitions.projectId))
+        .leftJoin(projects, eq(projects.id, procurementRequisitions.projectId))
         .leftJoin(procurementRfqs, eq(procurementRfqs.requisitionId, procurementRequisitions.id))
         .innerJoin(sql`${users} buyer`, sql`buyer.id = ${procurementRequisitions.buyerUserId}`)
         .innerJoin(sql`${users} purchase_manager`, sql`purchase_manager.id = ${procurementRequisitions.purchaseManagerUserId}`)
@@ -294,7 +297,7 @@ export function createProcurementRepository(executor: DatabaseExecutor) {
         freightAmount: vendorOffers.freightAmount, leadTimeDays: vendorOffers.leadTimeDays,
         paymentTerms: vendorOffers.paymentTerms, warranty: vendorOffers.warranty, validUntil: vendorOffers.validUntil,
         subtotal: vendorOffers.subtotal, total: vendorOffers.total, status: vendorOffers.status,
-        recordedByUserId: vendorOffers.recordedByUserId, submittedAt: vendorOffers.submittedAt,
+        recordedByUserId: vendorOffers.recordedByUserId, sourcePriceInquiryResponseId: vendorOffers.sourcePriceInquiryResponseId, submittedAt: vendorOffers.submittedAt,
       }).from(vendorOffers).innerJoin(vendors, eq(vendors.id, vendorOffers.vendorId))
         .where(and(eq(vendorOffers.companyId, companyId), eq(vendorOffers.rfqId, rfqId))).orderBy(asc(vendors.displayName));
     },
@@ -326,6 +329,45 @@ export function createProcurementRepository(executor: DatabaseExecutor) {
     async findSelection(companyId: string, comparisonId: string) {
       const [row] = await executor.select().from(procurementSelectionDecisions).where(and(eq(procurementSelectionDecisions.companyId, companyId), eq(procurementSelectionDecisions.comparisonId, comparisonId))).limit(1);
       return row;
+    },
+    async createSelectionLineAwards(inputs: Array<typeof procurementSelectionLineAwards.$inferInsert>) {
+      if (inputs.length === 0) return [];
+      return executor.insert(procurementSelectionLineAwards).values(inputs).returning();
+    },
+    listSelectionLineAwards(companyId: string, selectionDecisionId: string) {
+      return executor.select({
+        id: procurementSelectionLineAwards.id,
+        selectionDecisionId: procurementSelectionLineAwards.selectionDecisionId,
+        rfqLineId: procurementSelectionLineAwards.rfqLineId,
+        winningVendorId: procurementSelectionLineAwards.winningVendorId,
+        winningOfferId: procurementSelectionLineAwards.winningOfferId,
+        winningOfferLineId: procurementSelectionLineAwards.winningOfferLineId,
+        awardedQuantity: procurementSelectionLineAwards.awardedQuantity,
+        selectionReason: procurementSelectionLineAwards.selectionReason,
+        generatedPoId: procurementSelectionLineAwards.generatedPoId,
+        vendorName: vendors.displayName,
+        vendorCode: vendors.code,
+        poNumber: purchaseOrders.poNumber,
+        createdAt: procurementSelectionLineAwards.createdAt,
+      }).from(procurementSelectionLineAwards)
+        .innerJoin(vendors, eq(vendors.id, procurementSelectionLineAwards.winningVendorId))
+        .leftJoin(purchaseOrders, eq(purchaseOrders.id, procurementSelectionLineAwards.generatedPoId))
+        .where(and(
+          eq(procurementSelectionLineAwards.companyId, companyId),
+          eq(procurementSelectionLineAwards.selectionDecisionId, selectionDecisionId),
+        ))
+        .orderBy(asc(procurementSelectionLineAwards.createdAt), asc(procurementSelectionLineAwards.id));
+    },
+    async markAwardsOrdered(companyId: string, awardIds: string[], purchaseOrderId: string) {
+      if (awardIds.length === 0) return [];
+      return executor.update(procurementSelectionLineAwards)
+        .set({ generatedPoId: purchaseOrderId })
+        .where(and(
+          eq(procurementSelectionLineAwards.companyId, companyId),
+          inArray(procurementSelectionLineAwards.id, awardIds),
+          isNull(procurementSelectionLineAwards.generatedPoId),
+        ))
+        .returning({ id: procurementSelectionLineAwards.id });
     },
 
     async listSubstitutionReviewQueue(companyId: string, userId: string, input: { search?: string; status?: 'pending' | 'approved' | 'rejected'; limit: number; offset: number; sort: 'requisitionNumber' | 'vendorName' | 'itemName' | 'status' | 'updatedAt'; direction: 'asc' | 'desc' }) {

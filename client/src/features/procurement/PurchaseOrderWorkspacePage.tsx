@@ -5,13 +5,16 @@ import { toast } from "sonner";
 import {
   AlertCircle,
   ArrowLeft,
+  Ban,
   CheckCircle2,
-  Clock,
   Download,
   FileCheck2,
   FileEdit,
   History,
+  Mail,
+  MessageSquare,
   PackageCheck,
+  RotateCcw,
   Send,
   ShieldCheck,
   Truck,
@@ -22,11 +25,20 @@ import {
   amendPurchaseOrder,
   approvePoRevision,
   cancelPurchaseOrder,
+  createSupplierReturn,
+  dispatchPurchaseOrderToVendor,
+  dispatchSupplierReturn,
   inspectGoodsReceipt,
   issuePurchaseOrder,
+  poPdfUrl,
   purchaseOrderWorkspaceQuery,
+  recordSupplierReturnReplacement,
+  settleSupplierReturnCredit,
+  shortClosePurchaseOrder,
   submitPoRevision,
+  supplierReturnPdfUrl,
   type GoodsReceipt,
+  type SupplierReturn,
 } from "@/api/purchaseOrders";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +60,21 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -118,6 +145,15 @@ function StatusBadge({ status }: { status: string }) {
           Delivered
         </Badge>
       );
+    case "short_closed":
+      return (
+        <Badge
+          variant="outline"
+          className="border-amber-600/40 bg-amber-500/15 text-amber-800 dark:text-amber-300"
+        >
+          Short Closed
+        </Badge>
+      );
     case "cancelled":
       return <Badge variant="destructive">Cancelled</Badge>;
     default:
@@ -143,6 +179,44 @@ export function PurchaseOrderWorkspacePage() {
   const [inspectionQtys, setInspectionQtys] = useState<
     Record<string, { accepted: string; rejected: string; reason: string }>
   >({});
+
+  const [shortCloseOpen, setShortCloseOpen] = useState(false);
+  const [shortCloseReason, setShortCloseReason] = useState("");
+
+  const [dispatchSheetOpen, setDispatchSheetOpen] = useState(false);
+  const [dispatchChannel, setDispatchChannel] = useState<
+    "email" | "whatsapp_msg91" | "whatsapp_manual"
+  >("email");
+  const [dispatchRecipientName, setDispatchRecipientName] = useState("");
+  const [dispatchRecipientContact, setDispatchRecipientContact] = useState("");
+  const [dispatchCustomMessage, setDispatchCustomMessage] = useState("");
+
+  const [rtvCreateGrn, setRtvCreateGrn] = useState<GoodsReceipt | null>(null);
+  const [rtvResolutionType, setRtvResolutionType] = useState<
+    "replacement" | "credit_note" | "deduction"
+  >("replacement");
+  const [rtvReason, setRtvReason] = useState("");
+  const [rtvLineQtys, setRtvLineQtys] = useState<
+    Record<string, { qty: string; remarks: string }>
+  >({});
+
+  const [rtvDispatchTarget, setRtvDispatchTarget] =
+    useState<SupplierReturn | null>(null);
+  const [rtvCarrier, setRtvCarrier] = useState("");
+  const [rtvVehicle, setRtvVehicle] = useState("");
+  const [rtvDispatchDate, setRtvDispatchDate] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
+
+  const [rtvReplacementTarget, setRtvReplacementTarget] =
+    useState<SupplierReturn | null>(null);
+  const [rtvReplacementQtys, setRtvReplacementQtys] = useState<
+    Record<string, string>
+  >({});
+
+  const [rtvCreditTarget, setRtvCreditTarget] =
+    useState<SupplierReturn | null>(null);
+  const [rtvCreditRef, setRtvCreditRef] = useState("");
 
   const invalidate = () => {
     queryClient.invalidateQueries({
@@ -291,6 +365,161 @@ export function PurchaseOrderWorkspacePage() {
     onError: (err) => toast.error(getApiErrorMessage(err)),
   });
 
+  const shortCloseMutation = useMutation({
+    mutationFn: async () => {
+      if (!poId || !workspace.data) throw new Error("Workspace not ready");
+      return shortClosePurchaseOrder(
+        poId,
+        workspace.data.purchaseOrder.rowVersion,
+        shortCloseReason.trim(),
+      );
+    },
+    onSuccess: () => {
+      toast.success("Purchase Order short-closed.");
+      setShortCloseOpen(false);
+      setShortCloseReason("");
+      invalidate();
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err)),
+  });
+
+  const dispatchVendorMutation = useMutation({
+    mutationFn: async () => {
+      if (!poId) throw new Error("PO missing");
+      return dispatchPurchaseOrderToVendor(poId, {
+        channel: dispatchChannel,
+        recipientName: dispatchRecipientName.trim(),
+        recipientContact: dispatchRecipientContact.trim(),
+        customMessage: dispatchCustomMessage.trim() || undefined,
+      });
+    },
+    onSuccess: (res) => {
+      if (res.manualWhatsAppUrl) {
+        window.open(res.manualWhatsAppUrl, "_blank", "noopener,noreferrer");
+      }
+      toast.success(
+        res.fallbackToManual
+          ? "MSG91 unavailable — opened WhatsApp Web fallback and logged dispatch."
+          : res.dispatch.status === "manual_opened"
+            ? "Opened WhatsApp Web and logged vendor dispatch."
+            : "Purchase Order sent to vendor.",
+      );
+      setDispatchSheetOpen(false);
+      setDispatchCustomMessage("");
+      invalidate();
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err)),
+  });
+
+  const createRtvMutation = useMutation({
+    mutationFn: async () => {
+      if (!poId || !rtvCreateGrn) throw new Error("GRN not selected");
+      const rtvLines = rtvCreateGrn.lines
+        .map((l) => {
+          const entry = rtvLineQtys[l.id];
+          const qty = Number(entry?.qty ?? 0);
+          if (qty <= 0) return null;
+          return {
+            goodsReceiptLineId: l.id,
+            returnQuantity: qty.toFixed(4),
+            remarks: entry?.remarks.trim() || undefined,
+          };
+        })
+        .filter(
+          (x): x is { goodsReceiptLineId: string; returnQuantity: string; remarks: string | undefined } =>
+            Boolean(x),
+        );
+      if (rtvLines.length === 0) {
+        throw new Error("Enter at least one positive return quantity.");
+      }
+      return createSupplierReturn({
+        purchaseOrderId: poId,
+        goodsReceiptId: rtvCreateGrn.id,
+        resolutionType: rtvResolutionType,
+        reason: rtvReason.trim(),
+        lines: rtvLines,
+      });
+    },
+    onSuccess: (rtv) => {
+      toast.success(`Supplier Return ${rtv.rtvNumber} drafted.`);
+      setRtvCreateGrn(null);
+      setRtvReason("");
+      setRtvLineQtys({});
+      invalidate();
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err)),
+  });
+
+  const dispatchRtvMutation = useMutation({
+    mutationFn: async () => {
+      if (!rtvDispatchTarget) throw new Error("RTV not selected");
+      return dispatchSupplierReturn(rtvDispatchTarget.id, {
+        expectedVersion: rtvDispatchTarget.rowVersion,
+        transporterName: rtvCarrier.trim() || undefined,
+        vehicleNumber: rtvVehicle.trim() || undefined,
+        dispatchDate: rtvDispatchDate,
+      });
+    },
+    onSuccess: (rtv) => {
+      toast.success(`RTV ${rtv.rtvNumber} dispatched & Challan PDF ready.`);
+      setRtvDispatchTarget(null);
+      setRtvCarrier("");
+      setRtvVehicle("");
+      invalidate();
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err)),
+  });
+
+  const replacementRtvMutation = useMutation({
+    mutationFn: async () => {
+      if (!rtvReplacementTarget) throw new Error("RTV not selected");
+      const repLines = rtvReplacementTarget.lines
+        .map((l) => {
+          const qty = Number(rtvReplacementQtys[l.id] ?? 0);
+          if (qty <= 0) return null;
+          return {
+            supplierReturnLineId: l.id,
+            receivedQuantity: qty.toFixed(4),
+          };
+        })
+        .filter(
+          (x): x is { supplierReturnLineId: string; receivedQuantity: string } =>
+            Boolean(x),
+        );
+      if (repLines.length === 0) {
+        throw new Error("Enter at least one replacement quantity received.");
+      }
+      return recordSupplierReturnReplacement(rtvReplacementTarget.id, {
+        expectedVersion: rtvReplacementTarget.rowVersion,
+        lines: repLines,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Vendor replacement receipt recorded.");
+      setRtvReplacementTarget(null);
+      setRtvReplacementQtys({});
+      invalidate();
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err)),
+  });
+
+  const settleCreditRtvMutation = useMutation({
+    mutationFn: async () => {
+      if (!rtvCreditTarget) throw new Error("RTV not selected");
+      return settleSupplierReturnCredit(rtvCreditTarget.id, {
+        expectedVersion: rtvCreditTarget.rowVersion,
+        creditNoteReference: rtvCreditRef.trim(),
+      });
+    },
+    onSuccess: () => {
+      toast.success("Credit note / deduction settlement recorded.");
+      setRtvCreditTarget(null);
+      setRtvCreditRef("");
+      invalidate();
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err)),
+  });
+
   if (workspace.isPending) {
     return (
       <main className="mx-auto max-w-7xl space-y-6 p-6">
@@ -329,6 +558,9 @@ export function PurchaseOrderWorkspacePage() {
     revisions,
     lines,
     goodsReceipts,
+    vendorContact,
+    dispatches,
+    supplierReturns,
     capabilities,
   } = workspace.data;
 
@@ -400,12 +632,36 @@ export function PurchaseOrderWorkspacePage() {
           {currentRevision.issuedPdfStorageId && (
             <Button asChild variant="outline" className="gap-2">
               <a
-                href={`/api/v1/documents/${currentRevision.issuedPdfStorageId}`}
+                href={poPdfUrl(purchaseOrder.id)}
                 target="_blank"
                 rel="noreferrer"
               >
                 <Download className="size-4" /> Download PDF
               </a>
+            </Button>
+          )}
+
+          {capabilities.canDispatchVendor && (
+            <Button
+              variant="outline"
+              className="gap-2"
+              onClick={() => {
+                setDispatchRecipientName(
+                  vendorContact?.name || purchaseOrder.vendorName,
+                );
+                const preferredChannel = vendorContact?.email
+                  ? "email"
+                  : "whatsapp_msg91";
+                setDispatchChannel(preferredChannel);
+                setDispatchRecipientContact(
+                  preferredChannel === "email"
+                    ? vendorContact?.email ?? ""
+                    : vendorContact?.phone ?? "",
+                );
+                setDispatchSheetOpen(true);
+              }}
+            >
+              <Mail className="size-4" /> Send to Vendor
             </Button>
           )}
 
@@ -415,6 +671,16 @@ export function PurchaseOrderWorkspacePage() {
               className="gap-2 bg-indigo-600 text-white hover:bg-indigo-700"
             >
               <Truck className="size-4" /> Record Delivery (GRN)
+            </Button>
+          )}
+
+          {capabilities.canShortClose && (
+            <Button
+              onClick={() => setShortCloseOpen(true)}
+              variant="outline"
+              className="gap-2 border-amber-600/40 text-amber-700 hover:bg-amber-50 dark:text-amber-300 dark:hover:bg-amber-950/30"
+            >
+              <Ban className="size-4" /> Short-Close PO
             </Button>
           )}
 
@@ -498,16 +764,31 @@ export function PurchaseOrderWorkspacePage() {
         </Card>
       </div>
 
+      {purchaseOrder.status === "short_closed" && purchaseOrder.shortCloseReason && (
+        <Alert>
+          <Ban className="size-4" />
+          <AlertTitle>Purchase Order Short-Closed</AlertTitle>
+          <AlertDescription>
+            Remaining unreceived balance was formally closed out:{" "}
+            <strong>{purchaseOrder.shortCloseReason}</strong>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Workspace Tabs */}
       <Tabs defaultValue="items" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-3 sm:w-auto sm:inline-grid">
+        <TabsList className="grid w-full grid-cols-2 sm:w-auto sm:inline-grid sm:grid-cols-5">
           <TabsTrigger value="items" className="gap-2">
-            <PackageCheck className="size-4" /> Line Items & Fulfillment (
-            {lines.length})
+            <PackageCheck className="size-4" /> Line Items ({lines.length})
           </TabsTrigger>
           <TabsTrigger value="receipts" className="gap-2">
-            <Truck className="size-4" /> Goods Receipts / GRN (
-            {goodsReceipts.length})
+            <Truck className="size-4" /> GRNs ({goodsReceipts.length})
+          </TabsTrigger>
+          <TabsTrigger value="dispatches" className="gap-2">
+            <Send className="size-4" /> Dispatches ({dispatches.length})
+          </TabsTrigger>
+          <TabsTrigger value="returns" className="gap-2">
+            <RotateCcw className="size-4" /> Returns / RTV ({supplierReturns.length})
           </TabsTrigger>
           <TabsTrigger value="history" className="gap-2">
             <History className="size-4" /> Revisions ({revisions.length})
@@ -602,14 +883,21 @@ export function PurchaseOrderWorkspacePage() {
                                 style={{ width: `${pct}%` }}
                               />
                             </div>
-                            {(received > accepted || rejected > 0) && (
-                              <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                            {(received > accepted ||
+                              rejected > 0 ||
+                              Number(line.shortClosedQuantity) > 0) && (
+                              <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
                                 {received > accepted && (
                                   <span>Recd: {received}</span>
                                 )}
                                 {rejected > 0 && (
                                   <span className="text-destructive font-medium">
                                     Rej: {rejected}
+                                  </span>
+                                )}
+                                {Number(line.shortClosedQuantity) > 0 && (
+                                  <span className="text-amber-700 dark:text-amber-300 font-medium">
+                                    Short-closed: {line.shortClosedQuantity}
                                   </span>
                                 )}
                               </div>
@@ -703,35 +991,66 @@ export function PurchaseOrderWorkspacePage() {
                       </CardDescription>
                     </div>
 
-                    {grn.status === "draft" && capabilities.canInspect && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          setInspectModalGrn(grn);
-                          const initial: Record<
-                            string,
-                            {
-                              accepted: string;
-                              rejected: string;
-                              reason: string;
-                            }
-                          > = {};
-                          grn.lines.forEach((l) => {
-                            initial[l.id] = {
-                              accepted: l.deliveredQuantity,
-                              rejected: "0",
-                              reason: "",
-                            };
-                          });
-                          setInspectionQtys(initial);
-                        }}
-                        className="gap-1.5"
-                      >
-                        <ShieldCheck className="size-4 text-primary" /> Inspect
-                        Shipment
-                      </Button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {grn.status === "draft" && capabilities.canInspect && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setInspectModalGrn(grn);
+                            const initial: Record<
+                              string,
+                              {
+                                accepted: string;
+                                rejected: string;
+                                reason: string;
+                              }
+                            > = {};
+                            grn.lines.forEach((l) => {
+                              initial[l.id] = {
+                                accepted: l.deliveredQuantity,
+                                rejected: "0",
+                                reason: "",
+                              };
+                            });
+                            setInspectionQtys(initial);
+                          }}
+                          className="gap-1.5"
+                        >
+                          <ShieldCheck className="size-4 text-primary" /> Inspect
+                          Shipment
+                        </Button>
+                      )}
+                      {capabilities.canCreateRtv &&
+                        grn.lines.some((l) => Number(l.rejectedQuantity) > 0) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            onClick={() => {
+                              const defaults: Record<
+                                string,
+                                { qty: string; remarks: string }
+                              > = {};
+                              grn.lines.forEach((l) => {
+                                if (Number(l.rejectedQuantity) > 0) {
+                                  defaults[l.id] = {
+                                    qty: l.rejectedQuantity,
+                                    remarks: l.rejectionReason ?? "",
+                                  };
+                                }
+                              });
+                              setRtvLineQtys(defaults);
+                              setRtvResolutionType("replacement");
+                              setRtvReason("");
+                              setRtvCreateGrn(grn);
+                            }}
+                          >
+                            <RotateCcw className="size-4 text-destructive" />{" "}
+                            Return Rejected (RTV)
+                          </Button>
+                        )}
+                    </div>
                   </CardHeader>
                   <CardContent className="p-4 pt-2">
                     <Table>
@@ -744,7 +1063,7 @@ export function PurchaseOrderWorkspacePage() {
                           </TableHead>
                           <TableHead className="text-right">Accepted</TableHead>
                           <TableHead className="text-right">Rejected</TableHead>
-                          <TableHead>Rejection Notes</TableHead>
+                          <TableHead>Notes & Exceptions</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -768,7 +1087,15 @@ export function PurchaseOrderWorkspacePage() {
                                 )}
                               </TableCell>
                               <TableCell className="text-right font-medium">
-                                {l.deliveredQuantity}
+                                <div>{l.deliveredQuantity}</div>
+                                {Number(l.excessQuantity) > 0 && (
+                                  <Badge
+                                    variant="outline"
+                                    className="mt-0.5 text-[10px] border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                                  >
+                                    +{l.excessQuantity} Excess
+                                  </Badge>
+                                )}
                               </TableCell>
                               <TableCell className="text-right text-emerald-600 font-semibold">
                                 {l.acceptedQuantity}
@@ -776,8 +1103,18 @@ export function PurchaseOrderWorkspacePage() {
                               <TableCell className="text-right text-destructive font-semibold">
                                 {l.rejectedQuantity}
                               </TableCell>
-                              <TableCell className="text-xs text-muted-foreground">
-                                {l.rejectionReason || "—"}
+                              <TableCell className="text-xs text-muted-foreground space-y-1">
+                                {l.rejectionReason && (
+                                  <div>Rejection: {l.rejectionReason}</div>
+                                )}
+                                {l.excessApprovalReason && (
+                                  <div className="text-amber-700 dark:text-amber-300">
+                                    Overdelivery: {l.excessApprovalReason}
+                                  </div>
+                                )}
+                                {!l.rejectionReason &&
+                                  !l.excessApprovalReason &&
+                                  "—"}
                               </TableCell>
                             </TableRow>
                           );
@@ -791,7 +1128,217 @@ export function PurchaseOrderWorkspacePage() {
           )}
         </TabsContent>
 
-        {/* Tab 3: Revision History */}
+        {/* Tab 3: Vendor Dispatches */}
+        <TabsContent value="dispatches" className="space-y-4">
+          {dispatches.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+                <Send className="size-10 text-muted-foreground/40 mb-3" />
+                <p className="text-sm font-medium">No vendor dispatches logged yet</p>
+                <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+                  Dispatch the issued PO PDF directly to the vendor via Email or WhatsApp to maintain a complete delivery audit trail.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card>
+              <CardContent className="p-0 overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Channel</TableHead>
+                      <TableHead>Recipient</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Sent By</TableHead>
+                      <TableHead>Timestamp / Details</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {dispatches.map((d) => (
+                      <TableRow key={d.id}>
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs">
+                            {d.channel === "email"
+                              ? "Email (PDF)"
+                              : d.channel === "whatsapp_msg91"
+                                ? "WhatsApp (MSG91)"
+                                : "WhatsApp (Manual)"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="font-medium text-xs">{d.recipientName}</div>
+                          <div className="text-xs text-muted-foreground font-mono">
+                            {d.recipientContact}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant={
+                              d.status === "failed"
+                                ? "destructive"
+                                : d.status === "sent"
+                                  ? "default"
+                                  : "outline"
+                            }
+                          >
+                            {d.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs">{d.sentByName}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          <div>
+                            {new Date(d.sentAt || d.createdAt).toLocaleString()}
+                          </div>
+                          {d.errorMessage && (
+                            <div className="text-destructive">{d.errorMessage}</div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        {/* Tab 4: Supplier Returns (RTV) */}
+        <TabsContent value="returns" className="space-y-4">
+          {supplierReturns.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+                <RotateCcw className="size-10 text-muted-foreground/40 mb-3" />
+                <p className="text-sm font-medium">No supplier returns (RTV) recorded</p>
+                <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+                  Rejected quantities on a Goods Receipt can be returned via RTV for replacement or credit note settlement.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {supplierReturns.map((rtv) => (
+                <Card key={rtv.id}>
+                  <CardHeader className="p-4 pb-2 flex flex-row flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <CardTitle className="text-base font-mono">
+                          {rtv.rtvNumber}
+                        </CardTitle>
+                        <Badge variant="outline">{rtv.status}</Badge>
+                        <Badge variant="secondary">{rtv.resolutionType}</Badge>
+                      </div>
+                      <CardDescription className="text-xs mt-1">
+                        GRN: <strong>{rtv.grnNumber}</strong> · Reason: {rtv.reason}
+                        {rtv.creditNoteReference && (
+                          <> · Credit Note: <strong>{rtv.creditNoteReference}</strong></>
+                        )}
+                      </CardDescription>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {rtv.hasPdf && (
+                        <Button asChild size="sm" variant="outline">
+                          <a
+                            href={supplierReturnPdfUrl(rtv.id)}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <Download className="size-3.5 mr-1.5" /> Challan PDF
+                          </a>
+                        </Button>
+                      )}
+                      {rtv.status === "draft" && capabilities.canCreateRtv && (
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            setRtvCarrier("");
+                            setRtvVehicle("");
+                            setRtvDispatchDate(new Date().toISOString().slice(0, 10));
+                            setRtvDispatchTarget(rtv);
+                          }}
+                        >
+                          <Truck className="size-3.5 mr-1.5" /> Dispatch RTV
+                        </Button>
+                      )}
+                      {rtv.status === "dispatched" &&
+                        rtv.resolutionType === "replacement" &&
+                        capabilities.canCreateRtv && (
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              const defaults: Record<string, string> = {};
+                              rtv.lines.forEach((l) => {
+                                const rem = Math.max(
+                                  0,
+                                  Number(l.returnQuantity) -
+                                    Number(l.replacementReceivedQuantity),
+                                );
+                                defaults[l.id] = rem > 0 ? String(rem) : "0";
+                              });
+                              setRtvReplacementQtys(defaults);
+                              setRtvReplacementTarget(rtv);
+                            }}
+                          >
+                            <PackageCheck className="size-3.5 mr-1.5" /> Record Replacement
+                          </Button>
+                        )}
+                      {rtv.status === "dispatched" &&
+                        (rtv.resolutionType === "credit_note" ||
+                          rtv.resolutionType === "deduction") &&
+                        capabilities.canCreateRtv && (
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              setRtvCreditRef("");
+                              setRtvCreditTarget(rtv);
+                            }}
+                          >
+                            <CheckCircle2 className="size-3.5 mr-1.5" /> Settle Credit
+                          </Button>
+                        )}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-4 pt-2">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Item</TableHead>
+                          <TableHead>Brand / Make</TableHead>
+                          <TableHead className="text-right">Return Qty</TableHead>
+                          <TableHead className="text-right">Replacement Recd</TableHead>
+                          <TableHead>Remarks</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {rtv.lines.map((l) => (
+                          <TableRow key={l.id}>
+                            <TableCell className="text-xs font-medium">
+                              {l.itemName}
+                              <span className="ml-1.5 font-mono text-muted-foreground">
+                                ({l.itemCode})
+                              </span>
+                            </TableCell>
+                            <TableCell className="text-xs">{l.brandOffered}</TableCell>
+                            <TableCell className="text-right text-xs font-semibold">
+                              {l.returnQuantity} {l.unitSymbol}
+                            </TableCell>
+                            <TableCell className="text-right text-xs font-semibold text-emerald-600">
+                              {l.replacementReceivedQuantity} {l.unitSymbol}
+                            </TableCell>
+                            <TableCell className="text-xs text-muted-foreground">
+                              {l.remarks || "—"}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Tab 5: Revision History */}
         <TabsContent value="history" className="space-y-4">
           <Card>
             <CardHeader className="p-4 pb-2">
@@ -880,6 +1427,7 @@ export function PurchaseOrderWorkspacePage() {
         onOpenChange={setReceiptSheetOpen}
         purchaseOrder={purchaseOrder}
         lines={lines}
+        canApproveOverdelivery={capabilities.canApproveOverdelivery}
       />
 
       {/* Approval Dialog */}
@@ -1092,6 +1640,455 @@ export function PurchaseOrderWorkspacePage() {
                 disabled={inspectMutation.isPending}
               >
                 {inspectMutation.isPending ? "Saving…" : "Save Inspection"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Short-Close PO Dialog */}
+      <Dialog open={shortCloseOpen} onOpenChange={setShortCloseOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Short-Close Purchase Order</DialogTitle>
+            <DialogDescription>
+              Close out remaining undelivered quantities on {purchaseOrder.poNumber}. Already accepted quantities remain intact and future GRNs will be blocked.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <Label htmlFor="shortCloseR">
+              Short-Close Reason <span className="text-destructive">*</span>
+            </Label>
+            <Textarea
+              id="shortCloseR"
+              placeholder="e.g. Vendor unable to supply remaining stock; sourced balance elsewhere"
+              value={shortCloseReason}
+              onChange={(e) => setShortCloseReason(e.target.value)}
+              rows={3}
+              required
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShortCloseOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => shortCloseMutation.mutate()}
+              disabled={
+                shortCloseMutation.isPending ||
+                shortCloseReason.trim().length < 3
+              }
+            >
+              {shortCloseMutation.isPending
+                ? "Short-Closing…"
+                : "Confirm Short-Close"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Send PO to Vendor Sheet */}
+      <Sheet open={dispatchSheetOpen} onOpenChange={setDispatchSheetOpen}>
+        <SheetContent className="sm:max-w-lg overflow-y-auto">
+          <SheetHeader>
+            <SheetTitle>Send PO to Vendor</SheetTitle>
+            <SheetDescription>
+              Dispatch {purchaseOrder.poNumber} (R{currentRevision.revisionNumber}) with recipient preview and full audit logging.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-1.5">
+              <Label>Delivery Channel</Label>
+              <Select
+                value={dispatchChannel}
+                onValueChange={(val) => {
+                  const nextChannel = val as
+                    | "email"
+                    | "whatsapp_msg91"
+                    | "whatsapp_manual";
+                  setDispatchChannel(nextChannel);
+                  if (nextChannel === "email" && vendorContact?.email) {
+                    setDispatchRecipientContact(vendorContact.email);
+                  } else if (
+                    nextChannel !== "email" &&
+                    vendorContact?.phone
+                  ) {
+                    setDispatchRecipientContact(vendorContact.phone);
+                  }
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="email">
+                    <span className="flex items-center gap-2">
+                      <Mail className="size-3.5" /> Email with PO PDF Attachment
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="whatsapp_msg91">
+                    <span className="flex items-center gap-2">
+                      <MessageSquare className="size-3.5" /> WhatsApp via MSG91 (Auto-Fallback)
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="whatsapp_manual">
+                    <span className="flex items-center gap-2">
+                      <MessageSquare className="size-3.5" /> WhatsApp Web (Manual Open)
+                    </span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="dispName">Recipient Name</Label>
+              <Input
+                id="dispName"
+                value={dispatchRecipientName}
+                onChange={(e) => setDispatchRecipientName(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="dispContact">
+                {dispatchChannel === "email" ? "Email Address" : "WhatsApp Number"}
+              </Label>
+              <Input
+                id="dispContact"
+                placeholder={
+                  dispatchChannel === "email"
+                    ? "vendor@example.com"
+                    : "+91 98XXXXXXXX"
+                }
+                value={dispatchRecipientContact}
+                onChange={(e) => setDispatchRecipientContact(e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="dispMsg">Custom Message Note (Optional)</Label>
+              <Textarea
+                id="dispMsg"
+                rows={3}
+                placeholder="Include delivery schedule reminders or dock instructions..."
+                value={dispatchCustomMessage}
+                onChange={(e) => setDispatchCustomMessage(e.target.value)}
+              />
+            </div>
+          </div>
+          <SheetFooter className="border-t pt-4">
+            <Button
+              variant="ghost"
+              onClick={() => setDispatchSheetOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => dispatchVendorMutation.mutate()}
+              disabled={
+                dispatchVendorMutation.isPending ||
+                !dispatchRecipientName.trim() ||
+                !dispatchRecipientContact.trim()
+              }
+            >
+              <Send className="size-4 mr-1.5" />
+              {dispatchVendorMutation.isPending ? "Sending…" : "Send PO Now"}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+
+      {/* Create Supplier Return (RTV) Dialog */}
+      {rtvCreateGrn && (
+        <Dialog
+          open={Boolean(rtvCreateGrn)}
+          onOpenChange={(open) => {
+            if (!open) setRtvCreateGrn(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Create Supplier Return (RTV)</DialogTitle>
+              <DialogDescription>
+                Return rejected material from {rtvCreateGrn.grnNumber} back to{" "}
+                {purchaseOrder.vendorName}.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2 max-h-[60vh] overflow-y-auto">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label>Resolution Type</Label>
+                  <Select
+                    value={rtvResolutionType}
+                    onValueChange={(v) =>
+                      setRtvResolutionType(
+                        v as "replacement" | "credit_note" | "deduction",
+                      )
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="replacement">Vendor Replacement</SelectItem>
+                      <SelectItem value="credit_note">Credit Note</SelectItem>
+                      <SelectItem value="deduction">Invoice Deduction</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="rtvReason">
+                    Return Reason <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="rtvReason"
+                    placeholder="e.g. Damaged valves / wrong spec"
+                    value={rtvReason}
+                    onChange={(e) => setRtvReason(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                {rtvCreateGrn.lines
+                  .filter((l) => Number(l.rejectedQuantity) > 0)
+                  .map((l) => {
+                    const poLine = lines.find(
+                      (pl) => pl.id === l.purchaseOrderLineId,
+                    );
+                    const state = rtvLineQtys[l.id] ?? {
+                      qty: l.rejectedQuantity,
+                      remarks: "",
+                    };
+                    return (
+                      <div key={l.id} className="rounded-lg border p-3 space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-semibold">
+                            {poLine?.itemName ?? "Item"}
+                          </span>
+                          <span className="text-destructive font-mono">
+                            Max Rejected: {l.rejectedQuantity}
+                          </span>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <Label className="text-xs">Return Qty</Label>
+                            <Input
+                              type="number"
+                              step="0.0001"
+                              min="0"
+                              max={l.rejectedQuantity}
+                              value={state.qty}
+                              onChange={(e) =>
+                                setRtvLineQtys((prev) => ({
+                                  ...prev,
+                                  [l.id]: { ...state, qty: e.target.value },
+                                }))
+                              }
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Line Remarks</Label>
+                            <Input
+                              value={state.remarks}
+                              onChange={(e) =>
+                                setRtvLineQtys((prev) => ({
+                                  ...prev,
+                                  [l.id]: { ...state, remarks: e.target.value },
+                                }))
+                              }
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setRtvCreateGrn(null)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => createRtvMutation.mutate()}
+                disabled={
+                  createRtvMutation.isPending || rtvReason.trim().length < 3
+                }
+              >
+                {createRtvMutation.isPending ? "Creating…" : "Create RTV Draft"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Dispatch RTV Dialog */}
+      {rtvDispatchTarget && (
+        <Dialog
+          open={Boolean(rtvDispatchTarget)}
+          onOpenChange={(open) => {
+            if (!open) setRtvDispatchTarget(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                Dispatch RTV {rtvDispatchTarget.rtvNumber}
+              </DialogTitle>
+              <DialogDescription>
+                Generates the Return Challan PDF and marks the shipment in transit to the vendor.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-2">
+              <div className="space-y-1.5">
+                <Label>Dispatch Date</Label>
+                <Input
+                  type="date"
+                  value={rtvDispatchDate}
+                  onChange={(e) => setRtvDispatchDate(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Transporter / Courier (Optional)</Label>
+                <Input
+                  value={rtvCarrier}
+                  onChange={(e) => setRtvCarrier(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Vehicle Number (Optional)</Label>
+                <Input
+                  value={rtvVehicle}
+                  onChange={(e) => setRtvVehicle(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                variant="ghost"
+                onClick={() => setRtvDispatchTarget(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => dispatchRtvMutation.mutate()}
+                disabled={dispatchRtvMutation.isPending || !rtvDispatchDate}
+              >
+                {dispatchRtvMutation.isPending
+                  ? "Dispatching…"
+                  : "Dispatch & Generate Challan"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Record RTV Replacement Dialog */}
+      {rtvReplacementTarget && (
+        <Dialog
+          open={Boolean(rtvReplacementTarget)}
+          onOpenChange={(open) => {
+            if (!open) setRtvReplacementTarget(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>
+                Record Replacement: {rtvReplacementTarget.rtvNumber}
+              </DialogTitle>
+              <DialogDescription>
+                Accept vendor replacement units against returned quantities.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-2 max-h-[55vh] overflow-y-auto">
+              {rtvReplacementTarget.lines.map((l) => (
+                <div key={l.id} className="rounded-lg border p-3 space-y-1.5">
+                  <div className="flex justify-between text-xs">
+                    <span className="font-semibold">{l.itemName}</span>
+                    <span className="text-muted-foreground">
+                      Returned: {l.returnQuantity} · Recd:{" "}
+                      {l.replacementReceivedQuantity}
+                    </span>
+                  </div>
+                  <Input
+                    type="number"
+                    step="0.0001"
+                    min="0"
+                    value={rtvReplacementQtys[l.id] ?? "0"}
+                    onChange={(e) =>
+                      setRtvReplacementQtys((prev) => ({
+                        ...prev,
+                        [l.id]: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+            <DialogFooter>
+              <Button
+                variant="ghost"
+                onClick={() => setRtvReplacementTarget(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={() => replacementRtvMutation.mutate()}
+                disabled={replacementRtvMutation.isPending}
+              >
+                {replacementRtvMutation.isPending
+                  ? "Saving…"
+                  : "Confirm Replacement"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Settle RTV Credit Note Dialog */}
+      {rtvCreditTarget && (
+        <Dialog
+          open={Boolean(rtvCreditTarget)}
+          onOpenChange={(open) => {
+            if (!open) setRtvCreditTarget(null);
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                Settle Credit / Deduction: {rtvCreditTarget.rtvNumber}
+              </DialogTitle>
+              <DialogDescription>
+                Record the vendor credit note or invoice deduction reference to close this RTV.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 py-2">
+              <Label htmlFor="creditRef">
+                Credit Note / Deduction Reference{" "}
+                <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="creditRef"
+                placeholder="e.g. CN-2026-0891"
+                value={rtvCreditRef}
+                onChange={(e) => setRtvCreditRef(e.target.value)}
+                required
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setRtvCreditTarget(null)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => settleCreditRtvMutation.mutate()}
+                disabled={
+                  settleCreditRtvMutation.isPending ||
+                  rtvCreditRef.trim().length < 2
+                }
+              >
+                {settleCreditRtvMutation.isPending
+                  ? "Settling…"
+                  : "Confirm Settlement"}
               </Button>
             </DialogFooter>
           </DialogContent>

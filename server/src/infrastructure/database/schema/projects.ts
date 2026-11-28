@@ -41,7 +41,7 @@ export const projectMembers = pgTable('project_members', {
 }, (table) => [
   primaryKey({ name: 'project_members_pk', columns: [table.projectId, table.userId] }),
   index('project_members_user_idx').on(table.companyId, table.userId, table.projectId),
-  check('project_members_role_valid', sql`${table.role} in ('project_manager', 'sales', 'design', 'purchase', 'member', 'viewer')`),
+  check('project_members_role_valid', sql`${table.role} in ('project_manager', 'sales', 'design', 'purchase', 'site_engineer', 'member', 'viewer')`),
 ]);
 
 export const projectDesignBaselines = pgTable('project_design_baselines', {

@@ -28,6 +28,14 @@ const passwordResetPayloadSchema = z.object({
 });
 const reminderDuePayloadSchema = z.object({ occurrenceId: z.uuid() });
 const designDeadlinePayloadSchema = z.object({ jobId: z.uuid(), dueAt: z.iso.datetime({ offset: true }) });
+const lowStockAlertPayloadSchema = z.object({
+  warehouseId: z.uuid(),
+  itemId: z.uuid(),
+  brandOfferingId: z.uuid().nullable().optional(),
+  effectiveStock: z.string(),
+  minStock: z.string(),
+  maxStock: z.string(),
+});
 
 export type OutboxHandlerOptions = Omit<MailDeliveryOptions, 'mode'> & {
   mailDeliveryMode?: MailDeliveryMode;
@@ -76,6 +84,10 @@ export async function handleOutboxJob(job: ClaimedJob, options: OutboxHandlerOpt
   }
   if (job.type === 'engineering.design_deadline') {
     designDeadlinePayloadSchema.parse(job.payload);
+    return;
+  }
+  if (job.type === 'inventory.low_stock_alert') {
+    lowStockAlertPayloadSchema.parse(job.payload);
     return;
   }
   if (job.type === 'identity.password_reset_requested') {

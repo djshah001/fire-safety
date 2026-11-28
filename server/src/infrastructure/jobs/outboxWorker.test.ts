@@ -41,6 +41,43 @@ describe('outbox handlers', () => {
     await expect(handleOutboxJob({ ...job, type: 'engineering.design_deadline', payload: { jobId: 'invalid' } })).rejects.toThrow();
   });
 
+  it('validates inventory.low_stock_alert payloads with and without brandOfferingId', async () => {
+    await expect(handleOutboxJob({
+      ...job,
+      type: 'inventory.low_stock_alert',
+      payload: {
+        warehouseId: '00000000-0000-4000-8000-000000000010',
+        itemId: '00000000-0000-4000-8000-000000000020',
+        brandOfferingId: '00000000-0000-4000-8000-000000000030',
+        effectiveStock: '4.0000',
+        minStock: '10.0000',
+        maxStock: '25.0000',
+      },
+    })).resolves.toBeUndefined();
+
+    await expect(handleOutboxJob({
+      ...job,
+      type: 'inventory.low_stock_alert',
+      payload: {
+        warehouseId: '00000000-0000-4000-8000-000000000010',
+        itemId: '00000000-0000-4000-8000-000000000020',
+        brandOfferingId: null,
+        effectiveStock: '0.0000',
+        minStock: '5.0000',
+        maxStock: '20.0000',
+      },
+    })).resolves.toBeUndefined();
+
+    await expect(handleOutboxJob({
+      ...job,
+      type: 'inventory.low_stock_alert',
+      payload: {
+        warehouseId: 'not-a-uuid',
+        itemId: '00000000-0000-4000-8000-000000000020',
+      },
+    })).rejects.toThrow();
+  });
+
   it('does not claim password reset delivery when email is unconfigured', async () => {
     await expect(handleOutboxJob(job, { mailDeliveryMode: 'disabled' })).rejects.toEqual(expect.objectContaining({
       message: expect.stringContaining('not configured'),

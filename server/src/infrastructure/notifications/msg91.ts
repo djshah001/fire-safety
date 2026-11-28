@@ -200,6 +200,103 @@ export class Msg91WhatsAppService {
       };
     }
   }
+
+  async sendPurchaseOrderNotice(params: {
+    to: string;
+    contactName: string;
+    poNumber: string;
+    title: string;
+    customMessage?: string;
+  }): Promise<Msg91WhatsAppResult> {
+    if (!this.isConfigured()) {
+      logger.info({ to: params.to, poNumber: params.poNumber }, 'MSG91 WhatsApp is not configured in environment. Falling back to manual.');
+      return {
+        success: false,
+        status: 'unconfigured',
+        error: 'MSG91 credentials (MSG91_AUTH_KEY, MSG91_WHATSAPP_INTEGRATED_NUMBER) are not configured.',
+      };
+    }
+
+    const cleanPhone = params.to.replace(/\D/g, '');
+    const summaryText = params.customMessage?.trim()
+      ? `${params.poNumber} (${params.title}) — ${params.customMessage.trim()}`
+      : `${params.poNumber} (${params.title})`;
+
+    try {
+      const payload = {
+        integrated_number: env.MSG91_WHATSAPP_INTEGRATED_NUMBER,
+        content_type: 'template',
+        payload: {
+          to: cleanPhone,
+          type: 'template',
+          template: {
+            name: env.MSG91_WHATSAPP_TEMPLATE_NAME,
+            language: {
+              code: 'en',
+              policy: 'deterministic',
+            },
+            components: [
+              {
+                type: 'body',
+                parameters: [
+                  {
+                    type: 'text',
+                    text: params.contactName,
+                  },
+                  {
+                    type: 'text',
+                    text: summaryText,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      };
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+
+      const response = await fetch('https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/', {
+        method: 'POST',
+        headers: {
+          authkey: env.MSG91_AUTH_KEY!,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+      const responseData = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+
+      if (!response.ok) {
+        logger.error({ status: response.status, data: responseData }, 'MSG91 PO WhatsApp API returned error status.');
+        return {
+          success: false,
+          status: 'failed',
+          error: String(responseData.message || responseData.error || `HTTP ${response.status}`),
+        };
+      }
+
+      const messageId = String(responseData.message_id || responseData.request_id || responseData.id || 'sent');
+      logger.info({ to: cleanPhone, poNumber: params.poNumber, messageId }, 'MSG91 PO WhatsApp notice sent successfully.');
+      return {
+        success: true,
+        status: 'sent',
+        messageId,
+      };
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Network error communicating with MSG91';
+      logger.error({ err, to: cleanPhone, poNumber: params.poNumber }, 'Failed to deliver PO WhatsApp message via MSG91.');
+      return {
+        success: false,
+        status: 'failed',
+        error: errorMessage,
+      };
+    }
+  }
 }
 
 export const msg91WhatsAppService = new Msg91WhatsAppService();

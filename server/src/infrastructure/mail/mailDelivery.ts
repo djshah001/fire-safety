@@ -5,10 +5,17 @@ import { env } from '../../config/env.js';
 
 export type MailDeliveryMode = 'disabled' | 'local-file' | 'smtp';
 
+export type MailAttachment = {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+};
+
 export type MailMessage = {
   to: string;
   subject: string;
   text: string;
+  attachments?: MailAttachment[];
 };
 
 export type SmtpSendResult = {
@@ -61,9 +68,15 @@ export async function deliverMail(jobId: string, message: MailMessage, options: 
     const mailboxRoot = resolve(options.localMailboxRoot ?? env.LOCAL_MAILBOX_ROOT);
     await mkdir(mailboxRoot, { recursive: true });
     try {
+      const { attachments, ...rest } = message;
       await writeFile(resolve(mailboxRoot, `${jobId}.json`), JSON.stringify({
         localOnly: true,
-        ...message,
+        ...rest,
+        attachments: attachments?.map((a) => ({
+          filename: a.filename,
+          contentType: a.contentType ?? 'application/octet-stream',
+          byteLength: a.content.byteLength,
+        })),
         createdAt: new Date().toISOString(),
       }, null, 2), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
     } catch (error) {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { Decimal } from 'decimal.js';
 
 export const createWarehouseSchema = z.object({
   code: z.string().trim().min(2).max(40),
@@ -38,6 +39,7 @@ export const createStockTransferSchema = z.object({
   lines: z.array(
     z.object({
       itemId: z.string().uuid(),
+      brandOfferingId: z.string().uuid().optional().nullable(),
       dispatchedQuantity: z.string().regex(/^\d+(\.\d{1,4})?$/, 'Must be a positive decimal quantity'),
       notes: z.string().trim().max(1000).optional(),
     })
@@ -59,6 +61,7 @@ export const createStockReservationSchema = z.object({
   warehouseId: z.string().uuid(),
   boqLineId: z.string().uuid().optional().nullable(),
   itemId: z.string().uuid(),
+  brandOfferingId: z.string().uuid().optional().nullable(),
   quantityReserved: z.string().regex(/^\d+(\.\d{1,4})?$/, 'Must be a positive decimal quantity'),
   notes: z.string().trim().max(1000).optional(),
 });
@@ -79,5 +82,79 @@ export const createStockDocumentSchema = z.object({
       notes: z.string().trim().max(1000).optional(),
     })
   ).min(1, 'At least one line is required'),
+});
+export const upsertThresholdSchema = z.object({
+  warehouseId: z.string().uuid(),
+  itemId: z.string().uuid(),
+  brandOfferingId: z.string().uuid().optional().nullable(),
+  minStock: z.string().regex(/^\d+(\.\d{1,4})?$/, 'Enter a non-negative decimal quantity'),
+  maxStock: z.string().regex(/^\d+(\.\d{1,4})?$/, 'Enter a non-negative decimal quantity'),
+}).superRefine((value, ctx) => {
+  if (new Decimal(value.maxStock).lt(new Decimal(value.minStock))) {
+    ctx.addIssue({ code: 'custom', path: ['maxStock'], message: 'Max stock must be greater than or equal to min stock.' });
+  }
+});
+
+export const createReplenishmentRequestSchema = z.object({
+  warehouseId: z.string().uuid(),
+  itemId: z.string().uuid(),
+  brandOfferingId: z.string().uuid().optional().nullable(),
+  requestedQty: z.string().regex(/^\d+(\.\d{1,4})?$/, 'Enter a positive decimal quantity'),
+  notes: z.string().trim().max(2000).optional(),
+}).refine((value) => new Decimal(value.requestedQty).gt(0), 'Requested quantity must be greater than zero');
+
+export const createMirSchema = z.object({
+  projectId: z.string().uuid(),
+  quotationRevisionId: z.string().uuid(),
+  warehouseId: z.string().uuid(),
+  lines: z.array(z.object({
+    quotationLineId: z.string().uuid(),
+    itemId: z.string().uuid(),
+    brandOfferingId: z.string().uuid().optional().nullable(),
+    unitId: z.string().uuid(),
+    requestedQty: z.string().regex(/^\d+(\.\d{1,4})?$/, 'Enter a positive decimal quantity'),
+  })).min(1).max(200),
+  notes: z.string().trim().max(2000).optional(),
+});
+
+export const dispatchMirSchema = z.object({
+  lines: z.array(z.object({
+    mirLineId: z.string().uuid(),
+    dispatchedQty: z.string().regex(/^\d{1,14}(?:\.\d{1,4})?$/, 'Enter a positive decimal quantity')
+      .refine((value) => new Decimal(value).gt(0), 'Dispatch quantity must be greater than zero.'),
+  })).min(1).max(200),
+  transporterName: z.string().trim().max(160).optional(),
+  vehicleNumber: z.string().trim().max(50).optional(),
+  receiverName: z.string().trim().max(160).optional(),
+});
+
+export const verifyPodSchema = z.object({
+  rowVersion: z.number().int().positive(),
+  verificationNotes: z.string().trim().max(2000).optional(),
+  lines: z.array(z.object({
+    dcLineId: z.string().uuid(),
+    verifiedReceivedQty: z.string().regex(/^\d+(\.\d{1,4})?$/, 'Enter a non-negative decimal quantity'),
+    damagedOrShortQty: z.string().regex(/^\d+(\.\d{1,4})?$/, 'Enter a non-negative decimal quantity'),
+    lineRemarks: z.string().trim().max(1000).optional(),
+  })).min(1).max(200),
+});
+
+export const resolveDiscrepancySchema = z.object({
+  rowVersion: z.number().int().positive(),
+  resolution: z.enum(['return_to_store', 'write_off_transit_loss', 'picking_error_restock']),
+  resolutionNotes: z.string().trim().min(3).max(2000),
+});
+
+export const createSiteReturnSchema = z.object({
+  projectId: z.string().uuid(),
+  warehouseId: z.string().uuid(),
+  reason: z.string().trim().min(3).max(1000),
+  notes: z.string().trim().max(2000).optional(),
+  lines: z.array(z.object({
+    itemId: z.string().uuid(),
+    brandOfferingId: z.string().uuid().optional().nullable(),
+    quantity: z.string().regex(/^\d+(\.\d{1,4})?$/, 'Enter a positive decimal quantity'),
+    conditionNotes: z.string().trim().max(1000).optional(),
+  })).min(1).max(200),
 });
 

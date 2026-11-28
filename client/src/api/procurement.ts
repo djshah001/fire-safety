@@ -46,16 +46,35 @@ export type VendorOffer = {
   status: 'submitted'; recordedByUserId: string; submittedAt: string; lines: VendorOfferLine[];
 };
 
+export type LineAward = {
+  id: string;
+  selectionDecisionId: string;
+  rfqLineId: string;
+  winningVendorId: string;
+  winningOfferId: string;
+  winningOfferLineId: string;
+  awardedQuantity: string;
+  selectionReason: string;
+  generatedPoId: string | null;
+  vendorName: string;
+  vendorCode: string;
+  poNumber: string | null;
+  createdAt: string;
+};
+
 export type ProcurementWorkspace = {
   requisition: ProcurementRequisition & { boqRevisionId: string; notes: string | null; createdAt: string; buyerName: string; purchaseManagerName: string };
   lines: DemandLine[];
   activeVendors: Array<{ id: string; code: string; name: string }>;
+  priceInquiries?: Array<{ id: string; inquiryCode: string; title: string; status: string; createdAt: string }>;
+  generatedPurchaseOrders?: Array<{ id: string; poNumber: string; vendorId: string; status: string }>;
   rfq: null | { id: string; rfqNumber: string; status: 'open' | 'selected' | 'cancelled'; responseDueDate: string; commercialTerms: string; rowVersion: number; createdAt: string };
   rfqLines: RfqLine[];
   invitedVendors: Array<{ id: string; code: string; name: string }>;
   offers: VendorOffer[];
   comparison: null | { id: string; status: 'open' | 'selected'; rowVersion: number; createdAt: string; updatedAt: string };
   selection: null | { id: string; selectedOfferId: string; selectionReason: string; singleSourceExceptionReason: string | null; selectedByUserId: string; selectedAt: string };
+  lineAwards: LineAward[];
   capabilities: { canManageRfq: boolean; canRecordOffer: boolean; canSelect: boolean };
 };
 
@@ -99,6 +118,39 @@ export async function recordVendorOffer(requisitionId: string, input: { vendorId
 
 export async function selectVendorOffer(requisitionId: string, input: { offerId: string; selectionReason: string; singleSourceExceptionReason?: string; expectedVersion: number }) {
   return (await apiClient.post<ApiEnvelope<{ selection: { id: string } }>>(`/procurement/requisitions/${requisitionId}/select`, input)).data.data.selection;
+}
+
+export async function convertInquiryOffers(requisitionId: string, input: { inquiryId: string; vendorIds?: string[] }) {
+  return (
+    await apiClient.post<
+      ApiEnvelope<{
+        imported: Array<{ vendorId: string; offerId: string; total: string }>;
+        skipped: Array<{ vendorId: string; reason: string }>;
+      }>
+    >(`/procurement/requisitions/${requisitionId}/offers/from-inquiry`, input)
+  ).data.data;
+}
+
+export async function selectSplitAwards(
+  requisitionId: string,
+  input: {
+    awards: Array<{
+      rfqLineId: string;
+      winningOfferId: string;
+      winningOfferLineId: string;
+      selectionReason?: string;
+    }>;
+    selectionReason?: string;
+    singleSourceExceptionReason?: string;
+    expectedVersion: number;
+  },
+) {
+  return (
+    await apiClient.post<ApiEnvelope<{ decision: { id: string }; lineAwards: LineAward[] }>>(
+      `/procurement/requisitions/${requisitionId}/select-split`,
+      input,
+    )
+  ).data.data;
 }
 
 export type SubstitutionReviewQueueItem = {

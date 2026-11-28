@@ -696,6 +696,7 @@ export const vendorPriceInquiries = pgTable(
     items: jsonb("items").notNull().default([]),
     status: varchar("status", { length: 20 }).notNull().default("draft"),
     responseDueDate: date("response_due_date"),
+    requisitionId: uuid("requisition_id"),
     createdByUserId: uuid("created_by_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
@@ -709,6 +710,7 @@ export const vendorPriceInquiries = pgTable(
   (table) => [
     uniqueIndex("vpi_company_code_uidx").on(table.companyId, table.inquiryCode),
     index("vpi_company_status_idx").on(table.companyId, table.status),
+    index("vpi_requisition_idx").on(table.requisitionId),
   ],
 );
 

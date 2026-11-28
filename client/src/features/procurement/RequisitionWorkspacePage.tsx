@@ -12,11 +12,15 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getApiErrorMessage } from "@/api/client";
-import { createPurchaseOrderFromRequisition } from "@/api/purchaseOrders";
+import {
+  createPurchaseOrderFromRequisition,
+  createPurchaseOrdersFromAwards,
+} from "@/api/purchaseOrders";
 import {
   createProcurementRfq,
   procurementWorkspaceQuery,
   recordVendorOffer,
+  selectSplitAwards,
   selectVendorOffer,
   type Equivalence,
   type ProcurementWorkspace,
@@ -88,6 +92,32 @@ export function RequisitionWorkspacePage() {
     null,
   );
   const [generatePoOpen, setGeneratePoOpen] = useState(false);
+  const [selectionMode, setSelectionMode] = useState<"single" | "split">("single");
+  const [splitAwardsMap, setSplitAwardsMap] = useState<
+    Record<string, { offerId: string; offerLineId: string; reason: string }>
+  >({});
+
+  const createSplitPosMutation = useMutation({
+    mutationFn: async (vendorIdToOrder?: string) => {
+      if (!requisitionId) throw new Error("Requisition ID missing");
+      return createPurchaseOrdersFromAwards({
+        requisitionId,
+        vendorId: vendorIdToOrder,
+      });
+    },
+    onSuccess: async (pos) => {
+      await invalidate();
+      if (pos.length === 1) {
+        toast.success(`Purchase Order ${pos[0]!.poNumber} created for ${pos[0]!.vendorName}.`);
+        navigate(`/procurement/purchase-orders/${pos[0]!.id}`);
+      } else {
+        toast.success(`Generated ${pos.length} Purchase Orders across awarded vendors.`);
+      }
+    },
+    onError: (error) => {
+      toast.error(getApiErrorMessage(error));
+    },
+  });
 
   const createPoMutation = useMutation({
     mutationFn: async (form: FormData) => {
@@ -177,6 +207,28 @@ export function RequisitionWorkspacePage() {
           }),
         });
       if (!data.comparison) throw new Error("Comparison unavailable.");
+      if (selectionMode === "split") {
+        const awards = data.rfqLines.map((rfqLine) => {
+          const picked = splitAwardsMap[rfqLine.id];
+          if (!picked?.offerId || !picked?.offerLineId) {
+            throw new Error(`Choose a winning vendor for line #${rfqLine.lineNumber}.`);
+          }
+          return {
+            rfqLineId: rfqLine.id,
+            winningOfferId: picked.offerId,
+            winningOfferLineId: picked.offerLineId,
+            selectionReason: picked.reason?.trim() || undefined,
+          };
+        });
+        return selectSplitAwards(requisitionId, {
+          awards,
+          selectionReason: String(form.get("selectionReason") ?? "").trim() || undefined,
+          singleSourceExceptionReason:
+            String(form.get("singleSourceExceptionReason") ?? "").trim() ||
+            undefined,
+          expectedVersion: data.comparison.rowVersion,
+        });
+      }
       return selectVendorOffer(requisitionId, {
         offerId,
         selectionReason: String(form.get("selectionReason")),
@@ -239,6 +291,7 @@ export function RequisitionWorkspacePage() {
     offers,
     comparison,
     selection,
+    lineAwards,
     capabilities,
   } = data;
   const selectedOffer = offers.find(
@@ -304,7 +357,28 @@ export function RequisitionWorkspacePage() {
           {canSelect && (
             <Button
               onClick={() => {
+                setSelectionMode("single");
                 setOfferId(offers[0]!.id);
+                const defaults: Record<
+                  string,
+                  { offerId: string; offerLineId: string; reason: string }
+                > = {};
+                data.rfqLines.forEach((rl) => {
+                  const candidateOffer = offers.find((o) =>
+                    o.lines.some((l) => l.rfqLineId === rl.id),
+                  );
+                  const candidateLine = candidateOffer?.lines.find(
+                    (l) => l.rfqLineId === rl.id,
+                  );
+                  if (candidateOffer && candidateLine) {
+                    defaults[rl.id] = {
+                      offerId: candidateOffer.id,
+                      offerLineId: candidateLine.id,
+                      reason: "",
+                    };
+                  }
+                });
+                setSplitAwardsMap(defaults);
                 setModal("select");
               }}
             >
@@ -335,13 +409,28 @@ export function RequisitionWorkspacePage() {
         <CircleAlert />
         <AlertTitle>Controlled sourcing workspace</AlertTitle>
         <AlertDescription>
-          This workspace records an internal RFQ and normalized offer evidence;
-          it does not send anything to vendors. Quotation acceptance is not a
-          procurement gate. Every deviation or unknown equivalence needs an
-          immutable approval from the project’s assigned design head before that
-          offer can be selected.
+          Record internal RFQs, import WhatsApp price inquiry responses, and award whole offers or line-level splits. Technical substitution reviews on alternative makes are advisory and do not block supplier selection.
         </AlertDescription>
       </Alert>
+      {data.priceInquiries && data.priceInquiries.length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 px-4 py-2.5 text-xs">
+          <span className="font-semibold text-foreground">Linked Price Inquiries:</span>
+          {data.priceInquiries.map((inq) => (
+            <Button
+              key={inq.id}
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1.5 text-xs"
+              onClick={() => setComparisonInquiryId(inq.id)}
+            >
+              <MessageSquare className="h-3.5 w-3.5" />
+              <span className="font-mono">{inq.inquiryCode}</span>
+              <span>— {inq.title}</span>
+            </Button>
+          ))}
+        </div>
+      )}
       <div className="mt-8 grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <section className="space-y-6">
           <Card>
@@ -632,7 +721,124 @@ export function RequisitionWorkspacePage() {
               <CardTitle className="text-base">Selection decision</CardTitle>
             </CardHeader>
             <CardContent>
-              {selection && selectedOffer ? (
+              {lineAwards && lineAwards.length > 0 ? (
+                (() => {
+                  const vendorGroups = Array.from(
+                    lineAwards
+                      .reduce((acc, award) => {
+                        const existing = acc.get(award.winningVendorId);
+                        if (existing) {
+                          existing.awards.push(award);
+                        } else {
+                          acc.set(award.winningVendorId, {
+                            vendorId: award.winningVendorId,
+                            vendorName: award.vendorName,
+                            vendorCode: award.vendorCode,
+                            generatedPoId: award.generatedPoId,
+                            poNumber: award.poNumber,
+                            awards: [award],
+                          });
+                        }
+                        return acc;
+                      }, new Map<
+                        string,
+                        {
+                          vendorId: string;
+                          vendorName: string;
+                          vendorCode: string;
+                          generatedPoId: string | null;
+                          poNumber: string | null;
+                          awards: typeof lineAwards;
+                        }
+                      >())
+                      .values(),
+                  );
+                  const pendingVendors = vendorGroups.filter(
+                    (g) => !g.generatedPoId,
+                  );
+
+                  return (
+                    <div className="space-y-3">
+                      <Badge>
+                        {vendorGroups.length > 1
+                          ? `Split Award (${vendorGroups.length} Vendors)`
+                          : "Line Award Selected"}
+                      </Badge>
+                      {selection?.selectionReason && (
+                        <TextBlock
+                          label="Reason"
+                          value={selection.selectionReason}
+                        />
+                      )}
+                      {selection?.singleSourceExceptionReason && (
+                        <TextBlock
+                          label="Single-source exception"
+                          value={selection.singleSourceExceptionReason}
+                        />
+                      )}
+                      <div className="space-y-2 pt-1">
+                        {vendorGroups.map((group) => (
+                          <div
+                            key={group.vendorId}
+                            className="rounded-lg border p-2.5 text-xs space-y-2"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-semibold text-sm">
+                                {group.vendorName}
+                              </span>
+                              <Badge variant="outline">
+                                {group.awards.length} line
+                                {group.awards.length === 1 ? "" : "s"}
+                              </Badge>
+                            </div>
+                            {group.generatedPoId && group.poNumber ? (
+                              <Button
+                                asChild
+                                size="sm"
+                                variant="outline"
+                                className="w-full"
+                              >
+                                <Link
+                                  to={`/procurement/purchase-orders/${group.generatedPoId}`}
+                                >
+                                  <FileCheck2 className="h-3.5 w-3.5 mr-1.5" />
+                                  Open PO {group.poNumber}
+                                </Link>
+                              </Button>
+                            ) : (
+                              <Button
+                                type="button"
+                                size="sm"
+                                className="w-full"
+                                disabled={createSplitPosMutation.isPending}
+                                onClick={() =>
+                                  createSplitPosMutation.mutate(group.vendorId)
+                                }
+                              >
+                                <FileCheck2 className="h-3.5 w-3.5 mr-1.5" />
+                                Generate PO for {group.vendorName}
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      {pendingVendors.length > 1 && (
+                        <Button
+                          type="button"
+                          className="w-full"
+                          disabled={createSplitPosMutation.isPending}
+                          onClick={() => createSplitPosMutation.mutate(undefined)}
+                        >
+                          <FileCheck2 className="h-4 w-4 mr-1.5" />
+                          {createSplitPosMutation.isPending
+                            ? "Generating POs..."
+                            : `Generate All ${pendingVendors.length} POs`}
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })()
+              ) : selection && selectedOffer ? (
                 <div className="space-y-3">
                   <Badge>Selected</Badge>
                   <p className="font-semibold">{selectedOffer.vendorName}</p>
@@ -643,15 +849,34 @@ export function RequisitionWorkspacePage() {
                       value={selection.singleSourceExceptionReason}
                     />
                   )}
-                  <div className="pt-2">
-                    <Button
-                      className="w-full"
-                      onClick={() => setGeneratePoOpen(true)}
-                    >
-                      <FileCheck2 className="h-4 w-4 mr-1.5" />
-                      Generate Purchase Order
-                    </Button>
-                  </div>
+                  {data.generatedPurchaseOrders &&
+                  data.generatedPurchaseOrders.length > 0 ? (
+                    <div className="space-y-2 pt-2">
+                      {data.generatedPurchaseOrders.map((po) => (
+                        <Button
+                          key={po.id}
+                          asChild
+                          variant="outline"
+                          className="w-full"
+                        >
+                          <Link to={`/procurement/purchase-orders/${po.id}`}>
+                            <FileCheck2 className="h-4 w-4 mr-1.5" />
+                            Open PO {po.poNumber}
+                          </Link>
+                        </Button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="pt-2">
+                      <Button
+                        className="w-full"
+                        onClick={() => setGeneratePoOpen(true)}
+                      >
+                        <FileCheck2 className="h-4 w-4 mr-1.5" />
+                        Generate Purchase Order
+                      </Button>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
@@ -672,6 +897,10 @@ export function RequisitionWorkspacePage() {
         setVendorId={setVendorId}
         offerId={offerId}
         setOfferId={setOfferId}
+        selectionMode={selectionMode}
+        setSelectionMode={setSelectionMode}
+        splitAwardsMap={splitAwardsMap}
+        setSplitAwardsMap={setSplitAwardsMap}
         equivalence={equivalence}
         setEquivalence={setEquivalence}
         selectedBrands={selectedBrands}
@@ -686,6 +915,7 @@ export function RequisitionWorkspacePage() {
       <PriceInquirySheet
         open={priceInquiryOpen}
         onOpenChange={setPriceInquiryOpen}
+        requisitionId={requisitionId}
         initialItems={lines.map((l) => {
           const matchingRfqLine = data.rfqLines?.find(
             (rl) => rl.requisitionLineId === l.id || rl.itemId === l.itemId,
@@ -712,6 +942,9 @@ export function RequisitionWorkspacePage() {
         onOpenChange={(open) => {
           if (!open) setComparisonInquiryId(null);
         }}
+        requisitionId={requisitionId}
+        rfqStatus={rfq?.status}
+        onConverted={invalidate}
       />
       <Dialog open={generatePoOpen} onOpenChange={setGeneratePoOpen}>
         <DialogContent className="max-w-xl">
@@ -834,6 +1067,10 @@ function ActionDialog({
   setVendorId,
   offerId,
   setOfferId,
+  selectionMode,
+  setSelectionMode,
+  splitAwardsMap,
+  setSplitAwardsMap,
   equivalence,
   setEquivalence,
   selectedBrands,
@@ -853,6 +1090,17 @@ function ActionDialog({
   setVendorId: (id: string) => void;
   offerId: string;
   setOfferId: (id: string) => void;
+  selectionMode: "single" | "split";
+  setSelectionMode: (mode: "single" | "split") => void;
+  splitAwardsMap: Record<
+    string,
+    { offerId: string; offerLineId: string; reason: string }
+  >;
+  setSplitAwardsMap: React.Dispatch<
+    React.SetStateAction<
+      Record<string, { offerId: string; offerLineId: string; reason: string }>
+    >
+  >;
   equivalence: Record<string, Equivalence>;
   setEquivalence: React.Dispatch<
     React.SetStateAction<Record<string, Equivalence>>
@@ -1114,27 +1362,165 @@ function ActionDialog({
             )}
             {modal === "select" && (
               <>
-                <SelectField
-                  label="Submitted offer"
-                  value={offerId}
-                  onChange={setOfferId}
-                  items={data.offers.map((offer) => ({
-                    value: offer.id,
-                    label: `${offer.vendorName} · ${amount(offer.currency, offer.total)}`,
-                  }))}
-                />
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 p-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={selectionMode === "single" ? "default" : "outline"}
+                    onClick={() => setSelectionMode("single")}
+                  >
+                    Award Whole Offer (1 Vendor)
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={selectionMode === "split" ? "default" : "outline"}
+                    onClick={() => setSelectionMode("split")}
+                  >
+                    Split Award by Line Item
+                  </Button>
+                </div>
+                {selectionMode === "single" ? (
+                  <SelectField
+                    label="Submitted offer"
+                    value={offerId}
+                    onChange={setOfferId}
+                    items={data.offers.map((offer) => ({
+                      value: offer.id,
+                      label: `${offer.vendorName} · ${amount(offer.currency, offer.total)}`,
+                    }))}
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    <SelectField
+                      label="Quick fill: award all lines to offer"
+                      value=""
+                      onChange={(chosenOfferId) => {
+                        const pickedOffer = data.offers.find(
+                          (o) => o.id === chosenOfferId,
+                        );
+                        if (!pickedOffer) return;
+                        setSplitAwardsMap((prev) => {
+                          const next = { ...prev };
+                          data.rfqLines.forEach((rl) => {
+                            const match = pickedOffer.lines.find(
+                              (l) => l.rfqLineId === rl.id,
+                            );
+                            if (match) {
+                              next[rl.id] = {
+                                offerId: pickedOffer.id,
+                                offerLineId: match.id,
+                                reason: prev[rl.id]?.reason ?? "",
+                              };
+                            }
+                          });
+                          return next;
+                        });
+                      }}
+                      items={data.offers.map((offer) => ({
+                        value: offer.id,
+                        label: `Fill with ${offer.vendorName} (${offer.lines.length} lines)`,
+                      }))}
+                    />
+                    <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                      {data.rfqLines.map((rl) => {
+                        const options = data.offers
+                          .map((o) => {
+                            const ol = o.lines.find((l) => l.rfqLineId === rl.id);
+                            return ol ? { offer: o, offerLine: ol } : null;
+                          })
+                          .filter(
+                            (
+                              x,
+                            ): x is {
+                              offer: ProcurementWorkspace["offers"][number];
+                              offerLine: ProcurementWorkspace["offers"][number]["lines"][number];
+                            } => Boolean(x),
+                          );
+                        const selected = splitAwardsMap[rl.id];
+                        return (
+                          <div
+                            key={rl.id}
+                            className="rounded-lg border p-3 space-y-2"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                              <span className="font-semibold">
+                                #{rl.lineNumber} · {rl.itemNameSnapshot}
+                              </span>
+                              <span className="text-muted-foreground font-mono">
+                                {rl.quantity} {rl.unitSymbolSnapshot}
+                              </span>
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <SelectField
+                                label="Winning Vendor Quote"
+                                value={selected?.offerLineId ?? ""}
+                                onChange={(offerLineId) => {
+                                  const match = options.find(
+                                    (opt) => opt.offerLine.id === offerLineId,
+                                  );
+                                  if (!match) return;
+                                  setSplitAwardsMap((prev) => ({
+                                    ...prev,
+                                    [rl.id]: {
+                                      offerId: match.offer.id,
+                                      offerLineId: match.offerLine.id,
+                                      reason: prev[rl.id]?.reason ?? "",
+                                    },
+                                  }));
+                                }}
+                                items={options.map(({ offer, offerLine }) => ({
+                                  value: offerLine.id,
+                                  label: `${offer.vendorName} · ${amount(offer.currency, offerLine.unitRate)} (${offerLine.brandOffered})`,
+                                }))}
+                              />
+                              <div className="space-y-1.5">
+                                <Label className="text-xs">
+                                  Line Reason (Optional)
+                                </Label>
+                                <Input
+                                  placeholder="Overrides overall selection reason"
+                                  value={selected?.reason ?? ""}
+                                  onChange={(e) =>
+                                    setSplitAwardsMap((prev) => ({
+                                      ...prev,
+                                      [rl.id]: {
+                                        offerId: prev[rl.id]?.offerId ?? "",
+                                        offerLineId:
+                                          prev[rl.id]?.offerLineId ?? "",
+                                        reason: e.target.value,
+                                      },
+                                    }))
+                                  }
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 <TextField
                   label="Selection reason"
                   name="selectionReason"
                   required
                 />
-                {data.offers.length < 2 && (
+                {(data.offers.length < 2 ||
+                  (selectionMode === "split" &&
+                    data.rfqLines.some(
+                      (rl) =>
+                        data.offers.filter((o) =>
+                          o.lines.some((l) => l.rfqLineId === rl.id),
+                        ).length < 2,
+                    ))) && (
                   <>
                     <Alert variant="destructive">
                       <AlertTitle>Single-source exception required</AlertTitle>
                       <AlertDescription>
-                        The default is at least two submitted vendor offers.
-                        Explain why selection may proceed with fewer.
+                        The default is at least two submitted vendor offers per
+                        awarded scope. Explain why selection may proceed with
+                        fewer.
                       </AlertDescription>
                     </Alert>
                     <TextField
@@ -1162,7 +1548,12 @@ function ActionDialog({
                 busy ||
                 (modal === "rfq" && vendorIds.length === 0) ||
                 (modal === "offer" && !vendorId) ||
-                (modal === "select" && !offerId)
+                (modal === "select" &&
+                  selectionMode === "single" &&
+                  !offerId) ||
+                (modal === "select" &&
+                  selectionMode === "split" &&
+                  data.rfqLines.some((rl) => !splitAwardsMap[rl.id]?.offerLineId))
               }
             >
               {modal === "select" ? "Select supplier" : "Save"}

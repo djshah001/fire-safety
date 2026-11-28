@@ -1172,6 +1172,12 @@ export const quotationLines = pgTable(
       sql`(${table.brandId} is null and ${table.brandNameSnapshot} is null) or (${table.brandId} is not null and ${table.brandNameSnapshot} is not null)`,
     ),
     check("quotation_lines_row_version_positive", sql`${table.rowVersion} > 0`),
+    check("quotation_lines_sort_positive", sql`${table.sortOrder} > 0`),
+    index("quotation_lines_company_rev_sort_idx").on(
+      table.companyId,
+      table.quotationRevisionId,
+      table.sortOrder,
+    ),
   ],
 );
 

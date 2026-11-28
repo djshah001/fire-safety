@@ -25,6 +25,7 @@ export type PriceInquiry = {
   description?: string | null;
   items: InquiryItem[];
   status: string;
+  requisitionId?: string | null;
   responseDueDate?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -85,7 +86,7 @@ export type PriceInquiryDetail = {
   }>;
 };
 
-export const priceInquiriesQuery = (params: { page?: number; pageSize?: number; status?: string; search?: string }) =>
+export const priceInquiriesQuery = (params: { page?: number; pageSize?: number; status?: string; search?: string; requisitionId?: string }) =>
   queryOptions({
     queryKey: ['price-inquiries', params] as const,
     queryFn: async ({ signal }) => {
@@ -94,6 +95,7 @@ export const priceInquiriesQuery = (params: { page?: number; pageSize?: number; 
       if (params.pageSize) sp.set('pageSize', String(params.pageSize));
       if (params.status) sp.set('status', params.status);
       if (params.search) sp.set('search', params.search);
+      if (params.requisitionId) sp.set('requisitionId', params.requisitionId);
       const res = await apiClient.get<ApiEnvelope<{
         items: PriceInquiry[];
         total: number;
@@ -147,6 +149,7 @@ export function useCreatePriceInquiry() {
       description?: string;
       items: InquiryItem[];
       responseDueDate?: string;
+      requisitionId?: string;
     }) => {
       const res = await apiClient.post<ApiEnvelope<{ inquiry: PriceInquiry }>>('/procurement/price-inquiries', data);
       return res.data.data.inquiry;

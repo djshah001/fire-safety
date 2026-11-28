@@ -83,6 +83,35 @@ export const selectVendorOfferSchema = z.object({
   expectedVersion: version,
 });
 
+export const convertInquiryOffersSchema = z.object({
+  inquiryId: uuid,
+  vendorIds: z.array(uuid).max(50).optional(),
+});
+
+export const selectSplitAwardSchema = z.object({
+  awards: z
+    .array(
+      z.object({
+        rfqLineId: uuid,
+        winningOfferId: uuid,
+        winningOfferLineId: uuid,
+        selectionReason: z.string().trim().min(3).max(2_000).optional(),
+      }),
+    )
+    .min(1)
+    .max(200),
+  selectionReason: z.string().trim().min(3).max(2_000).optional(),
+  singleSourceExceptionReason: z.string().trim().min(3).max(2_000).optional(),
+  expectedVersion: version,
+}).superRefine((value, context) => {
+  if (new Set(value.awards.map((award) => award.rfqLineId)).size !== value.awards.length) {
+    context.addIssue({ code: 'custom', path: ['awards'], message: 'Each RFQ line can be awarded only once.' });
+  }
+  if (new Set(value.awards.map((award) => award.winningOfferLineId)).size !== value.awards.length) {
+    context.addIssue({ code: 'custom', path: ['awards'], message: 'Each vendor offer line can win only once.' });
+  }
+});
+
 export const substitutionReviewListQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
   status: z.enum(['pending', 'approved', 'rejected']).optional(),
@@ -97,4 +126,36 @@ export const substitutionReviewParamsSchema = z.object({ requisitionId: uuid, of
 export const substitutionDecisionSchema = z.object({
   decision: z.enum(['approved', 'rejected']),
   reason: z.string().trim().min(3).max(2_000),
+});
+export const fulfillmentParamsSchema = z.object({ quotationRevisionId: uuid });
+export const fulfillmentQuerySchema = z.object({ warehouseId: uuid });
+export const fromFulfillmentPlanSchema = z.object({
+  quotationRevisionId: uuid,
+  projectId: uuid,
+  purchaseManagerUserId: uuid.optional(),
+  title: z.string().trim().min(2).max(200).optional(),
+  requiredBy: date.optional(),
+  deliveryLocation: z.string().trim().min(3).max(500).optional(),
+  notes: z.string().trim().max(2_000).optional(),
+  lines: z.array(z.object({
+    quotationLineId: uuid,
+    projectAllocationQty: z.string().regex(/^\d+(?:\.\d{1,4})?$/),
+    storeReplenishmentQty: z.string().regex(/^\d+(?:\.\d{1,4})?$/),
+    destinationType: z.enum(['warehouse', 'direct_to_site']),
+  })).min(1).max(200),
+}).superRefine((value, ctx) => {
+  for (const line of value.lines) {
+    const project = new Decimal(line.projectAllocationQty);
+    const store = new Decimal(line.storeReplenishmentQty);
+    if (project.add(store).lte(0)) ctx.addIssue({ code: 'custom', path: ['lines'], message: 'At least one allocation quantity must be greater than zero.' });
+  }
+});
+
+export const fromSrrSchema = z.object({
+  srrIds: z.array(uuid).min(1).max(100),
+  purchaseManagerUserId: uuid.optional(),
+  title: z.string().trim().min(2).max(200).optional(),
+  requiredBy: date.optional(),
+  deliveryLocation: z.string().trim().min(3).max(500).optional(),
+  notes: z.string().trim().max(2_000).optional(),
 });

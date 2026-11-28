@@ -45,6 +45,7 @@ const VALID_STATUSES: PurchaseOrderStatus[] = [
   "issued",
   "partially_delivered",
   "delivered",
+  "short_closed",
   "closed",
   "cancelled",
 ];

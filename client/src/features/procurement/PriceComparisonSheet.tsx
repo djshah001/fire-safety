@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ArrowRightCircle,
   Loader2,
   TrendingUp,
   TrendingDown,
@@ -14,6 +15,8 @@ import {
   UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
+import { getApiErrorMessage } from "@/api/client";
+import { convertInquiryOffers } from "@/api/procurement";
 import {
   Sheet,
   SheetContent,
@@ -61,6 +64,9 @@ interface Props {
   inquiryId: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  requisitionId?: string;
+  rfqStatus?: string | null;
+  onConverted?: () => void;
 }
 
 function formatCurrency(
@@ -120,7 +126,15 @@ function DeltaBadge({
   );
 }
 
-export function PriceComparisonSheet({ inquiryId, open, onOpenChange }: Props) {
+export function PriceComparisonSheet({
+  inquiryId,
+  open,
+  onOpenChange,
+  requisitionId,
+  rfqStatus,
+  onConverted,
+}: Props) {
+  const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
     ...priceInquiryDetailQuery(inquiryId ?? ""),
     enabled: open && Boolean(inquiryId),
@@ -130,6 +144,36 @@ export function PriceComparisonSheet({ inquiryId, open, onOpenChange }: Props) {
   const responses = data?.responses ?? [];
   const priceListData = data?.priceListData ?? [];
   const inquiryItems = (data?.inquiry?.items as InquiryItem[] | undefined) ?? [];
+  const respondedCount = invitations.filter(
+    (i) => i.invitation?.status === "responded",
+  ).length;
+
+  const convertMutation = useMutation({
+    mutationFn: async () => {
+      if (!requisitionId || !inquiryId) {
+        throw new Error("Requisition link required to convert offers.");
+      }
+      return convertInquiryOffers(requisitionId, { inquiryId });
+    },
+    onSuccess: (res) => {
+      if (res.imported.length > 0) {
+        toast.success(
+          `Converted ${res.imported.length} vendor response(s) into formal RFQ offers.`,
+        );
+      } else {
+        toast.info(
+          res.skipped.length > 0
+            ? `No new offers converted (${res.skipped.map((s) => s.reason.replaceAll("_", " ")).join(", ")}).`
+            : "No eligible vendor responses found to convert.",
+        );
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["procurement", "requisitions", requisitionId],
+      });
+      onConverted?.();
+    },
+    onError: (err) => toast.error(getApiErrorMessage(err)),
+  });
 
   const [showInviteCard, setShowInviteCard] = useState(false);
   const [selectedVendorId, setSelectedVendorId] = useState("");
@@ -621,19 +665,30 @@ export function PriceComparisonSheet({ inquiryId, open, onOpenChange }: Props) {
           <div className="text-xs text-muted-foreground">
             {data?.inquiry && (
               <span>
-                {data.inquiry.inquiryCode} •{" "}
-                {
-                  invitations.filter(
-                    (i) => i.invitation?.status === "responded",
-                  ).length
-                }{" "}
-                of {invitations.length} vendor(s) responded
+                {data.inquiry.inquiryCode} • {respondedCount} of{" "}
+                {invitations.length} vendor(s) responded
               </span>
             )}
           </div>
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
+          <div className="flex items-center gap-2">
+            {requisitionId && rfqStatus === "open" && respondedCount > 0 && (
+              <Button
+                size="sm"
+                onClick={() => convertMutation.mutate()}
+                disabled={convertMutation.isPending}
+              >
+                {convertMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                ) : (
+                  <ArrowRightCircle className="h-4 w-4 mr-1.5" />
+                )}
+                Convert Responses to Formal Offers
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+              Close
+            </Button>
+          </div>
         </SheetFooter>
       </SheetContent>
     </Sheet>

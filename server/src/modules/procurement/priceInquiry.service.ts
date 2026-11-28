@@ -12,6 +12,8 @@ import {
   vendorPriceLists,
   vendors,
 } from "../../infrastructure/database/schema/masters.js";
+import { procurementRequisitions } from "../../infrastructure/database/schema/procurement.js";
+import { administratorScope } from "../../core/security/administrator.js";
 import { msg91WhatsAppService } from "../../infrastructure/notifications/msg91.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../core/logger/logger.js";
@@ -106,6 +108,30 @@ export class PriceInquiryService {
     input: CreatePriceInquiryInput,
     _requestId: string,
   ) {
+    if (input.requisitionId) {
+      const [requisition] = await db
+        .select({ id: procurementRequisitions.id })
+        .from(procurementRequisitions)
+        .where(
+          and(
+            eq(procurementRequisitions.companyId, principal.companyId),
+            eq(procurementRequisitions.id, input.requisitionId),
+            or(
+              administratorScope(principal.companyId, principal.userId),
+              eq(procurementRequisitions.buyerUserId, principal.userId),
+              eq(procurementRequisitions.purchaseManagerUserId, principal.userId),
+            )!,
+          ),
+        );
+      if (!requisition) {
+        throw new AppError(
+          "NOT_FOUND",
+          "Requisition not found or not in your scope.",
+          404,
+        );
+      }
+    }
+
     const code = await generateInquiryCode(principal.companyId);
     const [inquiry] = await db
       .insert(vendorPriceInquiries)
@@ -117,6 +143,7 @@ export class PriceInquiryService {
         items: input.items,
         status: "active",
         responseDueDate: input.responseDueDate,
+        requisitionId: input.requisitionId ?? null,
         createdByUserId: principal.userId,
       })
       .returning();
@@ -130,13 +157,14 @@ export class PriceInquiryService {
     principal: AuthenticatedPrincipal,
     query: PriceInquiryListQuery,
   ) {
-    const { page, pageSize, status, search } = query;
+    const { page, pageSize, status, search, requisitionId } = query;
     const offset = (page - 1) * pageSize;
 
     const conditions = [
       eq(vendorPriceInquiries.companyId, principal.companyId),
     ];
     if (status) conditions.push(eq(vendorPriceInquiries.status, status));
+    if (requisitionId) conditions.push(eq(vendorPriceInquiries.requisitionId, requisitionId));
     if (search) {
       conditions.push(
         or(

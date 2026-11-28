@@ -4,11 +4,15 @@ import { sendData } from '../../core/http/response.js';
 import { requireAuthentication, requireCsrf, requirePermission } from '../auth/auth.middleware.js';
 import { getPrincipal } from '../auth/auth.types.js';
 import {
+  convertInquiryOffersSchema,
   createRequisitionSchema,
   createRfqSchema,
   createVendorOfferSchema,
+  fulfillmentParamsSchema,
+  fulfillmentQuerySchema,
   requisitionListQuerySchema,
   requisitionParamsSchema,
+  selectSplitAwardSchema,
   selectVendorOfferSchema,
   substitutionDecisionSchema,
   substitutionReviewListQuerySchema,
@@ -19,6 +23,51 @@ import { procurementService } from './procurement.service.js';
 export function createProcurementRouter() {
   const router = Router();
   router.use(requireAuthentication);
+
+  router.get('/accepted-quotations', async (request, response) => {
+    sendData(request, response, {
+      quotations: await procurementService.listAcceptedQuotations(getPrincipal(request)),
+    });
+  });
+
+  router.get('/quotations/:quotationRevisionId/fulfillment-plan', async (request, response) => {
+    const { quotationRevisionId } = fulfillmentParamsSchema.parse(request.params);
+    const { warehouseId } = fulfillmentQuerySchema.parse(request.query);
+    const plan = await procurementService.getFulfillmentPlan(
+      getPrincipal(request),
+      quotationRevisionId,
+      warehouseId,
+    );
+    sendData(request, response, { plan });
+  });
+
+  router.post(
+    '/requisitions/from-fulfillment-plan',
+    requireCsrf,
+    requirePermission('procurement.requisition.create'),
+    async (request, response) => {
+      const result = await procurementService.createRequisitionFromFulfillmentPlan(
+        getPrincipal(request),
+        request.body,
+        getRequestId(request),
+      );
+      sendData(request, response, result, 201);
+    },
+  );
+
+  router.post(
+    '/requisitions/from-srr',
+    requireCsrf,
+    requirePermission('procurement.requisition.create'),
+    async (request, response) => {
+      const result = await procurementService.createRequisitionFromSrr(
+        getPrincipal(request),
+        request.body,
+        getRequestId(request),
+      );
+      sendData(request, response, result, 201);
+    },
+  );
 
   router.get('/requisitions', requirePermission('procurement.sourcing.read'), async (request, response) => {
     sendData(request, response, await procurementService.list(getPrincipal(request), requisitionListQuerySchema.parse(request.query)));
@@ -54,6 +103,24 @@ export function createProcurementRouter() {
     const { requisitionId } = requisitionParamsSchema.parse(request.params);
     const selection = await procurementService.selectOffer(getPrincipal(request), requisitionId, selectVendorOfferSchema.parse(request.body), getRequestId(request));
     sendData(request, response, { selection });
+  });
+
+  router.post('/requisitions/:requisitionId/select-split', requireCsrf, requirePermission('procurement.comparison.select'), async (request, response) => {
+    const { requisitionId } = requisitionParamsSchema.parse(request.params);
+    const result = await procurementService.selectSplit(getPrincipal(request), requisitionId, selectSplitAwardSchema.parse(request.body), getRequestId(request));
+    sendData(request, response, result);
+  });
+
+  router.post('/requisitions/:requisitionId/offers/from-inquiry', requireCsrf, requirePermission('procurement.offer.manage'), async (request, response) => {
+    const { requisitionId } = requisitionParamsSchema.parse(request.params);
+    const result = await procurementService.convertInquiryResponsesToOffers(getPrincipal(request), requisitionId, convertInquiryOffersSchema.parse(request.body), getRequestId(request));
+    sendData(request, response, result, 201);
+  });
+
+  router.post('/requisitions/:requisitionId/import-inquiry-offers', requireCsrf, requirePermission('procurement.offer.manage'), async (request, response) => {
+    const { requisitionId } = requisitionParamsSchema.parse(request.params);
+    const result = await procurementService.convertInquiryResponsesToOffers(getPrincipal(request), requisitionId, convertInquiryOffersSchema.parse(request.body), getRequestId(request));
+    sendData(request, response, result, 201);
   });
 
   router.get('/substitution-reviews', requirePermission('procurement.substitution.review'), async (request, response) => {

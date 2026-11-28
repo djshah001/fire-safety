@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Check, PackageCheck, Truck } from 'lucide-react';
+import { AlertTriangle, Check, PackageCheck, Truck } from 'lucide-react';
 import { getApiErrorMessage } from '@/api/client';
 import {
   createGoodsReceipt,
   type PurchaseOrder,
   type PurchaseOrderLine,
 } from '@/api/purchaseOrders';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -28,6 +29,7 @@ interface GoodsReceiptSheetProps {
   onOpenChange: (open: boolean) => void;
   purchaseOrder: PurchaseOrder;
   lines: PurchaseOrderLine[];
+  canApproveOverdelivery?: boolean;
 }
 
 export function GoodsReceiptSheet({
@@ -35,6 +37,7 @@ export function GoodsReceiptSheet({
   onOpenChange,
   purchaseOrder,
   lines,
+  canApproveOverdelivery = false,
 }: GoodsReceiptSheetProps) {
   const queryClient = useQueryClient();
   const today = new Date().toISOString().split('T')[0]!;
@@ -53,6 +56,13 @@ export function GoodsReceiptSheet({
   const [inspectNow, setInspectNow] = useState(true);
   const [rejectedQtys, setRejectedQtys] = useState<Record<string, string>>({});
   const [rejectionReasons, setRejectionReasons] = useState<Record<string, string>>({});
+  const [excessReasons, setExcessReasons] = useState<Record<string, string>>({});
+
+  const hasAnyExcess = lines.some((line) => {
+    const rem = Math.max(0, Number(line.quantity) - Number(line.receivedQuantity));
+    const del = deliveredQtys[line.id] !== undefined ? Number(deliveredQtys[line.id]) : rem;
+    return del > rem;
+  });
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -68,6 +78,21 @@ export function GoodsReceiptSheet({
           const delNum = Number(del);
           if (delNum <= 0) return null;
 
+          const isExcess = delNum > rem;
+          const excessReason = excessReasons[line.id]?.trim();
+          if (isExcess) {
+            if (!canApproveOverdelivery) {
+              throw new Error(
+                `Delivered quantity exceeds remaining balance for "${line.itemName}". Purchase Manager approval is required.`,
+              );
+            }
+            if (!excessReason) {
+              throw new Error(
+                `Overdelivery exception reason is required for "${line.itemName}".`,
+              );
+            }
+          }
+
           const rej = inspectNow && rejectedQtys[line.id] ? Number(rejectedQtys[line.id]) : 0;
           const acc = inspectNow ? Math.max(0, delNum - rej) : 0;
 
@@ -81,6 +106,7 @@ export function GoodsReceiptSheet({
             acceptedQuantity: inspectNow ? acc.toFixed(4) : undefined,
             rejectedQuantity: inspectNow && rej > 0 ? rej.toFixed(4) : undefined,
             rejectionReason: inspectNow && rej > 0 ? rejectionReasons[line.id] : undefined,
+            excessApprovalReason: isExcess ? excessReason : undefined,
           };
         })
         .filter(Boolean);
@@ -124,6 +150,7 @@ export function GoodsReceiptSheet({
     setDeliveredQtys({});
     setRejectedQtys({});
     setRejectionReasons({});
+    setExcessReasons({});
   };
 
   return (
@@ -241,6 +268,17 @@ export function GoodsReceiptSheet({
             </Button>
           </div>
 
+          {/* Overdelivery warning banner */}
+          {hasAnyExcess && !canApproveOverdelivery && (
+            <Alert variant="destructive">
+              <AlertTriangle className="size-4" />
+              <AlertTitle>Overdelivery Blocked</AlertTitle>
+              <AlertDescription>
+                One or more lines exceed remaining ordered PO quantities. Only an independent Purchase Manager or System Administrator can approve an excess delivery exception.
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Line Items List */}
           <div className="space-y-3">
             <Label className="text-sm font-semibold">Shipment Line Items</Label>
@@ -253,6 +291,9 @@ export function GoodsReceiptSheet({
                   deliveredQtys[line.id] !== undefined
                     ? deliveredQtys[line.id]
                     : String(remaining);
+                const currentDelNum = Number(currentDel) || 0;
+                const excessQty = Math.max(0, currentDelNum - remaining);
+                const isExcess = excessQty > 0;
                 const currentRej = rejectedQtys[line.id] ?? '0';
 
                 return (
@@ -269,6 +310,11 @@ export function GoodsReceiptSheet({
                             <Badge variant="outline" className="text-[10px]">
                               Make: {line.brandOffered}
                             </Badge>
+                            {isExcess && (
+                              <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px]">
+                                +{excessQty.toFixed(4)} Excess Overdelivery
+                              </Badge>
+                            )}
                           </div>
                         </div>
                         <div className="text-right text-xs">
@@ -290,7 +336,6 @@ export function GoodsReceiptSheet({
                             type="number"
                             step="0.0001"
                             min="0"
-                            max={remaining}
                             value={currentDel}
                             onChange={(e) =>
                               setDeliveredQtys((prev) => ({
@@ -308,7 +353,7 @@ export function GoodsReceiptSheet({
                               type="number"
                               step="0.0001"
                               min="0"
-                              max={Number(currentDel) || remaining}
+                              max={currentDelNum || remaining}
                               value={currentRej}
                               onChange={(e) =>
                                 setRejectedQtys((prev) => ({
@@ -316,6 +361,27 @@ export function GoodsReceiptSheet({
                                   [line.id]: e.target.value,
                                 }))
                               }
+                            />
+                          </div>
+                        )}
+
+                        {isExcess && (
+                          <div className="space-y-1 sm:col-span-2">
+                            <Label className="text-xs text-amber-700 dark:text-amber-300">
+                              Overdelivery Exception Reason (Manager Approval Required){' '}
+                              <span className="text-destructive">*</span>
+                            </Label>
+                            <Input
+                              disabled={!canApproveOverdelivery}
+                              placeholder="e.g. Standard 6m pipe cut length tolerance accepted"
+                              value={excessReasons[line.id] ?? ''}
+                              onChange={(e) =>
+                                setExcessReasons((prev) => ({
+                                  ...prev,
+                                  [line.id]: e.target.value,
+                                }))
+                              }
+                              required={canApproveOverdelivery}
                             />
                           </div>
                         )}
@@ -353,7 +419,7 @@ export function GoodsReceiptSheet({
           </Button>
           <Button
             onClick={() => mutation.mutate()}
-            disabled={mutation.isPending}
+            disabled={mutation.isPending || (hasAnyExcess && !canApproveOverdelivery)}
             className="gap-2"
           >
             <PackageCheck className="size-4" />

@@ -98,6 +98,7 @@ const pageTitles: Record<string, string> = {
   "/masters/item-categories": "Item categories",
   "/masters/units": "Units",
   "/procurement/requisitions": "Requisitions & sourcing",
+  "/procurement/fulfillment": "Quotation fulfillment",
   "/procurement/purchase-orders": "Purchase orders (PO)",
   "/procurement/substitution-reviews": "Technical substitution reviews",
   "/inventory": "Inventory & Warehouse Ledger",
@@ -515,6 +516,15 @@ export function AppShell({ user }: { user: CurrentUser }) {
   ];
 
   const procurement: NavItem[] = [
+    {
+      to: "/procurement/fulfillment",
+      label: "Quotation fulfillment",
+      icon: ShoppingCart,
+      visible:
+        user.permissions.includes("system.access.all") ||
+        user.permissions.includes("procurement.sourcing.read") ||
+        user.permissions.includes("inventory.request.create"),
+    },
     {
       to: "/procurement/requisitions",
       label: "Requisitions & sourcing",

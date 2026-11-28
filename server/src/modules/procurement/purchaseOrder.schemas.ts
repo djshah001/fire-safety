@@ -32,6 +32,7 @@ export const purchaseOrderListQuerySchema = z.object({
       'issued',
       'partially_delivered',
       'delivered',
+      'short_closed',
       'closed',
       'cancelled',
     ])
@@ -136,6 +137,7 @@ export const createGoodsReceiptLineSchema = z.object({
     .optional(),
   rejectionReason: z.string().trim().max(2_000).optional(),
   inspectionNotes: z.string().trim().max(2_000).optional(),
+  excessApprovalReason: z.string().trim().max(2_000).optional(),
 });
 
 export const createGoodsReceiptSchema = z.object({
@@ -145,6 +147,7 @@ export const createGoodsReceiptSchema = z.object({
   vehicleNumber: z.string().trim().max(50).optional(),
   transporterName: z.string().trim().max(160).optional(),
   notes: z.string().trim().max(2_000).optional(),
+  excessApprovalReason: z.string().trim().max(2_000).optional(),
   lines: z.array(createGoodsReceiptLineSchema).min(1).max(200),
 });
 
@@ -154,11 +157,15 @@ export const goodsReceiptParamsSchema = z.object({
 
 export const inspectGoodsReceiptSchema = z.object({
   expectedVersion: version,
+  excessApprovalReason: z.string().trim().max(2_000).optional(),
   lines: z
     .array(
       z.object({
         goodsReceiptLineId: uuid,
-        acceptedQuantity: quantity,
+        acceptedQuantity: z
+          .string()
+          .trim()
+          .regex(/^\d{1,14}(?:\.\d{1,4})?$/, 'Enter a non-negative quantity with at most four decimal places.'),
         rejectedQuantity: z
           .string()
           .trim()
@@ -166,7 +173,15 @@ export const inspectGoodsReceiptSchema = z.object({
           .default('0.0000'),
         rejectionReason: z.string().trim().max(2_000).optional(),
         inspectionNotes: z.string().trim().max(2_000).optional(),
+        excessApprovalReason: z.string().trim().max(2_000).optional(),
       }).superRefine((val, ctx) => {
+        if (new Decimal(val.acceptedQuantity).lt(0)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['acceptedQuantity'],
+            message: 'Accepted quantity cannot be negative.',
+          });
+        }
         if (new Decimal(val.rejectedQuantity).gt(0) && !val.rejectionReason) {
           ctx.addIssue({
             code: 'custom',
@@ -177,5 +192,77 @@ export const inspectGoodsReceiptSchema = z.object({
       }),
     )
     .min(1),
+});
+
+export const createPosFromRequisitionAwardsSchema = z.object({
+  requisitionId: uuid,
+  vendorId: uuid.optional(),
+  title: z.string().trim().min(2).max(200).optional(),
+  paymentTerms: z.string().trim().max(1_000).optional(),
+  deliveryTerms: z.string().trim().max(1_000).optional(),
+  deliveryLocation: z.string().trim().max(500).optional(),
+  deliveryDueDate: date.optional(),
+  billingAddress: z.string().trim().max(500).optional(),
+  shippingAddress: z.string().trim().max(500).optional(),
+  notes: z.string().trim().max(2_000).optional(),
+});
+
+export const shortClosePoSchema = z.object({
+  expectedVersion: version,
+  reason: z.string().trim().min(5, 'Enter a short-close reason of at least 5 characters.').max(2_000),
+});
+
+export const dispatchVendorPoSchema = z.object({
+  channel: z.enum(['email', 'whatsapp_msg91', 'whatsapp_manual']),
+  recipientName: z.string().trim().min(1, 'Recipient name is required.').max(160),
+  recipientContact: z.string().trim().min(3, 'Recipient email or phone is required.').max(320),
+  customMessage: z.string().trim().max(1_000).optional(),
+});
+
+export const rtvParamsSchema = z.object({
+  rtvId: uuid,
+});
+
+export const createSupplierReturnSchema = z.object({
+  purchaseOrderId: uuid,
+  goodsReceiptId: uuid,
+  resolutionType: z.enum(['replacement', 'credit_note', 'deduction']),
+  reason: z.string().trim().min(5, 'Enter a return reason of at least 5 characters.').max(2_000),
+  lines: z
+    .array(
+      z.object({
+        goodsReceiptLineId: uuid,
+        returnQuantity: quantity,
+        remarks: z.string().trim().max(2_000).optional(),
+      }),
+    )
+    .min(1)
+    .max(200),
+});
+
+export const dispatchSupplierReturnSchema = z.object({
+  expectedVersion: version,
+  transporterName: z.string().trim().max(160).optional(),
+  vehicleNumber: z.string().trim().max(50).optional(),
+  dispatchDate: date,
+});
+
+export const recordReplacementRtvSchema = z.object({
+  expectedVersion: version,
+  lines: z
+    .array(
+      z.object({
+        supplierReturnLineId: uuid,
+        receivedQuantity: quantity,
+        remarks: z.string().trim().max(2_000).optional(),
+      }),
+    )
+    .min(1)
+    .max(200),
+});
+
+export const settleCreditRtvSchema = z.object({
+  expectedVersion: version,
+  creditNoteReference: z.string().trim().min(2, 'Enter the credit note or deduction reference.').max(160),
 });
 

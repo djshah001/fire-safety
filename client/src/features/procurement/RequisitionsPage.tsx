@@ -5,10 +5,16 @@ import {
   useNavigate,
   useOutletContext,
   useSearchParams,
+  Link,
 } from "react-router-dom";
 import { toast } from "sonner";
 import type { CurrentUser } from "@/api/auth";
 import { getApiErrorMessage } from "@/api/client";
+import {
+  createRequisitionFromSrr,
+  inventoryQueryKeys,
+  replenishmentRequestsQuery,
+} from "@/api/inventory";
 import {
   createProcurementRequisition,
   procurementCreateOptionsQuery,
@@ -112,6 +118,28 @@ export function RequisitionsPage() {
     }),
   );
   const inquiriesQuery = useQuery(priceInquiriesQuery({ pageSize: 10 }));
+  const canReadStock =
+    user.permissions.includes("system.access.all") ||
+    user.permissions.includes("inventory.stock.read");
+  const srrQuery = useQuery(
+    replenishmentRequestsQuery({ status: "open" }, canReadStock),
+  );
+  const [selectedSrrIds, setSelectedSrrIds] = useState<string[]>([]);
+  const srrToReqMutation = useMutation({
+    mutationFn: () => createRequisitionFromSrr({ srrIds: selectedSrrIds }),
+    onSuccess: (res) => {
+      toast.success(`Replenishment requisition ${res.requisitionNumber} created!`);
+      setSelectedSrrIds([]);
+      queryClient.invalidateQueries({ queryKey: ["procurement", "requisitions"] });
+      queryClient.invalidateQueries({
+        queryKey: inventoryQueryKeys.replenishmentRequests({ status: "open" }),
+      });
+      navigate(`/procurement/requisitions/${res.requisitionId}`);
+    },
+    onError: (err) => {
+      toast.error(getApiErrorMessage(err, "Failed to convert replenishment requests"));
+    },
+  });
   const options = useQuery(
     procurementCreateOptionsQuery(creating && canCreate),
   );
@@ -232,6 +260,11 @@ export function RequisitionsPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline">
+            <Link to="/procurement/fulfillment">
+              Quotation Fulfillment Planner
+            </Link>
+          </Button>
           <Button variant="outline" onClick={() => setPriceInquiryOpen(true)}>
             <MessageSquare className="h-4 w-4 mr-1.5" />
             Inquire Vendor Prices
@@ -312,6 +345,91 @@ export function RequisitionsPage() {
           />
         )}
       </section>
+
+      {/* Store Replenishment Queue (SRR-*) */}
+      {canReadStock && (srrQuery.data ?? []).length > 0 && (
+        <section className="mt-8 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight">
+                Store Replenishment Queue
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Low-stock replenishment requests submitted by Storekeepers for Purchase sourcing.
+              </p>
+            </div>
+            {canCreate && selectedSrrIds.length > 0 && (
+              <Button
+                size="sm"
+                disabled={srrToReqMutation.isPending}
+                onClick={() => srrToReqMutation.mutate()}
+              >
+                {srrToReqMutation.isPending
+                  ? "Creating Requisition..."
+                  : `Convert Selected (${selectedSrrIds.length}) to Requisition / PO`}
+              </Button>
+            )}
+          </div>
+          <div className="overflow-hidden rounded-xl border bg-card">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-10" />
+                  <TableHead>SRR #</TableHead>
+                  <TableHead>Warehouse</TableHead>
+                  <TableHead>Item & Make</TableHead>
+                  <TableHead className="text-right">Requested Qty</TableHead>
+                  <TableHead className="text-right">Free / Min / Max</TableHead>
+                  <TableHead>Requested By</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(srrQuery.data ?? []).map((srr) => {
+                  const checked = selectedSrrIds.includes(srr.id);
+                  return (
+                    <TableRow key={srr.id}>
+                      <TableCell>
+                        <Checkbox
+                          checked={checked}
+                          onCheckedChange={(val) =>
+                            setSelectedSrrIds((prev) =>
+                              val ? [...prev, srr.id] : prev.filter((id) => id !== srr.id),
+                            )
+                          }
+                        />
+                      </TableCell>
+                      <TableCell className="font-mono text-xs font-semibold">
+                        {srr.srrNumber}
+                      </TableCell>
+                      <TableCell className="text-xs">{srr.warehouseName}</TableCell>
+                      <TableCell className="text-xs">
+                        <span className="font-mono font-medium">{srr.itemCode}</span> ·{" "}
+                        {srr.itemName}
+                        {srr.brandName && (
+                          <span className="text-muted-foreground ml-1">
+                            ({srr.brandName})
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs font-semibold">
+                        {Number(srr.requestedQty).toFixed(2)} {srr.unitSymbol}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                        {Number(srr.currentFreeQty).toFixed(0)} /{" "}
+                        {Number(srr.minStock).toFixed(0)} /{" "}
+                        {Number(srr.maxStock).toFixed(0)}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {srr.requestedByUserName}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+      )}
 
       {/* Recent Vendor Price Inquiries */}
       {inquiriesQuery.data && inquiriesQuery.data.items.length > 0 && (

@@ -12,6 +12,7 @@ export const projectMemberRoleEnum = z.enum([
   'sales',
   'design',
   'purchase',
+  'site_engineer',
   'member',
   'viewer',
 ]);

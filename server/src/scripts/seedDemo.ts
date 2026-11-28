@@ -1278,11 +1278,13 @@ async function ensureProcurementScenario(
     `
     insert into procurement_requisition_lines (
       company_id, requisition_id, boq_line_id, line_number, item_id, item_code_snapshot,
-      item_name_snapshot, specification_snapshot, unit_id, unit_symbol_snapshot, quantity
+      item_name_snapshot, specification_snapshot, unit_id, unit_symbol_snapshot, quantity,
+      project_allocation_qty, store_replenishment_qty, destination_type
     ) select $1, $2, line.id, line.line_number, line.item_id, line.item_code_snapshot,
-      line.item_name_snapshot, line.specification_snapshot, line.unit_id, line.unit_symbol_snapshot, line.quantity
+      line.item_name_snapshot, line.specification_snapshot, line.unit_id, line.unit_symbol_snapshot, line.quantity,
+      line.quantity, '0.0000', 'warehouse'
     from boq_lines line where line.boq_revision_id = $3 order by line.line_number limit 1
-    on conflict (requisition_id, boq_line_id) do update set quantity = procurement_requisition_lines.quantity
+    on conflict (requisition_id, boq_line_id) where boq_line_id is not null do update set quantity = procurement_requisition_lines.quantity
     returning id
   `,
     [input.companyId, requisition.id, input.boqRevisionId],
@@ -1664,12 +1666,14 @@ async function ensurePurchaseOrderScenario(
     insert into purchase_order_lines (
       company_id, purchase_order_id, revision_id, line_number, item_id,
       item_code_snapshot, item_name_snapshot, specification_snapshot, brand_offered,
-      unit_id, unit_symbol_snapshot, quantity, unit_rate, tax_percent, tax_amount, line_total,
+      unit_id, unit_symbol_snapshot, quantity, project_allocation_qty, store_replenishment_qty, destination_type,
+      unit_rate, tax_percent, tax_amount, line_total,
       received_quantity, accepted_quantity, rejected_quantity
     ) values (
       $1, $2, $3, 1, $4,
       $5, $6, $7, 'Sentinel',
-      $8, $9, '12.0000', '950.00', '18.00', '2052.00', '13452.00',
+      $8, $9, '12.0000', '12.0000', '0.0000', 'warehouse',
+      '950.00', '18.00', '2052.00', '13452.00',
       '6.0000', '5.0000', '1.0000'
     )
     on conflict (revision_id, line_number) do update
@@ -1773,11 +1777,13 @@ async function ensurePurchaseOrderScenario(
     insert into purchase_order_lines (
       company_id, purchase_order_id, revision_id, line_number, item_id,
       item_code_snapshot, item_name_snapshot, specification_snapshot, brand_offered,
-      unit_id, unit_symbol_snapshot, quantity, unit_rate, tax_percent, tax_amount, line_total
+      unit_id, unit_symbol_snapshot, quantity, project_allocation_qty, store_replenishment_qty, destination_type,
+      unit_rate, tax_percent, tax_amount, line_total
     ) values (
       $1, $2, $3, 1, $4,
       $5, $6, $7, 'FlameTech',
-      $8, $9, '10.0000', '800.00', '18.00', '1440.00', '9440.00'
+      $8, $9, '10.0000', '10.0000', '0.0000', 'warehouse',
+      '800.00', '18.00', '1440.00', '9440.00'
     )
     on conflict (revision_id, line_number) do update
       set unit_rate = excluded.unit_rate, line_total = excluded.line_total
@@ -1841,11 +1847,13 @@ async function ensurePurchaseOrderScenario(
     insert into purchase_order_lines (
       company_id, purchase_order_id, revision_id, line_number, item_id,
       item_code_snapshot, item_name_snapshot, specification_snapshot, brand_offered,
-      unit_id, unit_symbol_snapshot, quantity, unit_rate, tax_percent, tax_amount, line_total
+      unit_id, unit_symbol_snapshot, quantity, project_allocation_qty, store_replenishment_qty, destination_type,
+      unit_rate, tax_percent, tax_amount, line_total
     ) values (
       $1, $2, $3, 1, $4,
       $5, $6, $7, 'Sentinel',
-      $8, $9, '10.0000', '690.00', '18.00', '1242.00', '8142.00'
+      $8, $9, '10.0000', '10.0000', '0.0000', 'warehouse',
+      '690.00', '18.00', '1242.00', '8142.00'
     )
     on conflict (revision_id, line_number) do update
       set unit_rate = excluded.unit_rate, line_total = excluded.line_total
@@ -1926,7 +1934,8 @@ async function ensureInventoryScenario(
     [input.companyId, input.receiverId],
   );
 
-  await client.query(
+  const siteWh = await one<IdRow>(
+    client,
     `
     insert into warehouses (
       company_id, code, name, warehouse_type, project_id, address_line1, city, state, postal_code, in_charge_user_id, is_active, row_version
@@ -1936,9 +1945,40 @@ async function ensureInventoryScenario(
     )
     on conflict (company_id, code) do update
       set name = excluded.name, in_charge_user_id = excluded.in_charge_user_id
+    returning id
   `,
     [input.companyId, input.projectId, input.adminId],
   );
+
+  const ensureSystemLocations = async (warehouseId: string) => {
+    const mainLoc = await one<IdRow>(
+      client,
+      `
+      insert into stock_locations (
+        company_id, warehouse_id, code, name, location_type, is_active
+      ) values ($1, $2, 'MAIN', 'Main Store', 'main', 1)
+      on conflict (warehouse_id, code) do update
+        set location_type = 'main'
+      returning id
+    `,
+      [input.companyId, warehouseId],
+    );
+    await client.query(
+      `
+      insert into stock_locations (
+        company_id, warehouse_id, code, name, location_type, is_active
+      ) values ($1, $2, 'IN_TRANSIT', 'In Transit', 'in_transit', 1)
+      on conflict (warehouse_id, code) do update
+        set location_type = 'in_transit'
+    `,
+      [input.companyId, warehouseId],
+    );
+    return mainLoc.id;
+  };
+
+  const centralMainLocId = await ensureSystemLocations(centralWh.id);
+  await ensureSystemLocations(suratWh.id);
+  await ensureSystemLocations(siteWh.id);
 
   // 2. Opening Cutover Balances at Central Warehouse
   const openDoc = await one<IdRow>(
@@ -1979,30 +2019,31 @@ async function ensureInventoryScenario(
     await client.query(
       `
       insert into stock_balances (
-        company_id, warehouse_id, item_id, quantity_on_hand, quantity_reserved, last_movement_at
-      ) values ($1, $2, $3, $4, '0.0000', now() - interval '10 days')
-      on conflict (warehouse_id, item_id) do nothing
+        company_id, warehouse_id, location_id, item_id, brand_offering_id, quantity_on_hand, quantity_reserved, last_movement_at
+      ) values ($1, $2, $3, $4, null, $5, '0.0000', now() - interval '10 days')
+      on conflict do nothing
     `,
-      [input.companyId, centralWh.id, o.item.id, o.qty],
+      [input.companyId, centralWh.id, centralMainLocId, o.item.id, o.qty],
     );
 
     await client.query(
       `
       insert into stock_ledger_entries (
         company_id, entry_number, posting_date, source_type, source_id, source_reference,
-        warehouse_id, item_id, direction, quantity, balance_before, balance_after,
+        warehouse_id, location_id, item_id, brand_offering_id, direction, quantity, balance_before, balance_after,
         unit_cost, notes, posted_by_user_id
       ) values (
         $1, $2, now() - interval '10 days', 'opening_balance', $3, 'Opening Cutover Balance',
-        $4, $5, 'in', $6, '0.0000', $6, $7, 'Verified warehouse physical count', $8
+        $4, $5, $6, null, 'in', $7, '0.0000', $7, $8, 'Verified warehouse physical count', $9
       )
-      on conflict (company_id, source_type, source_id, warehouse_id, direction) do nothing
+      on conflict do nothing
     `,
       [
         input.companyId,
         `SLE-2026-${o.seq}`,
         openDoc.id,
         centralWh.id,
+        centralMainLocId,
         o.item.id,
         o.qty,
         o.cost,
@@ -2028,18 +2069,19 @@ async function ensureInventoryScenario(
         `
         insert into stock_ledger_entries (
           company_id, entry_number, posting_date, source_type, source_id, source_reference,
-          warehouse_id, item_id, direction, quantity, balance_before, balance_after,
+          warehouse_id, location_id, item_id, brand_offering_id, direction, quantity, balance_before, balance_after,
           unit_cost, notes, posted_by_user_id
         ) values (
           $1, 'SLE-2026-00004', now() - interval '1 day', 'goods_receipt_line', $2, 'GRN DEMO-GRN-001 (Line #1)',
-          $3, $4, 'in', $5, '100.0000', '105.0000', $6, 'Inspected & accepted delivery from Sentinel Security', $7
+          $3, $4, $5, null, 'in', $6, '100.0000', '105.0000', $7, 'Inspected & accepted delivery from Sentinel Security', $8
         )
-        on conflict (company_id, source_type, source_id, warehouse_id, direction) do nothing
+        on conflict do nothing
       `,
         [
           input.companyId,
           grnLine.id,
           centralWh.id,
+          centralMainLocId,
           smoke.id,
           grnLine.acceptedQty,
           grnLine.unitRate,
@@ -2049,8 +2091,8 @@ async function ensureInventoryScenario(
 
       await client.query(
         `update stock_balances set quantity_on_hand = '105.0000', last_movement_at = now() - interval '1 day'
-         where warehouse_id = $1 and item_id = $2`,
-        [centralWh.id, smoke.id],
+         where warehouse_id = $1 and location_id = $2 and item_id = $3 and brand_offering_id is null`,
+        [centralWh.id, centralMainLocId, smoke.id],
       );
     }
   }
@@ -2089,21 +2131,21 @@ async function ensureInventoryScenario(
     `
     insert into stock_ledger_entries (
       company_id, entry_number, posting_date, source_type, source_id, source_reference,
-      warehouse_id, item_id, direction, quantity, balance_before, balance_after,
+      warehouse_id, location_id, item_id, brand_offering_id, direction, quantity, balance_before, balance_after,
       notes, posted_by_user_id
     ) values (
       $1, 'SLE-2026-00005', now() - interval '4 hours', 'transfer_dispatch', $2, 'Transfer TRF-2026-00001 (Challan: CH-TRF-001)',
-      $3, $4, 'out', '20.0000', '105.0000', '85.0000', 'Dispatched to South Gujarat Regional Depot', $5
+      $3, $4, $5, null, 'out', '20.0000', '105.0000', '85.0000', 'Dispatched to South Gujarat Regional Depot', $6
     )
-    on conflict (company_id, source_type, source_id, warehouse_id, direction) do nothing
+    on conflict do nothing
   `,
-    [input.companyId, trf.id, centralWh.id, smoke.id, input.receiverId],
+    [input.companyId, trf.id, centralWh.id, centralMainLocId, smoke.id, input.receiverId],
   );
 
   await client.query(
     `update stock_balances set quantity_on_hand = '85.0000', last_movement_at = now() - interval '4 hours'
-     where warehouse_id = $1 and item_id = $2`,
-    [centralWh.id, smoke.id],
+     where warehouse_id = $1 and location_id = $2 and item_id = $3 and brand_offering_id is null`,
+    [centralWh.id, centralMainLocId, smoke.id],
   );
 
   // 5. Stock Reservation: 25 smoke detectors at Central WH for Alpha Towers Project
@@ -2124,8 +2166,8 @@ async function ensureInventoryScenario(
 
   await client.query(
     `update stock_balances set quantity_reserved = '25.0000', updated_at = now()
-     where warehouse_id = $1 and item_id = $2`,
-    [centralWh.id, smoke.id],
+     where warehouse_id = $1 and location_id = $2 and item_id = $3 and brand_offering_id is null`,
+    [centralWh.id, centralMainLocId, smoke.id],
   );
 }
 
@@ -2716,6 +2758,8 @@ async function seed() {
       "purchase_executive",
       "boq_admin_approver",
       "receiver",
+      "storekeeper",
+      "site_engineer",
     ];
     const roles = await client.query<{ code: string }>(
       `
@@ -2800,6 +2844,18 @@ async function seed() {
         email: "demo.receiver@example.test",
         roles: ["receiver"],
       },
+      {
+        employeeCode: "DEMO-SK",
+        name: "Demo Storekeeper",
+        email: "demo.storekeeper@example.test",
+        roles: ["storekeeper"],
+      },
+      {
+        employeeCode: "DEMO-SENG",
+        name: "Demo Site Engineer",
+        email: "demo.site.engineer@example.test",
+        roles: ["site_engineer"],
+      },
     ];
     const userIds = new Map<string, string>();
     for (const definition of userDefinitions) {
@@ -2816,6 +2872,7 @@ async function seed() {
     const purchaseManagerId = userIds.get("DEMO-PM")!;
     const purchaseExecutiveId = userIds.get("DEMO-PE")!;
     const receiverId = userIds.get("DEMO-RC")!;
+    const siteEngineerId = userIds.get("DEMO-SENG")!;
 
     stage = "lead classifications and service categories";
     for (const [code, name] of [
@@ -3481,7 +3538,7 @@ async function seed() {
       on conflict (company_id, opportunity_id) do update set title = excluded.title
       returning id
     `, [company.id, opportunities[4]!.id, managerId]);
-    for (const [userId, role] of [[managerId, 'project_manager'], [designerId, 'design'], [designHeadId, 'design'], [purchaseExecutiveId, 'purchase'], [purchaseManagerId, 'purchase']] as const) {
+    for (const [userId, role] of [[managerId, 'project_manager'], [designerId, 'design'], [designHeadId, 'design'], [purchaseExecutiveId, 'purchase'], [purchaseManagerId, 'purchase'], [siteEngineerId, 'site_engineer']] as const) {
       await client.query(`
         insert into project_members (company_id, project_id, user_id, role, assigned_by_user_id)
         values ($1, $2, $3, $4, $5) on conflict (project_id, user_id) do nothing

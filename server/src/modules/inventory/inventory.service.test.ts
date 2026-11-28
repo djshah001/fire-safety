@@ -240,4 +240,85 @@ describe('InventoryService', () => {
     const released = await service.releaseStockReservation(principal, 'res-1');
     expect(released?.status).toBe('released');
   });
+
+  it('propagates MAIN locationId and brandOfferingId during GRN posting and stock reservations', async () => {
+    const mainLocId = '11111111-1111-4111-8111-111111111111';
+    const inTransitLocId = '22222222-2222-4222-8222-222222222222';
+    const brandOfferingId = '33333333-3333-4333-8333-333333333333';
+
+    const mockBalance = {
+      id: 'bal-brand-1',
+      locationId: mainLocId,
+      brandOfferingId,
+      quantityOnHand: '10.0000',
+      quantityReserved: '0.0000',
+    };
+
+    const mockRepo = {
+      withTransaction: vi.fn(async (cb) => cb({} as any)),
+      ensureWarehouseSystemLocations: vi.fn().mockResolvedValue({
+        mainLocation: { id: mainLocId, code: 'MAIN', locationType: 'main' },
+        inTransitLocation: { id: inTransitLocId, code: 'IN_TRANSIT', locationType: 'in_transit' },
+      }),
+      getGoodsReceiptLineForPosting: vi.fn().mockResolvedValue({
+        lineId: validGrnLine,
+        goodsReceiptId: 'grn-1',
+        grnNumber: 'GRN-002',
+        vendorChallanNumber: 'CH-1000',
+        lineNumber: 1,
+        deliveredQuantity: '10.0000',
+        acceptedQuantity: '10.0000',
+        rejectedQuantity: '0.0000',
+        itemId: validItem,
+        brandOfferingId,
+        unitRate: '200.00',
+      }),
+      findLedgerEntryBySource: vi.fn().mockResolvedValue(null),
+      getWarehouseById: vi.fn().mockResolvedValue({ id: validWh1, code: 'WH-CENTRAL' }),
+      ensureStockBalance: vi.fn().mockResolvedValue(mockBalance),
+      getStockBalanceForUpdate: vi.fn().mockResolvedValue(mockBalance),
+      allocateDocumentNumber: vi.fn().mockResolvedValue('SLE-2026-00099'),
+      createStockLedgerEntry: vi.fn().mockResolvedValue({ id: 'sle-99', entryNumber: 'SLE-2026-00099' }),
+      updateStockBalanceQuantities: vi.fn().mockResolvedValue({ ...mockBalance, quantityOnHand: '20.0000' }),
+      createStockReservation: vi.fn().mockResolvedValue({ id: 'res-brand-1', brandOfferingId }),
+    } as unknown as InventoryRepository;
+
+    const service = new InventoryService(mockRepo);
+
+    await service.postGoodsReceiptToInventory(principal, {
+      warehouseId: validWh1,
+      goodsReceiptLineId: validGrnLine,
+    });
+
+    expect(mockRepo.ensureStockBalance).toHaveBeenCalledWith(
+      principal.companyId,
+      validWh1,
+      validItem,
+      expect.anything(),
+      { locationId: mainLocId, brandOfferingId }
+    );
+    expect(mockRepo.createStockLedgerEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        locationId: mainLocId,
+        brandOfferingId,
+      }),
+      expect.anything()
+    );
+
+    await service.createStockReservation(principal, {
+      projectId: validProject,
+      warehouseId: validWh1,
+      itemId: validItem,
+      brandOfferingId,
+      quantityReserved: '4.0000',
+    });
+
+    expect(mockRepo.createStockReservation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        brandOfferingId,
+        quantityReserved: '4.0000',
+      }),
+      expect.anything()
+    );
+  });
 });

@@ -18,7 +18,7 @@ export type PdfPurchaseOrder = {
   project: {
     number: string;
     title: string;
-  };
+  } | null;
   deliveryTerms: string;
   paymentTerms: string;
   deliveryLocation: string;
@@ -245,7 +245,7 @@ export function buildPurchaseOrderHtml(po: PdfPurchaseOrder, logoDataUrl?: strin
       </td>
       <td>
         <div class="info-label">Project & Delivery Site</div>
-        <div style="font-weight: 700; color: #0f172a;">${escapeHtml(po.project.number)} - ${escapeHtml(po.project.title)}</div>
+        <div style="font-weight: 700; color: #0f172a;">${escapeHtml(po.project?.number ?? 'STORE')} - ${escapeHtml(po.project?.title ?? 'General Store Replenishment')}</div>
         <div style="margin-top: 4px;"><span style="color: #64748b;">Delivery Site:</span> ${escapeHtml(po.deliveryLocation)}</div>
         ${po.deliveryDueDate ? `<div style="margin-top: 2px;"><span style="color: #64748b;">Required By:</span> <strong>${escapeHtml(po.deliveryDueDate)}</strong></div>` : ''}
         <div style="margin-top: 2px;"><span style="color: #64748b;">Subject:</span> ${escapeHtml(po.title)}</div>

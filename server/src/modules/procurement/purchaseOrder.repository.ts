@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../infrastructure/database/db.js';
 import {
   goodsReceiptLines,
@@ -6,10 +6,14 @@ import {
   procurementRequisitions,
   projectMembers,
   projects,
+  purchaseOrderDispatches,
   purchaseOrderLines,
   purchaseOrderRevisions,
   purchaseOrders,
+  supplierReturnLines,
+  supplierReturns,
   users,
+  vendorContacts,
   vendors,
 } from '../../infrastructure/database/schema/index.js';
 import { administratorScope } from '../../core/security/administrator.js';
@@ -20,6 +24,7 @@ const access = (companyId: string, userId: string) =>
     or(
       administratorScope(companyId, userId),
       eq(purchaseOrders.createdByUserId, userId),
+      isNull(purchaseOrders.projectId),
       sql`exists (
         select 1 from ${projectMembers} pm
         where pm.project_id = ${purchaseOrders.projectId}
@@ -68,6 +73,26 @@ export function createPurchaseOrderRepository(executor: DatabaseExecutor) {
         })
         .returning({ allocated: sql<number>`${documentCounters.nextValue} - 1` });
       return `GRN-${periodKey}-${String(counter!.allocated).padStart(4, '0')}`;
+    },
+
+    async allocateRtvNumber(companyId: string, now: Date) {
+      const periodKey = String(now.getUTCFullYear());
+      const { documentCounters } = await import('../../infrastructure/database/schema/index.js');
+      const [counter] = await executor
+        .insert(documentCounters)
+        .values({
+          companyId,
+          documentType: 'RTV',
+          periodKey,
+          nextValue: 2,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [documentCounters.companyId, documentCounters.documentType, documentCounters.periodKey],
+          set: { nextValue: sql`${documentCounters.nextValue} + 1`, updatedAt: now },
+        })
+        .returning({ allocated: sql<number>`${documentCounters.nextValue} - 1` });
+      return `RTV-${periodKey}-${String(counter!.allocated).padStart(5, '0')}`;
     },
 
     async list(
@@ -140,7 +165,7 @@ export function createPurchaseOrderRepository(executor: DatabaseExecutor) {
           updatedAt: purchaseOrders.updatedAt,
         })
         .from(purchaseOrders)
-        .innerJoin(projects, eq(projects.id, purchaseOrders.projectId))
+        .leftJoin(projects, eq(projects.id, purchaseOrders.projectId))
         .innerJoin(vendors, eq(vendors.id, purchaseOrders.vendorId))
         .where(and(...filters))
         .orderBy(order)
@@ -183,12 +208,15 @@ export function createPurchaseOrderRepository(executor: DatabaseExecutor) {
           grandTotal: purchaseOrders.grandTotal,
           createdByUserId: purchaseOrders.createdByUserId,
           createdByName: users.name,
+          shortClosedAt: purchaseOrders.shortClosedAt,
+          shortClosedByUserId: purchaseOrders.shortClosedByUserId,
+          shortCloseReason: purchaseOrders.shortCloseReason,
           rowVersion: purchaseOrders.rowVersion,
           createdAt: purchaseOrders.createdAt,
           updatedAt: purchaseOrders.updatedAt,
         })
         .from(purchaseOrders)
-        .innerJoin(projects, eq(projects.id, purchaseOrders.projectId))
+        .leftJoin(projects, eq(projects.id, purchaseOrders.projectId))
         .innerJoin(vendors, eq(vendors.id, purchaseOrders.vendorId))
         .innerJoin(users, eq(users.id, purchaseOrders.createdByUserId))
         .leftJoin(procurementRequisitions, eq(procurementRequisitions.id, purchaseOrders.requisitionId))
@@ -234,6 +262,9 @@ export function createPurchaseOrderRepository(executor: DatabaseExecutor) {
           revisionId: purchaseOrderLines.revisionId,
           lineNumber: purchaseOrderLines.lineNumber,
           itemId: purchaseOrderLines.itemId,
+          brandOfferingId: purchaseOrderLines.brandOfferingId,
+          quotationLineId: purchaseOrderLines.quotationLineId,
+          srrId: purchaseOrderLines.srrId,
           itemCode: purchaseOrderLines.itemCodeSnapshot,
           itemName: purchaseOrderLines.itemNameSnapshot,
           specification: purchaseOrderLines.specificationSnapshot,
@@ -242,6 +273,11 @@ export function createPurchaseOrderRepository(executor: DatabaseExecutor) {
           unitId: purchaseOrderLines.unitId,
           unitSymbol: purchaseOrderLines.unitSymbolSnapshot,
           quantity: purchaseOrderLines.quantity,
+          projectAllocationQty: purchaseOrderLines.projectAllocationQty,
+          storeReplenishmentQty: purchaseOrderLines.storeReplenishmentQty,
+          allocatedReceivedQty: purchaseOrderLines.allocatedReceivedQty,
+          storeReceivedQty: purchaseOrderLines.storeReceivedQty,
+          destinationType: purchaseOrderLines.destinationType,
           unitRate: purchaseOrderLines.unitRate,
           taxPercent: purchaseOrderLines.taxPercent,
           taxAmount: purchaseOrderLines.taxAmount,
@@ -249,6 +285,7 @@ export function createPurchaseOrderRepository(executor: DatabaseExecutor) {
           receivedQuantity: purchaseOrderLines.receivedQuantity,
           acceptedQuantity: purchaseOrderLines.acceptedQuantity,
           rejectedQuantity: purchaseOrderLines.rejectedQuantity,
+          shortClosedQuantity: purchaseOrderLines.shortClosedQuantity,
           requisitionLineId: purchaseOrderLines.requisitionLineId,
           createdAt: purchaseOrderLines.createdAt,
         })
@@ -296,6 +333,9 @@ export function createPurchaseOrderRepository(executor: DatabaseExecutor) {
           inspectionNotes: goodsReceiptLines.inspectionNotes,
           inspectedByUserId: goodsReceiptLines.inspectedByUserId,
           inspectedAt: goodsReceiptLines.inspectedAt,
+          excessQuantity: goodsReceiptLines.excessQuantity,
+          excessApprovalReason: goodsReceiptLines.excessApprovalReason,
+          excessApprovedByUserId: goodsReceiptLines.excessApprovedByUserId,
         })
         .from(goodsReceiptLines)
         .where(and(eq(goodsReceiptLines.companyId, companyId), inArray(goodsReceiptLines.goodsReceiptId, receiptIds)))
@@ -304,6 +344,102 @@ export function createPurchaseOrderRepository(executor: DatabaseExecutor) {
       return receipts.map((r) => ({
         ...r,
         lines: lines.filter((l) => l.goodsReceiptId === r.id),
+      }));
+    },
+
+    async getPrimaryVendorContact(companyId: string, vendorId: string) {
+      const [contact] = await executor
+        .select({
+          name: vendorContacts.name,
+          email: vendorContacts.email,
+          phone: vendorContacts.phone,
+        })
+        .from(vendorContacts)
+        .where(and(eq(vendorContacts.companyId, companyId), eq(vendorContacts.vendorId, vendorId)))
+        .orderBy(desc(vendorContacts.isPrimary), asc(vendorContacts.createdAt))
+        .limit(1);
+      return contact ?? null;
+    },
+
+    async getDispatchesForPo(companyId: string, poId: string) {
+      return executor
+        .select({
+          id: purchaseOrderDispatches.id,
+          purchaseOrderId: purchaseOrderDispatches.purchaseOrderId,
+          revisionId: purchaseOrderDispatches.revisionId,
+          channel: purchaseOrderDispatches.channel,
+          recipientName: purchaseOrderDispatches.recipientName,
+          recipientContact: purchaseOrderDispatches.recipientContact,
+          status: purchaseOrderDispatches.status,
+          providerMessageId: purchaseOrderDispatches.providerMessageId,
+          sentByUserId: purchaseOrderDispatches.sentByUserId,
+          sentByName: users.name,
+          sentAt: purchaseOrderDispatches.sentAt,
+          errorMessage: purchaseOrderDispatches.errorMessage,
+          createdAt: purchaseOrderDispatches.createdAt,
+        })
+        .from(purchaseOrderDispatches)
+        .innerJoin(users, eq(users.id, purchaseOrderDispatches.sentByUserId))
+        .where(and(eq(purchaseOrderDispatches.companyId, companyId), eq(purchaseOrderDispatches.purchaseOrderId, poId)))
+        .orderBy(desc(purchaseOrderDispatches.createdAt));
+    },
+
+    async getSupplierReturnsForPo(companyId: string, poId: string) {
+      const returns = await executor
+        .select({
+          id: supplierReturns.id,
+          rtvNumber: supplierReturns.rtvNumber,
+          purchaseOrderId: supplierReturns.purchaseOrderId,
+          goodsReceiptId: supplierReturns.goodsReceiptId,
+          grnNumber: goodsReceipts.grnNumber,
+          vendorId: supplierReturns.vendorId,
+          projectId: supplierReturns.projectId,
+          status: supplierReturns.status,
+          resolutionType: supplierReturns.resolutionType,
+          transporterName: supplierReturns.transporterName,
+          vehicleNumber: supplierReturns.vehicleNumber,
+          dispatchDate: supplierReturns.dispatchDate,
+          reason: supplierReturns.reason,
+          creditNoteReference: supplierReturns.creditNoteReference,
+          settledAt: supplierReturns.settledAt,
+          hasPdf: sql<boolean>`${supplierReturns.pdfStorageName} is not null`,
+          createdByUserId: supplierReturns.createdByUserId,
+          createdByName: users.name,
+          rowVersion: supplierReturns.rowVersion,
+          createdAt: supplierReturns.createdAt,
+          updatedAt: supplierReturns.updatedAt,
+        })
+        .from(supplierReturns)
+        .innerJoin(goodsReceipts, eq(goodsReceipts.id, supplierReturns.goodsReceiptId))
+        .innerJoin(users, eq(users.id, supplierReturns.createdByUserId))
+        .where(and(eq(supplierReturns.companyId, companyId), eq(supplierReturns.purchaseOrderId, poId)))
+        .orderBy(desc(supplierReturns.createdAt));
+
+      if (returns.length === 0) return [];
+      const rtvIds = returns.map((r) => r.id);
+      const rtvLines = await executor
+        .select({
+          id: supplierReturnLines.id,
+          supplierReturnId: supplierReturnLines.supplierReturnId,
+          goodsReceiptLineId: supplierReturnLines.goodsReceiptLineId,
+          purchaseOrderLineId: supplierReturnLines.purchaseOrderLineId,
+          itemId: supplierReturnLines.itemId,
+          brandOfferingId: supplierReturnLines.brandOfferingId,
+          itemCode: purchaseOrderLines.itemCodeSnapshot,
+          itemName: purchaseOrderLines.itemNameSnapshot,
+          brandOffered: purchaseOrderLines.brandOffered,
+          unitSymbol: purchaseOrderLines.unitSymbolSnapshot,
+          returnQuantity: supplierReturnLines.returnQuantity,
+          replacementReceivedQuantity: supplierReturnLines.replacementReceivedQuantity,
+          remarks: supplierReturnLines.remarks,
+        })
+        .from(supplierReturnLines)
+        .innerJoin(purchaseOrderLines, eq(purchaseOrderLines.id, supplierReturnLines.purchaseOrderLineId))
+        .where(and(eq(supplierReturnLines.companyId, companyId), inArray(supplierReturnLines.supplierReturnId, rtvIds)));
+
+      return returns.map((ret) => ({
+        ...ret,
+        lines: rtvLines.filter((l) => l.supplierReturnId === ret.id),
       }));
     },
   };

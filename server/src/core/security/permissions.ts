@@ -105,6 +105,12 @@ export const permissionCatalog = {
   "inventory.site_issue.create": "Issue stock to project sites for execution and consumption.",
   "inventory.site_return.create": "Return unused or defective stock from project sites back to warehouse.",
   "inventory.adjustment.manage": "Perform stock adjustments and write-offs with mandatory business reasons.",
+  "inventory.threshold.manage": "Configure warehouse item minimum and maximum stock thresholds.",
+  "inventory.request.create": "Submit material issue requests against available warehouse stock for accepted quotations.",
+  "inventory.dispatch.execute": "Dispatch material issue requests and generate delivery challans.",
+  "inventory.pod.verify": "Verify site delivery challans and upload proof of delivery.",
+  "inventory.discrepancy.resolve": "Resolve transit and delivery challan discrepancies.",
+  "inventory.replenishment.request": "Submit store replenishment requests to the purchase queue.",
   "project.execution.read": "View project tasks, milestones, daily reports, delays, and variations in assigned project scope.",
   "project.task.manage": "Create, update, and manage project milestones, tasks, and schedules in assigned project scope.",
   "project.daily_report.create": "Draft, submit, and revise daily progress reports as assigned site engineer.",
@@ -196,6 +202,9 @@ export const purchaseExecutivePermissionCodes: PermissionCode[] = [
   "procurement.purchase_order.read",
   "procurement.purchase_order.create",
   "procurement.goods_receipt.read",
+  "inventory.warehouse.read",
+  "inventory.stock.read",
+  "inventory.request.create",
 ];
 
 export const purchaseManagerPermissionCodes: PermissionCode[] = [
@@ -225,6 +234,9 @@ export const purchaseManagerPermissionCodes: PermissionCode[] = [
   "inventory.warehouse.read",
   "inventory.stock.read",
   "inventory.reservation.manage",
+  "inventory.threshold.manage",
+  "inventory.request.create",
+  "inventory.discrepancy.resolve",
 ];
 
 export const boqAdminApproverPermissionCodes: PermissionCode[] = [
@@ -249,6 +261,49 @@ export const receiverPermissionCodes: PermissionCode[] = [
   "inventory.site_issue.create",
   "inventory.site_return.create",
   "inventory.adjustment.manage",
+  "inventory.threshold.manage",
+  "inventory.dispatch.execute",
+  "inventory.replenishment.request",
+];
+
+export const storekeeperPermissionCodes: PermissionCode[] = [
+  "procurement.vendor.read",
+  "procurement.item.read",
+  "project.read",
+  "procurement.purchase_order.read",
+  "procurement.goods_receipt.read",
+  "procurement.goods_receipt.manage",
+  "inventory.warehouse.read",
+  "inventory.warehouse.manage",
+  "inventory.stock.read",
+  "inventory.receipt.post",
+  "inventory.transfer.create",
+  "inventory.transfer.dispatch",
+  "inventory.transfer.receive",
+  "inventory.reservation.manage",
+  "inventory.site_issue.create",
+  "inventory.site_return.create",
+  "inventory.adjustment.manage",
+  "inventory.threshold.manage",
+  "inventory.dispatch.execute",
+  "inventory.replenishment.request",
+];
+
+export const siteEngineerPermissionCodes: PermissionCode[] = [
+  "project.read",
+  "project.execution.read",
+  "project.task.manage",
+  "project.daily_report.create",
+  "project.delay.manage",
+  "project.variation.create",
+  "project.expense.manage",
+  "project.quality.read",
+  "project.quality.manage",
+  "project.punch_item.manage",
+  "inventory.warehouse.read",
+  "inventory.stock.read",
+  "inventory.pod.verify",
+  "inventory.site_return.create",
 ];
 
 export const managementPermissionCodes: PermissionCode[] = [
@@ -257,6 +312,7 @@ export const managementPermissionCodes: PermissionCode[] = [
   "project.member.manage",
   "inventory.warehouse.read",
   "inventory.stock.read",
+  "inventory.discrepancy.resolve",
   "project.execution.read",
   "project.delay.review",
   "project.variation.approve",
@@ -277,6 +333,8 @@ export const projectManagerPermissionCodes: PermissionCode[] = [
   "inventory.transfer.receive",
   "inventory.site_issue.create",
   "inventory.site_return.create",
+  "inventory.pod.verify",
+  "inventory.discrepancy.resolve",
   "project.execution.read",
   "project.task.manage",
   "project.daily_report.create",

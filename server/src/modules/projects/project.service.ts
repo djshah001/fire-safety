@@ -64,7 +64,7 @@ export class ProjectService {
   async addMember(
     principal: AuthenticatedPrincipal,
     projectId: string,
-    input: { userId: string; role: 'project_manager' | 'sales' | 'design' | 'purchase' | 'member' | 'viewer' },
+    input: { userId: string; role: 'project_manager' | 'sales' | 'design' | 'purchase' | 'site_engineer' | 'member' | 'viewer' },
     requestId: string,
   ) {
     this.assert(principal, 'project.read');

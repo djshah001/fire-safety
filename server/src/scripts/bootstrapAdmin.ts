@@ -12,6 +12,8 @@ import {
   receiverPermissionCodes,
   salesExecutivePermissionCodes,
   salesManagerPermissionCodes,
+  siteEngineerPermissionCodes,
+  storekeeperPermissionCodes,
   systemAdminPermissionCodes,
 } from "../core/security/permissions.js";
 import { hashPassword } from "../core/security/password.js";
@@ -91,6 +93,16 @@ const roleDefinitions = [
     "receiver",
     "Receiver / storekeeper",
     "Delivery receipt role; inventory permission is not implied.",
+  ],
+  [
+    "storekeeper",
+    "Storekeeper",
+    "Warehouse stock management, MIR dispatch, thresholds, and replenishment requests.",
+  ],
+  [
+    "site_engineer",
+    "Site engineer",
+    "Site execution, daily reports, POD verification, and site returns.",
   ],
   [
     "project_manager",
@@ -206,6 +218,12 @@ async function bootstrap() {
       (role) => role.code === "boq_admin_approver",
     )!;
     const receiverRole = createdRoles.find((role) => role.code === "receiver")!;
+    const storekeeperRole = createdRoles.find(
+      (role) => role.code === "storekeeper",
+    )!;
+    const siteEngineerRole = createdRoles.find(
+      (role) => role.code === "site_engineer",
+    )!;
     const managementRole = createdRoles.find(
       (role) => role.code === "management",
     )!;
@@ -247,6 +265,14 @@ async function bootstrap() {
       })),
       ...receiverPermissionCodes.map((permissionCode) => ({
         roleId: receiverRole.id,
+        permissionCode,
+      })),
+      ...storekeeperPermissionCodes.map((permissionCode) => ({
+        roleId: storekeeperRole.id,
+        permissionCode,
+      })),
+      ...siteEngineerPermissionCodes.map((permissionCode) => ({
+        roleId: siteEngineerRole.id,
         permissionCode,
       })),
       ...managementPermissionCodes.map((permissionCode) => ({

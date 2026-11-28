@@ -225,6 +225,20 @@
       "when": 1795716257169,
       "tag": "0031_nice_menace",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1795779974599,
+      "tag": "0032_glorious_stone_men",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1795837557447,
+      "tag": "0033_concerned_multiple_man",
+      "breakpoints": true
     }
   ]
 }
